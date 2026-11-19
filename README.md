@@ -406,6 +406,37 @@ are missing.
 - **Garbage collection** is mark and sweep: chunks not referenced by any retained index are
   deleted. A lifecycle rule alone can't do it.
 
+### Download speed with many small objects (measured 2026-11-19 from the desktop, estimates from it)
+
+Measured with `curl --parallel` on small real objects (`.sig` files, 119 B):
+
+| server | protocol | RTT | 1 at a time | 8 parallel | 32 parallel | 100 parallel |
+|---|---|---:|---:|---:|---:|---:|
+| pkgs.omarchy.org (Cloudflare, cache HIT) | HTTP/1.1 only | 18 ms | 31 req/s | 210 req/s | 550 req/s | 790 req/s |
+| the same, first fetch (cache MISS) | HTTP/1.1 | | 3.7 req/s (270 ms each) | | | |
+| geo.mirror.pkgbuild.com (Arch) | HTTP/2 | 74 ms | 15 req/s | 105 req/s | 300 req/s | 500 req/s |
+
+Bulk download from pkgs.omarchy.org: 25 MB/s (hyprland, 53.7 MB, 2.1 s). pkgs.omarchy.org doesn't
+offer HTTP/2 (`--http2` still gets 1.1).
+
+Estimate for a fresh install of the 315-package set at 25 MB/s and 790 req/s, taking the
+slower of bytes and requests:
+
+| | objects | bytes | estimate |
+|---|---:|---:|---:|
+| `.pkg.tar.zst` | 315 | 485 MB | about 19 s (bytes) |
+| btrpkg, `--small` 4 KiB | 47,833 | 635 MB | about 60 s (requests) |
+| btrpkg, `--small` 16 KiB | 23,254 | 589 MB | about 29 s (requests) |
+| btrpkg, `--small` 64 KiB | 12,641 | 552 MB | about 22 s (bytes) |
+| btrpkg with packs, range GETs | about 1 per run of chunks | ~635 MB | about 25 s (bytes) |
+
+- Upgrades are where chunks win: hyprland 0.57.1 → 0.57.2 is 145 objects and 5.7 MB, about
+  0.25 s, against 2.1 s for the 53.7 MB package.
+- Cache misses are the bigger risk: a chunk that few clients ask for is likely not in the CDN
+  edge, and each miss costs about 270 ms (origin fetch). Fewer, bigger objects (packs or a higher
+  `--small`) are cached better.
+- These are estimates from small objects; not yet measured with a real chunk store on R2/S3.
+
 ### Signatures
 
 What this machine does today: `SigLevel = Required DatabaseOptional`. Every package has a
