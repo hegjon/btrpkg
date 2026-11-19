@@ -215,7 +215,33 @@ fn decode_meta(b: &[u8]) -> Result<(Vec<Entry>, Vec<u8>)> {
 
 // ---------------------------------------------------------------- convert
 
-fn convert(input: &Path, output: &Path, level: i32, small_max: u64) -> Result<()> {
+enum Out {
+    Plain(io::BufWriter<File>),
+    Zst(zstd::stream::write::Encoder<'static, io::BufWriter<File>>),
+}
+impl Write for Out {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        match self { Out::Plain(w) => w.write(b), Out::Zst(w) => w.write(b) }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self { Out::Plain(w) => w.flush(), Out::Zst(w) => w.flush() }
+    }
+}
+
+/// One btrfs-readable zstd frame for a 4 KiB-aligned chunk of at most 128 KiB
+/// (window <= 128 KiB, no checksum, no dictionary ID). Stays raw unless the
+/// frame saves at least one 4 KiB block on disk.
+fn frame(level: i32, data: Vec<u8>) -> Result<(u8, Vec<u8>)> {
+    let mut c = zstd::bulk::Compressor::new(level)?;
+    c.set_parameter(zstd::zstd_safe::CParameter::WindowLog(17))?;
+    c.set_parameter(zstd::zstd_safe::CParameter::ChecksumFlag(false))?;
+    c.set_parameter(zstd::zstd_safe::CParameter::DictIdFlag(false))?;
+    c.set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(true))?;
+    let z = c.compress(&data)?;
+    if align(z.len() as u64) < data.len() as u64 { Ok((COMP_ZSTD, z)) } else { Ok((COMP_NONE, data)) }
+}
+
+fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64) -> Result<()> {
     let f = File::open(input).with_context(|| format!("open {}", input.display()))?;
     let dec = zstd::stream::read::Decoder::new(BufReader::new(f))?;
     let mut ar = tar::Archive::new(dec);
@@ -300,22 +326,14 @@ fn convert(input: &Path, output: &Path, level: i32, small_max: u64) -> Result<()
     }
 
     // Compress every extent independently: zstd frames btrfs can read back
-    // (window <= 128 KiB, no checksum, no dictionary).
+    // (window <= 128 KiB, no checksum, no dictionary). Level 0 keeps the chunks
+    // raw, for .pkg.btr.zst where the outer zstd compresses and fetch frames.
     let compressed: Vec<(Chunk, Vec<u8>)> = jobs
         .into_par_iter()
         .map(|(off, data)| -> Result<(Chunk, Vec<u8>)> {
-            let mut c = zstd::bulk::Compressor::new(level)?;
-            c.set_parameter(zstd::zstd_safe::CParameter::WindowLog(17))?;
-            c.set_parameter(zstd::zstd_safe::CParameter::ChecksumFlag(false))?;
-            c.set_parameter(zstd::zstd_safe::CParameter::DictIdFlag(false))?;
-            c.set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(true))?;
-            let z = c.compress(&data)?;
-            // Only worth an encoded extent if it saves at least one block on disk.
-            if align(z.len() as u64) < data.len() as u64 {
-                Ok((Chunk { image_off: off, unencoded_len: data.len() as u32, encoded_len: z.len() as u32, compression: COMP_ZSTD }, z))
-            } else {
-                Ok((Chunk { image_off: off, unencoded_len: data.len() as u32, encoded_len: data.len() as u32, compression: COMP_NONE }, data))
-            }
+            let unencoded_len = data.len() as u32;
+            let (comp, bytes) = if level == 0 { (COMP_NONE, data) } else { frame(level, data)? };
+            Ok((Chunk { image_off: off, unencoded_len, encoded_len: bytes.len() as u32, compression: comp }, bytes))
         })
         .collect::<Result<_>>()?;
 
@@ -330,10 +348,22 @@ fn convert(input: &Path, output: &Path, level: i32, small_max: u64) -> Result<()
         image_base: 0,
         meta_raw_len: meta_raw.len() as u64,
     };
-    let tmp = output.with_extension("btrpkg.part");
-    let mut out = io::BufWriter::new(File::create(&tmp)?);
+    let tmp = { let mut t = output.as_os_str().to_owned(); t.push(".part"); PathBuf::from(t) };
+    // .pkg.btr.zst: the whole .pkg.btr wrapped in one solid zstd stream (long window).
+    let outer = output.extension().is_some_and(|e| e == "zst");
+    let file = File::create(&tmp)?;
+    let mut out: Out = if outer {
+        let mut z = zstd::stream::write::Encoder::new(io::BufWriter::new(file.try_clone()?), outer_level)?;
+        z.long_distance_matching(true)?;
+        z.window_log(27)?;
+        z.multithread(std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1))?;
+        z.include_checksum(true)?;
+        Out::Zst(z)
+    } else {
+        Out::Plain(io::BufWriter::new(file.try_clone()?))
+    };
     let mut hash = Sha256::new();
-    let mut put = |b: &[u8], out: &mut io::BufWriter<File>| -> Result<()> { hash.update(b); out.write_all(b)?; Ok(()) };
+    let mut put = |b: &[u8], out: &mut Out| -> Result<()> { hash.update(b); out.write_all(b)?; Ok(()) };
     put(&hdr.encode(), &mut out)?;
     put(&meta, &mut out)?;
     put(&encode_table(&chunks), &mut out)?;
@@ -342,7 +372,11 @@ fn convert(input: &Path, output: &Path, level: i32, small_max: u64) -> Result<()
     }
     let digest = hash.finalize();
     out.write_all(&digest)?;
-    out.into_inner()?.sync_all()?;
+    match out {
+        Out::Plain(w) => { w.into_inner()?; }
+        Out::Zst(z) => { z.finish()?.into_inner()?; }
+    }
+    file.sync_all()?;
     fs::rename(&tmp, output)?;
     if stats.dedup_files > 0 { eprintln!("convert: {:?}", stats); }
     Ok(())
@@ -417,26 +451,59 @@ fn set_nocomp(f: &File) {
 // ---------------------------------------------------------------- fetch
 
 #[derive(Default, Debug)]
-struct FetchStats { encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
+struct FetchStats { outer: bool, framed_here: bool, file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
 
-/// Stream a transport file into the package cache. Header, manifest and chunk
-/// table are written as normal data; every zstd chunk goes to disk unchanged as
-/// a btrfs compressed extent at image_base + image_off.
-fn fetch(input: &str, cache: &Path, use_encoded: bool) -> Result<()> {
-    let mut rd: Box<dyn Read> = if input == "-" { Box::new(io::stdin().lock()) } else { Box::new(File::open(input)?) };
-    let mut rd = BufReader::with_capacity(1 << 20, &mut rd);
+/// Stream a package into the package cache. Header, manifest and chunk table
+/// are written as normal data; every zstd chunk goes to disk unchanged as a
+/// btrfs compressed extent at image_base + image_off. A .pkg.btr.zst is
+/// decompressed on the way in; raw chunks are framed here (in parallel, at
+/// `level`) so they still land as compressed extents.
+/// Hashes everything read through it: the bytes of the file as downloaded.
+struct HashReader { inner: Box<dyn Read + Send>, h: std::sync::Arc<std::sync::Mutex<Sha256>> }
+impl Read for HashReader {
+    fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(b)?;
+        self.h.lock().unwrap().update(&b[..n]);
+        Ok(n)
+    }
+}
+
+fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
+
+/// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps
+/// in the repo database). For .pkg.btr.zst that, plus the zstd frame checksum,
+/// replaces hashing the much larger inner stream.
+fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: Option<&str>) -> Result<()> {
+    let mut src: Box<dyn Read + Send> = if input == "-" { Box::new(io::stdin()) } else { Box::new(File::open(input)?) };
+    let mut magic = [0u8; 4];
+    src.read_exact(&mut magic).context("empty package")?;
+    let file_hash = std::sync::Arc::new(std::sync::Mutex::new(Sha256::new()));
+    file_hash.lock().unwrap().update(magic);
+    let src: Box<dyn Read + Send> = Box::new(HashReader { inner: src, h: file_hash.clone() });
+    let chained = io::Cursor::new(magic.to_vec()).chain(src);
+    let outer = magic == [0x28, 0xb5, 0x2f, 0xfd];
+    let src: Box<dyn Read + Send> = if outer {
+        let mut d = zstd::stream::read::Decoder::new(chained)?;
+        d.window_log_max(31)?;
+        Box::new(d)
+    } else {
+        Box::new(chained)
+    };
+    let mut rd = BufReader::with_capacity(1 << 20, src);
     let mut hash = Sha256::new();
-    let mut read = |n: usize, rd: &mut dyn Read| -> Result<Vec<u8>> {
+    // The inner stream is hashed only for plain .pkg.btr (its trailer digest).
+    let inner_hash = !outer;
+    let read = move |rd: &mut dyn Read, hash: &mut Sha256, n: usize| -> Result<Vec<u8>> {
         let mut b = vec![0u8; n];
         rd.read_exact(&mut b).context("truncated package")?;
-        hash.update(&b);
+        if inner_hash { hash.update(&b); }
         Ok(b)
     };
-    let hb = read(HDR, &mut rd)?;
+    let hb = read(&mut rd, &mut hash, HDR)?;
     let mut hdr = Header::decode(&hb)?;
     ensure!(hdr.flags == 0, "input is not a transport package");
-    let meta = read(hdr.meta_len as usize, &mut rd)?;
-    let table_b = read(hdr.table_len() as usize, &mut rd)?;
+    let meta = read(&mut rd, &mut hash, hdr.meta_len as usize)?;
+    let table_b = read(&mut rd, &mut hash, hdr.table_len() as usize)?;
     let chunks = decode_table(&table_b, hdr.image_len)?;
 
     let tmp = cache.with_extension("part");
@@ -449,40 +516,95 @@ fn fetch(input: &str, cache: &Path, use_encoded: bool) -> Result<()> {
     hdr.image_base = align(prefix);
     hdr.flags = FLAG_MATERIALIZED;
 
-    let mut st = FetchStats::default();
+    let mut st = FetchStats { outer, ..Default::default() };
     let mut encoded_ok = use_encoded;
     let mut dctx = zstd::bulk::Decompressor::new()?;
-    for c in &chunks {
-        let data = read(c.encoded_len as usize, &mut rd)?;
-        let off = hdr.image_base + c.image_off;
-        if c.compression == COMP_NONE {
-            out.write_all_at(&data, off)?;
-            st.raw_bytes += data.len() as u64;
-            continue;
-        }
-        if encoded_ok {
-            match encoded_write(&out, off, c.unencoded_len as u64, &data) {
-                Ok(()) => { st.encoded_bytes += data.len() as u64; st.encoded_chunks += 1; continue; }
-                Err(e) if st.encoded_chunks == 0 => {
-                    eprintln!("btrpkg: encoded write unavailable ({e}); decompressing instead");
-                    encoded_ok = false;
+    const BATCH: usize = 16 << 20;
+    type Batch = Vec<(Chunk, Vec<u8>)>;
+    // Pipeline: a reader thread decompresses the outer zstd and hashes, this
+    // thread frames chunks in parallel and writes them.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Batch>(2);
+    let result: Result<([u8; 32], bool)> = std::thread::scope(|s| {
+        let reader = s.spawn(move || -> Result<([u8; 32], bool)> {
+            let mut i = 0;
+            while i < chunks.len() {
+                let mut batch = Vec::new();
+                let mut sz = 0;
+                while i < chunks.len() && sz < BATCH {
+                    let c = chunks[i];
+                    let d = read(&mut rd, &mut hash, c.encoded_len as usize)?;
+                    sz += d.len();
+                    batch.push((c, d));
+                    i += 1;
                 }
-                Err(e) => return Err(e).context("encoded write"),
+                if tx.send(batch).is_err() { bail!("writer stopped"); }
             }
-        }
-        let plain = dctx.decompress(&data, c.unencoded_len as usize)?;
-        ensure!(plain.len() == c.unencoded_len as usize, "chunk decompressed to wrong size");
-        out.write_all_at(&plain, off)?;
-        st.fallback_bytes += plain.len() as u64;
-    }
-    let mut want = [0u8; 32];
-    rd.read_exact(&mut want).context("missing digest")?;
-    let got = hash.finalize();
-    if got.as_slice() != want {
+            drop(tx);
+            let mut want = [0u8; 32];
+            rd.read_exact(&mut want).context("missing digest")?;
+            // Read to the end: finishes the outer frame (and checks its checksum),
+            // and refuses trailing data.
+            let mut rest = Vec::new();
+            rd.read_to_end(&mut rest).context("reading package end")?;
+            ensure!(rest.is_empty(), "trailing data after package");
+            Ok((want, !inner_hash || hash.finalize().as_slice() == want))
+        });
+        let mut write_all = || -> Result<()> {
+            for mut batch in rx.iter() {
+                if encoded_ok && level > 0 && batch.iter().any(|(c, _)| c.compression == COMP_NONE) {
+                    batch = batch
+                        .into_par_iter()
+                        .map(|(c, d)| -> Result<(Chunk, Vec<u8>)> {
+                            if c.compression != COMP_NONE { return Ok((c, d)); }
+                            let (comp, b) = frame(level, d)?;
+                            Ok((Chunk { compression: comp, encoded_len: b.len() as u32, ..c }, b))
+                        })
+                        .collect::<Result<_>>()?;
+                    st.framed_here = true;
+                }
+                for (c, data) in batch {
+                    let off = hdr.image_base + c.image_off;
+                    if c.compression == COMP_NONE {
+                        out.write_all_at(&data, off)?;
+                        st.raw_bytes += data.len() as u64;
+                        continue;
+                    }
+                    if encoded_ok {
+                        match encoded_write(&out, off, c.unencoded_len as u64, &data) {
+                            Ok(()) => { st.encoded_bytes += data.len() as u64; st.encoded_chunks += 1; continue; }
+                            Err(e) if st.encoded_chunks == 0 => {
+                                eprintln!("btrpkg: encoded write unavailable ({e}); decompressing instead");
+                                encoded_ok = false;
+                            }
+                            Err(e) => return Err(e).context("encoded write"),
+                        }
+                    }
+                    let plain = dctx.decompress(&data, c.unencoded_len as usize)?;
+                    ensure!(plain.len() == c.unencoded_len as usize, "chunk decompressed to wrong size");
+                    out.write_all_at(&plain, off)?;
+                    st.fallback_bytes += plain.len() as u64;
+                }
+            }
+            Ok(())
+        };
+        let w = write_all();
+        drop(rx);
+        let r = reader.join().map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
+        w?;
+        r
+    });
+    let (want, ok) = match result {
+        Ok(v) => v,
+        Err(e) => { let _ = fs::remove_file(&tmp); return Err(e); }
+    };
+    let file_digest = hex(&file_hash.lock().unwrap().clone().finalize());
+    let file_ok = file_sha256.map_or(true, |e| e.eq_ignore_ascii_case(&file_digest));
+    if !ok || !file_ok {
         drop(out);
         let _ = fs::remove_file(&tmp);
         bail!("digest mismatch: package is corrupt");
     }
+    st.file_sha256 = file_digest;
     // Header, manifest, table and digest go in front of the image.
     let mut pre = hdr.encode().to_vec();
     pre.extend_from_slice(&meta);
@@ -635,22 +757,31 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut flags: Vec<&str> = vec![];
     let mut pos: Vec<&str> = vec![];
-    let mut level = 19;
+    let mut level: Option<i32> = None;
+    let mut outer_level = 19;
+    let mut sha: Option<String> = None;
     let mut small_max = 4096u64;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "-l" => level = it.next().context("-l needs a value")?.parse()?,
+            "-l" | "--level" => level = Some(it.next().context("-l needs a value")?.parse()?),
+            "--sha256" => sha = Some(it.next().context("--sha256 needs a value")?.clone()),
+            "--outer-level" => outer_level = it.next().context("--outer-level needs a value")?.parse()?,
             "--small" => small_max = it.next().context("--small needs a value")?.parse()?,
             s if s.starts_with("--") => flags.push(s),
             s => pos.push(s),
         }
     }
     match pos.as_slice() {
-        ["convert", i, o] => convert(Path::new(i), Path::new(o), level, small_max),
-        ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded")),
+        // .pkg.btr: chunks framed at -l (default 19). .pkg.btr.zst: raw chunks (-l 0
+        // by default) inside one solid zstd stream at --outer-level.
+        ["convert", i, o] => {
+            let outer = o.ends_with(".zst");
+            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { 19 }), outer_level, small_max)
+        }
+        ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref()),
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")),
         ["info", p] => info(Path::new(p)),
-        _ => bail!("usage: btrpkg convert [-l N] [--small N] IN OUT | fetch [--no-encoded] IN CACHE | install [--copy] CACHE ROOT | info FILE"),
+        _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE"),
     }
 }

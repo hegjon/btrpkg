@@ -1,0 +1,47 @@
+staging inputs into tmpfs
+485103593	/exp/pkg
+642292785	/exp/btr
+434381918	/exp/btrzst
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+pacman	1	4.68	1896701952	1638383616	1152638976
+btrpkg	1	2.88	972255232	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l1	1	4.29	1092919296	863600640	836943872
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l3	1	4.47	1059479552	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+pacman	2	4.84	1887526912	1631666176	1145921536
+btrpkg	2	2.91	977268736	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l1	2	4.37	1091641344	863600640	836943872
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l3	2	4.58	1059381248	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+pacman	3	4.81	1882214400	1624543232	1138798592
+btrpkg	3	2.95	973664256	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l1	3	4.42	1088954368	863600640	836943872
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l3	3	4.54	1060560896	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+== verify
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+sample: /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     328331..    328362:     32:             encoded,shared
+   1:       32..      63:     328341..    328372:     32:     328363: encoded,shared
+   2:       64..      95:     328352..    328383:     32:     328373: encoded,shared
+   3:       96..     127:     328361..    328392:     32:     328384: encoded,shared
+   4:      128..     159:     328369..    328400:     32:     328393: encoded,shared

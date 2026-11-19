@@ -11,7 +11,7 @@ libc = "0.2"
 rayon = "1"
 sha2 = "0.10"
 tar = "0.4"
-zstd = "0.13"
+zstd = { version = "0.13", features = ["zstdmt"] }
 
 [profile.release]
 lto = true

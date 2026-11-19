@@ -1,0 +1,43 @@
+staging inputs into tmpfs
+485103593	/exp/pkg
+642292785	/exp/btr
+434381918	/exp/btrzst
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+pacman	1	10.12	1914380288	1619492864	1133748224
+btrpkg	1	6.49	1013510144	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l1	1	12.56	1189847040	863600640	836943872
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l3	1	13.99	1131307008	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l9	1	17.71	1097138176	787177472	760520704
+/tmp/fetch.log:0
+/tmp/install.log:0
+pacman	2	10.37	1936334848	1636130816	1150386176
+btrpkg	2	7.02	1034579968	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l1	2	5.72	1123196928	863600640	836943872
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l3	2	7.40	1067245568	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrzst-l9	2	6.88	1016037376	787177472	760520704
+/tmp/fetch.log:0
+/tmp/install.log:0
+== verify
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+sample: /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     328331..    328362:     32:             encoded,shared
+   1:       32..      63:     328341..    328372:     32:     328363: encoded,shared
+   2:       64..      95:     328352..    328383:     32:     328373: encoded,shared
+   3:       96..     127:     328361..    328392:     32:     328384: encoded,shared
+   4:      128..     159:     328369..    328400:     32:     328393: encoded,shared

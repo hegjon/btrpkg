@@ -21,9 +21,12 @@ if findmnt -S $DEV >/dev/null; then echo "$DEV is mounted, refusing"; exit 1; fi
 size=$(blockdev --getsize64 $DEV); (( size > 100*1024**3 && size < 120*1024**3 )) || { echo "unexpected size $size"; exit 1; }
 
 echo "staging inputs into tmpfs"
-mkdir -p /exp/pkg /exp/btr
-while read -r f; do cp /pkgs/$f /exp/pkg/; cp $CONV/${f%.pkg.tar.zst}.btrpkg /exp/btr/; done <$SET
-du -sb /exp/pkg /exp/btr
+mkdir -p /exp/pkg /exp/btr /exp/btrzst
+while read -r f; do
+  cp /pkgs/$f /exp/pkg/; cp $CONV/${f%.pkg.tar.zst}.btrpkg /exp/btr/
+  [[ -d ${CONVZST:-/nonexistent} ]] && cp $CONVZST/${f%.pkg.tar.zst}.pkg.btr.zst /exp/btrzst/
+done <$SET
+du -sb /exp/pkg /exp/btr /exp/btrzst
 
 written() { awk '{print $7*512}' /sys/class/block/$PART/stat; }
 used() { btrfs filesystem sync $T >/dev/null; btrfs filesystem usage -b $T 2>/dev/null | grep -m1 '^Data,' | grep -o 'Used:[0-9]*' | cut -d: -f2; }
@@ -49,11 +52,12 @@ run_pacman() {
       --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || return 1
   done <$SET
 }
-run_btrpkg() {  # $1 = extra fetch flag
+run_btrpkg() {  # $1 = extra fetch flags, $2 = input dir, $3 = input extension
   local c=$ROOT/var/cache/pacman/pkg
   while read -r f; do
-    f=${f%.pkg.tar.zst}.btrpkg
-    $B fetch $1 /exp/btr/$f $c/$f 2>>/tmp/fetch.log || return 1
+    local in=/exp/${2:-btr}/${f%.pkg.tar.zst}${3:-.btrpkg}
+    f=${f%.pkg.tar.zst}.pkg.btr
+    $B fetch $1 $in $c/$f 2>>/tmp/fetch.log || return 1
     $B install $c/$f $ROOT 2>>/tmp/install.log || return 1
   done <$SET
 }
@@ -67,17 +71,19 @@ for round in $(seq $ROUNDS); do
       pacman) run_pacman ;;
       btrpkg) run_btrpkg "" ;;
       noenc)  run_btrpkg --no-encoded ;;
+      btrzst-l*) run_btrpkg "-l ${s#btrzst-l}" btrzst .pkg.btr.zst ;;
     esac || { echo "$s failed"; tail /tmp/*.log; exit 1; }
     sync; t1=$(now); w1=$(written)
     u=$(used)
     rm -f $ROOT/var/cache/pacman/pkg/*; sync; btrfs subvolume sync $T >/dev/null 2>&1; sleep 2
     u2=$(used)
     printf "%s\t%s\t%.2f\t%s\t%s\t%s\n" $s $round $(awk "BEGIN{print $t1 - $t0}") $((w1-w0)) $u $u2 | tee -a $OUT/${OUTNAME:-matrix}.tsv
-    [[ $s == btrpkg ]] && grep -c "unavailable" /tmp/fetch.log /tmp/install.log
+    [[ $s != pacman && $s != noenc ]] && grep -c "unavailable" /tmp/fetch.log /tmp/install.log
     teardown
   done
 done
 
+[[ -n ${SKIPVERIFY:-} ]] && exit 0
 # Correctness: both installs side by side on one filesystem, compared file by file.
 echo "== verify"
 setup
@@ -86,8 +92,9 @@ c=$ROOT/var/cache/pacman/pkg
 while read -r f; do
   bsdtar -xp --numeric-owner -f /exp/pkg/$f -C $ROOT/a \
     --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || exit 1
-  g=${f%.pkg.tar.zst}.btrpkg
-  $B fetch /exp/btr/$g $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
+  g=${f%.pkg.tar.zst}.btrpkg; in=/exp/btr/$g
+  [[ -n ${VERIFYZST:-} ]] && in=/exp/btrzst/${f%.pkg.tar.zst}.pkg.btr.zst
+  $B fetch $in $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
 done <$SET
 python3 /w/bench/compare.py $ROOT/a $ROOT/b | tee $OUT/${OUTNAME:-matrix}-verify.txt
 # Are installed extents shared with the cache, and still compressed?

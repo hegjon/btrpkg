@@ -14,13 +14,32 @@ one set of extents per file. On a btrfs system:
    manifest and are written normally. A file's data is never read, written or compressed at install
    time, and the installed files share their extents with the cache.
 
+Two variants of the same file:
+
+- **`.pkg.btr`**: chunks are already btrfs zstd frames (level 19 on the build server). `fetch`
+  does no compression work, but the download is 15–32% bigger than `.pkg.tar.zst`.
+- **`.pkg.btr.zst`**: a `.pkg.btr` with *raw* chunks, wrapped in one solid zstd stream
+  (`-19 --long=27`, with checksum). The download is smaller than `.pkg.tar.zst`. `fetch`
+  decompresses it while streaming, compresses each 128 KiB chunk into a btrfs frame on all cores
+  (`-l`, default 3), and writes the frames with encoded writes. Wrapping already-framed chunks in
+  zstd ("double compression") saves only about 4%, so the inner chunks stay raw.
+
 ```sh
 cargo build --release
-btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.btrpkg   # post-processor, any machine
-btrpkg fetch [--no-encoded] out.btrpkg|- /var/cache/pacman/pkg/x.btrpkg   # root, btrfs
-btrpkg install /var/cache/pacman/pkg/x.btrpkg /                     # reflinks, falls back to copy
-btrpkg info x.btrpkg
+btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.pkg.btr          # post-processor
+btrpkg convert [--outer-level 19] in.pkg.tar.zst out.pkg.btr.zst           # raw chunks, solid zstd
+btrpkg fetch [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
+btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # reflinks, falls back to copy
+btrpkg info x.pkg.btr
 ```
+
+`fetch` checks integrity in one of two ways:
+- `.pkg.btr` carries a sha256 of its contents, checked on the way in.
+- For `.pkg.btr.zst`, `fetch` hashes the downloaded file itself (434 MB rather than 2.1 GB of
+  inner stream) and compares it with `--sha256`, which plays the role of the repo database or
+  signature. The zstd frame checksum catches corruption.
+
+`fetch` also refuses trailing data. On any failure it removes its partial file.
 
 ## Format (version 0, spike-grade)
 
@@ -86,6 +105,32 @@ Worst cases:
 - sof-firmware (+559% before dedup): duplicate files.
 - gcc +23%, glibc +43%: long-range matches that a 128 KiB window can't reach.
 
+## `.pkg.btr.zst` results (same set, 3 rounds, idle machine)
+
+| | download | install time | written | root + cache | root only |
+|---|---:|---:|---:|---:|---:|
+| pacman-style (cp + `bsdtar -xp`) | 485 MB | 4.8 s | 1.89 GB | 1.63 GB | 1.14 GB |
+| `.pkg.btr` (level 19 on the server) | 642 MB | **2.9 s** | 0.97 GB | 0.75 GB | 0.72 GB |
+| `.pkg.btr.zst`, `fetch -l 1` | **434 MB** | 4.4 s | 1.09 GB | 0.86 GB | 0.84 GB |
+| `.pkg.btr.zst`, `fetch -l 3` | **434 MB** (−10%) | 4.5 s | 1.06 GB (−44%) | 0.83 GB (−49%) | 0.80 GB (−30%) |
+
+Notes:
+- Size per package is about the same as `.pkg.tar.zst`: the median for packages over 1 MB is
+  ×1.0006. Tiny packages are a few hundred bytes bigger because of fixed overhead. The total is
+  10% smaller because of dedup and the long window in a few big packages (gcc −26%,
+  hermes-desktop −26%).
+- Converting all 315 packages to `.pkg.btr.zst` took 87 s wall on 32 threads (1,017 CPU-s).
+- Verify: 0 differences over all 99,562 files.
+
+Where `fetch` spends its time (all 315 packages, no install):
+- `.pkg.btr`: 1.4 s.
+- `.pkg.btr.zst`: 3.8 s with serial stages, then 3.4 s with a reader thread decompressing in
+  parallel with framing and writing, then 2.8 s with the file hash replacing the inner hash.
+
+The critical path is now the single-threaded outer zstd decode (about 1.3 s for 2.1 GB). Parallel
+decode would need a multi-frame outer stream. Real pacman also downloads several packages at once,
+so several `fetch`es would overlap.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
@@ -99,7 +144,8 @@ What worked:
   (copy).
 
 Costs:
-- Download is +15% to +32% against Arch's `.pkg.tar.zst`. The btrfs 128 KiB window is a hard
+- `.pkg.btr` downloads are +15% to +32% against Arch's `.pkg.tar.zst`. `.pkg.btr.zst` removes
+  that cost (−10%) in exchange for client-side compression during `fetch`. The btrfs 128 KiB window is a hard
   limit; levels beyond 19 don't help.
 - A higher small-file threshold shrinks the download but writes more at install, and still beats
   pacman at 64 KiB.
