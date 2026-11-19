@@ -4,6 +4,8 @@
 //!   btrpkg fetch [--no-encoded] IN.btrpkg|- CACHEFILE      (needs CAP_SYS_ADMIN for encoded writes)
 //!   btrpkg install [--copy] CACHEFILE ROOT
 //!   btrpkg info FILE
+//!   btrpkg publish IN.pkg.btr STORE            (content-addressed chunk store, see store.rs)
+//!   btrpkg pull [--no-encoded] [--sha256 HEX] STORE NAME CACHEFILE
 //!
 //! See README.md for the format.
 
@@ -18,6 +20,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+
+mod store;
 
 const MAGIC: &[u8; 8] = b"BTRPKG\0\0";
 const VERSION: u32 = 0;
@@ -485,7 +489,11 @@ fn ensure_io(c: bool, m: &str) -> io::Result<()> {
 struct FileCloneRange { src_fd: i64, src_offset: u64, src_length: u64, dest_offset: u64 }
 
 fn clone_range(src: &File, src_off: u64, len: u64, dst: &File) -> io::Result<()> {
-    let a = FileCloneRange { src_fd: src.as_raw_fd() as i64, src_offset: src_off, src_length: len, dest_offset: 0 };
+    clone_range_at(src, src_off, len, dst, 0)
+}
+
+fn clone_range_at(src: &File, src_off: u64, len: u64, dst: &File, dst_off: u64) -> io::Result<()> {
+    let a = FileCloneRange { src_fd: src.as_raw_fd() as i64, src_offset: src_off, src_length: len, dest_offset: dst_off };
     let r = unsafe { libc::ioctl(dst.as_raw_fd(), FICLONERANGE, &a) };
     if r < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
 }
@@ -902,6 +910,8 @@ fn main() -> Result<()> {
         ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref()),
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")),
         ["info", p] => info(Path::new(p)),
-        _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE"),
+        ["publish", i, st] => store::publish(Path::new(i), Path::new(st)),
+        ["pull", st, n, c] => store::pull(Path::new(st), n, Path::new(c), !flags.contains(&"--no-encoded"), sha.as_deref()),
+        _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE | publish IN.pkg.btr STORE | pull [--no-encoded] [--sha256 HEX] STORE NAME CACHE"),
     }
 }

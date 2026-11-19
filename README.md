@@ -268,6 +268,66 @@ Results: `bench/results/delta-hypr.tsv`.
 - A binary diff would be 4x smaller again, but needs the client to recompress (the deltarpm /
   pacman-delta trade-off).
 
+## Content-addressed chunk store: `publish` and `pull` (prototype)
+
+```sh
+btrpkg publish x.pkg.btr STORE                       # upload only chunks the store lacks
+btrpkg pull [--sha256 HEX] STORE x CACHE/x.pkg.btr   # download only chunks the cache lacks
+btrpkg install CACHE/x.pkg.btr /                      # unchanged
+```
+
+The store is a tree of static files (`src/store.rs`):
+- `chunks/ab/<sha256>`: a chunk's bytes exactly as written to disk (a zstd frame or raw data),
+  named by the sha256 of those bytes.
+- `raw/ab/<sha256 of the uncompressed data>` → `compression length chunk-hash`. When the same
+  data is published again, the stored chunk is reused even if this build compressed it to
+  different bytes (another zstd version or level). Chunks stay stable across compressor upgrades.
+- `index/x.btridx`: header, manifest, chunk table with a hash per chunk, and a sha256 of all of it
+  (stand-in for a signature; `pull --sha256` checks the index file like a repo database entry).
+  Chunks are written before the index, so a published index never refers to a missing chunk.
+
+`pull` reads the index and builds a map of the chunks the cache already has from the `.btridx`
+copies kept next to every pulled cache file. It reflinks those from the old cache file and reads
+the rest from the store. Each chunk is checked against its hash before it is written as an encoded
+extent. The result is the same cache file `fetch` makes, so `install` is unchanged. On any error
+the partial file is removed.
+
+Hyprland upgrades (old versions published and installed first, then the new versions;
+`bench/pull-test.sh`, fresh btrfs on the bench partition, no LUKS). Results:
+`bench/results/publish-hypr.tsv`, `pull-hypr-new.tsv`, `pull-hypr.log`.
+
+| new version | `.pkg.tar.zst` | chunks downloaded | download (index + chunks) | upload (index + chunks) |
+|---|---:|---:|---:|---:|
+| hyprland-0.57.2-2 | 53.70 MB | 144/647 | 5.66 MB | 5.66 MB |
+| hyprutils-0.14.4-1 | 0.24 MB | 7/16 | 0.24 MB | 0.24 MB |
+| aquamarine-0.16.0-1 | 0.48 MB | 15/19 | 0.50 MB | 0.50 MB |
+| hyprtoolkit-0.6.0-3 | 0.53 MB | 4/17 | 0.07 MB | 0.07 MB |
+| hyprgraphics-0.6.0-1 | 0.09 MB | 3/3 | 0.09 MB | 0.09 MB |
+| hyprcursor-0.1.14-1 | 0.23 MB | 8/9 | 0.30 MB | 0.30 MB |
+| xdg-desktop-portal-hyprland-1.5.0-1 | 0.38 MB | 10/10 | 0.43 MB | 0.43 MB |
+| hyprland-guiutils-0.2.2-6 | 0.18 MB | 11/11 | 0.32 MB | 0.32 MB |
+| hyprpicker-0.4.8-1 | 0.10 MB | 3/3 | 0.10 MB | 0.10 MB |
+| **all 9** | **55.93 MB** | 205/735 | **7.72 MB** | **7.72 MB** |
+
+- Download and upload are the same here because the store and the cache both held exactly the
+  previous versions. The index alone is 0.22 MB for the 9 packages (hyprland 155 KB).
+- Space on the test filesystem: old versions installed and cached 57.1 MB, new versions pulled
+  65.5 MB, after installing over the old ones and deleting the old cache files 58.2 MB.
+- Verify: the 9 new versions installed from pulled cache files, after the old cache files were
+  deleted, against `bsdtar`: 0 differences over 785 files. Extents `encoded,shared`.
+- A corrupted chunk in the store and a tampered index were both refused, leaving no file behind.
+- hyprland 0.57.2-2 converted again at `-l 18` (337 of 647 chunks compress to different bytes)
+  and published: 0 chunks uploaded, all mapped to the stored ones through `raw/`.
+
+Prototype limits:
+- The store is read as a local directory. HTTP, parallel and pipelined downloads aren't done.
+- No signature, and the publisher's `raw/` map is trusted.
+- Chunks already in the local cache are trusted without rehashing. `BTRFS_IOC_ENCODED_READ` could
+  rehash them without decompressing.
+- No garbage collection of the store.
+- Many small files: fine for Omarchy's own repo, but not the layout of a normal pacman mirror.
+- `install` doesn't remove files that a new version dropped.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:

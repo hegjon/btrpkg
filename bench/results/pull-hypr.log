@@ -1,0 +1,35 @@
+== initial install of the old versions (nothing cached)
+download	hyprland-0.57.1-2-x86_64	155335	647	53182522	0	0
+download	hyprutils-0.14.3-1-x86_64	17259	14	218691	0	0
+download	aquamarine-0.15.1-1-x86_64	9244	19	493421	0	0
+download	hyprtoolkit-0.6.0-2-x86_64	14900	17	559800	0	0
+download	hyprgraphics-0.5.1-4-x86_64	6192	3	87022	0	0
+download	hyprcursor-0.1.13-7-x86_64	4360	8	291943	0	0
+download	xdg-desktop-portal-hyprland-1.4.1-2-x86_64	3198	8	318599	0	0
+download	hyprland-guiutils-0.2.2-5-x86_64	2785	11	318923	0	0
+download	hyprpicker-0.4.7-4-x86_64	3367	3	93082	0	0
+== upgrade: pull the new versions, reusing chunks of the cached old ones
+download	hyprland-0.57.2-2-x86_64	155400	144	5502288	503	47675115
+download	hyprutils-0.14.4-1-x86_64	17613	7	223516	9	14662
+download	aquamarine-0.16.0-1-x86_64	9245	15	492121	4	6485
+download	hyprtoolkit-0.6.0-3-x86_64	14902	4	59091	13	500695
+download	hyprgraphics-0.6.0-1-x86_64	6278	3	87853	0	0
+download	hyprcursor-0.1.14-1-x86_64	4402	8	296272	1	1737
+download	xdg-desktop-portal-hyprland-1.5.0-1-x86_64	3322	10	422449	0	0
+download	hyprland-guiutils-0.2.2-6-x86_64	2787	11	318906	0	0
+download	hyprpicker-0.4.8-1-x86_64	3364	3	96401	0	0
+== install the new versions over the old ones, then remove the old cache files
+data used: old installed + cached 57.1 MB; + new versions pulled 65.5 MB; new installed over old 65.5 MB; old cache files removed 58.2 MB
+== verify (old cache files already removed): new versions installed from the pulled cache files vs bsdtar
+compared: {'file': 785, 'dir': 192, 'link': 11, 'bytes': 75645545, 'xattr': 0}
+problems: 0
+   0:        0..    3465:     793856..    797321:   3466:             last,shared,eof
+/mnt/root/b/usr/share/hypr/wall0.png: 1 extent found
+   0:        0..      31:     275469..    275500:     32:             encoded,shared
+   1:       32..      63:     275490..    275521:     32:     275501: encoded,shared
+== corrupt chunk in the store: pull must fail and leave nothing behind
+Error: chunk 4ecfa83fbe1f3f70bafad0b2f39aa2c5878a16d31bbc0e610f3a2322f2aa1bfe is corrupt
+ok: refused, nothing left
+== tampered index digest
+Error: index digest mismatch
+ok: refused, nothing left

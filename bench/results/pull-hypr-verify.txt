@@ -1,0 +1,2 @@
+compared: {'file': 785, 'dir': 192, 'link': 11, 'bytes': 75645545, 'xattr': 0}
+problems: 0
