@@ -328,6 +328,38 @@ Prototype limits:
 - Many small files: fine for Omarchy's own repo, but not the layout of a normal pacman mirror.
 - `install` doesn't remove files that a new version dropped.
 
+## Other filesystems than btrfs (from the code, not tested yet)
+
+Installing works on any filesystem, but only btrfs gets the benefits. The format itself has
+nothing btrfs-specific in it. `fetch`, `pull` and `install` each fall back when a btrfs feature
+is missing:
+
+| step | on btrfs | without encoded writes (not btrfs, or not root) | without reflinks |
+|---|---|---|---|
+| `fetch` / `pull` writing chunks | zstd frames stored as they are | decompresses each chunk and writes plain data (falls back after the first failed `BTRFS_IOC_ENCODED_WRITE`) | — |
+| `pull` reusing chunks from older cache files | reflink | — | downloads those chunks again instead |
+| `install` | reflink from the cache file | — | `copy_file_range` from the cache file |
+
+What that means per filesystem:
+- **XFS (reflink on by default), bcachefs:** installed files share blocks with the cache file, so
+  the cache costs no extra space. But no data is compressed: root + cache take the uncompressed
+  size (2.26 GB for the 315-package set, against 0.75 GB on btrfs). Decompressing at fetch is
+  cheap; nothing is compressed at install.
+- **ext4, tmpfs, others without reflinks:** the cache file is the uncompressed image and install
+  copies it, so root + cache take twice the uncompressed size. That's worse than pacman, which
+  keeps the compressed `.pkg.tar.zst` in the cache. Deleting the cache file after install gets
+  back to plain extracted files. `pull` also loses its upgrade saving, because chunks it can't
+  reflink are downloaded again.
+- **Download size** doesn't depend on the filesystem.
+
+Known gaps:
+- **`pull` could copy, not download, chunks it can't reflink.** It already has them locally.
+- **btrfs without root:** `fetch`/`pull` set `FS_NOCOMP_FL` on the cache file before trying
+  encoded writes. When that fails, the fallback writes plain data that the kernel then stores
+  uncompressed. The flag should only be set once an encoded write has succeeded.
+- **Never run:** `bench/nonbtrfs-test.sh` (tmpfs, ext4 and XFS against `bsdtar`) is written but
+  hasn't been run yet.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
