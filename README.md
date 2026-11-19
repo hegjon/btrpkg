@@ -328,6 +328,125 @@ Prototype limits:
 - Many small files: fine for Omarchy's own repo, but not the layout of a normal pacman mirror.
 - `install` doesn't remove files that a new version dropped.
 
+## Repository layout, S3 and signatures (design; signatures not implemented)
+
+### What a published package is
+
+A package is now its **index** (`x.btridx`): a small file with the package's metadata, its tiny
+files and a list of chunk hashes. The file data lives in chunk objects shared by all packages and
+versions. For the 315-package set (`--small 4096`):
+
+| part of the index | total (315 indexes) | |
+|---|---:|---|
+| manifest, zstd | 19.4 MB (88%) | paths, modes, owners, mtimes, xattrs, symlinks, **plus the contents of all files ≤ 4 KiB** (60 MB uncompressed) |
+| chunk table | 2.7 MB (12%) | 48,118 entries × 56 B (offset, lengths, compression, sha256) |
+| header + digest | 0.03 MB | |
+
+Median index 10 KB, 90th percentile 115 KB, largest ansible at 3.5 MB (53,668 files).
+
+### Layout
+
+```
+<repo root>/                                  (bucket, or a directory served over HTTP)
+  x86_64/omarchy.db[.sig]                     repo database: the only object that changes
+  index/hyprland-0.57.2-2-x86_64.btridx        one per package version, immutable
+  index/hyprland-0.57.2-2-x86_64.btridx.sig    detached signature, immutable
+  chunks/ab/ab12…ef                            chunk bytes as stored on disk, named by their sha256;
+                                               shared by all packages, versions, repos and architectures
+(build server only, not published)
+  raw/ab/…                                     uncompressed-data hash → chunk; keeps chunks stable when
+                                               the compressor changes
+```
+
+The database entry for a package names its index and the index's sha256 (`pull --sha256`), the
+way `%FILENAME%` and `%SHA256SUM%` name a `.pkg.tar.zst` today. The publish order is: chunks,
+then index and signature, then the database. A client never sees a database entry whose objects
+are missing.
+
+### On S3 (or R2)
+
+- **Immutable objects.** Every object except the database is immutable and named by content or
+  version, so it can be served with `Cache-Control: public, max-age=31536000, immutable` behind
+  any CDN. Only the database needs a short TTL.
+- **Upload.** Chunks are written with `PutObject` + `If-None-Match: *`. A 412 means another
+  publish already stored the same chunk, so concurrent publishers are safe and need no listing.
+  The 2-hex-digit prefix isn't needed for S3 performance any more, but keeps the tree usable as a
+  plain mirror directory (256 subdirectories).
+- **Downloads are many small objects.** At the 4 KiB small-file threshold, 79% of chunk objects
+  are under 16 KB (median 4.5 KB): files just above 4 KiB each become their own object. A
+  client needs HTTP/2 and many requests in flight. Raising the threshold moves those files into
+  the index:
+
+| `--small` | chunk objects | chunks | indexes | total download, all 315 | median chunk |
+|---|---:|---:|---:|---:|---:|
+| `.pkg.tar.zst` today | 315 files | | | 485 MB | |
+| 4 KiB | 47,518 | 612.7 MB | 22.1 MB | 634.8 MB | 4.5 KB |
+| 16 KiB | 22,939 | 535.4 MB | 53.8 MB | 589.2 MB | 12.4 KB |
+| 64 KiB | 12,326 | 447.1 MB | 105.1 MB | 552.2 MB | 31.8 KB |
+
+  Files inside the index are written as plain data at install (the kernel compresses them at
+  `zstd:3`). At 64 KiB the earlier bench measured 1.18 GB written against 0.97 GB at 4 KiB, still
+  far below pacman's 1.89 GB.
+- **Packs (if request count matters).** An alternative is to group the chunks each package
+  version introduces into one pack object, with the index pointing at (pack, offset). The client
+  then fetches runs of chunks it lacks with byte-range GETs. S3 serves one range per request, so
+  each run is one GET; hyprland's changed binary is 132 consecutive chunks. The cost is
+  git-style repacking to drop dead chunks.
+- **Cost at list prices** (S3 Standard us-east-1: GET $0.0004 and PUT $0.005 per 1,000, egress
+  $0.09/GB after 100 GB/month; R2: $0.36 and $4.50 per million, no egress fee).
+  - Fresh install of the 315-package set at 4 KiB: about 47,800 GETs. That's $0.019 on S3 plus
+    $0.057 egress, or $0.017 on R2. The same set as `.pkg.tar.zst` is 315 GETs + $0.044 egress.
+  - Publishing the whole set once: about 47,800 PUTs, $0.24 on S3.
+  - The hyprland upgrade: 145 PUTs.
+  - Egress, not requests, dominates on S3, and the upgrade savings cut exactly that.
+- **Garbage collection** is mark and sweep: chunks not referenced by any retained index are
+  deleted. A lifecycle rule alone can't do it.
+
+### Signatures
+
+What this machine does today: `SigLevel = Required DatabaseOptional`. Every package has a
+detached OpenPGP signature (Arch packagers, or "Omarchy <pkgs@omarchy.org>" for the Omarchy
+repo). The repo databases are unsigned (`omarchy.db.sig` is a 404).
+
+For btrpkg:
+1. **Sign the index, not the chunks.** `x.btridx.sig` is a detached OpenPGP signature, made and
+   checked with the same tools and keyring as pacman (`gpg --detach-sign`, `gpgv` / libalpm
+   against `/etc/pacman.d/gnupg`). The index holds every chunk's sha256, so one signature covers
+   manifest, small files, layout and all data, as a hash tree (like an OSTree commit signature
+   or a signed casync index). Chunks need no signatures of their own.
+2. **Order on the client.** Download the index and its `.sig`, and verify before parsing
+   anything. Check each chunk's sha256 before it reaches `BTRFS_IOC_ENCODED_WRITE` (`pull`
+   already does). The kernel stores frames without checking them, so this check is the only
+   protection against a bad frame. A malicious frame signed by a trusted key is the same risk as
+   a malicious signed package, which runs as root anyway.
+3. **Re-verifying the cache.** pacman checks the signature of a cached package at every install.
+   A btrpkg cache file is assembled, not the signed bytes, so re-verification means: verify the
+   kept index and its `.sig`, then hash each chunk in the cache file. `BTRFS_IOC_ENCODED_READ`
+   returns the stored compressed bytes, so this needs no decompression (root, as installs are).
+   On filesystems without encoded I/O the cache holds plain data. That would need the
+   uncompressed hash in the index too (+32 B per chunk, 1.5 MB for the set).
+4. **Who signs.** Arch's packager signatures cover the `.pkg.tar.zst` bytes. Converting creates
+   new bytes, so those signatures can't be carried over, nor checked without downloading the
+   original. Converted packages are signed by whoever converts, in practice the Omarchy repo
+   key. This machine already fully trusts that key, but only for Omarchy's own packages; trusting
+   it for Arch's packages is a new trust decision. The converter must verify the Arch signature on
+   every input before converting. The index can record the original file's sha256 and its Arch
+   signature for audit. Conversion is deterministic, so anyone can download the original,
+   convert it and compare the uncompressed chunk hashes to check what the converter signed.
+5. **The `raw/` map stays private** on the build server. Before reusing a mapped chunk,
+   `publish` must check that it decompresses to the same data (the prototype trusts the map).
+   Otherwise a corrupted map would get a wrong chunk signed.
+6. **Repo database.** Signing the index doesn't stop a mirror from serving an older, validly
+   signed index or database (freeze or rollback). That's the same gap pacman has today with
+   `DatabaseOptional`. Signing the database (or TUF-style timestamped metadata) closes it for
+   both.
+7. **On S3** signatures are ordinary immutable objects. The signing key stays on the build host:
+   whoever can write to the bucket can delete objects or serve old ones, but can't forge a
+   package.
+
+Not implemented yet: `publish --sign KEYID`, verifying in `pull` (`gpgv` with pacman's keyring,
+or `sqv`), re-verifying the cache, and checking the `raw/` map in `publish`.
+
 ## Other filesystems than btrfs (from the code, not tested yet)
 
 Installing works on any filesystem, but only btrfs gets the benefits. The format itself has
