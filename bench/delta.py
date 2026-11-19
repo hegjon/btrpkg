@@ -15,21 +15,23 @@ client would have to rebuild and recompress, which is what btrpkg wants to avoid
 import hashlib, os, struct, subprocess, sys
 from compression import zstd
 
-HDR, ENT = 64, 24
+HDR, ENT = 256, 88   # format version 1 (src/format.rs)
 
 def parse(path):
     b = open(path, "rb").read()
-    assert b[:8] == b"BTRPKG\0\0"
-    flags, meta_len, nchunks, image_len, image_base, meta_raw_len = struct.unpack_from("<IQQQQQ", b, 12)
-    meta = zstd.decompress(b[HDR:HDR + meta_len])
-    t0 = HDR + meta_len
-    chunks, pos = [], t0 + nchunks * ENT
+    assert b[:8] == b"BTRPKG\0\0" and struct.unpack_from("<I", b, 8)[0] == 1, path
+    nchunks, image_len, e_len, e_raw, bl_len, bl_raw = struct.unpack_from("<QQQQQQ", b, 16)
+    t0 = HDR
+    e0 = t0 + nchunks * ENT
+    meta = zstd.decompress(b[e0:e0 + e_len])
+    chunks, pos = [], e0 + e_len + bl_len
     for i in range(nchunks):
         off, ulen, elen, comp = struct.unpack_from("<QIIB", b, t0 + i * ENT)
-        chunks.append((off, ulen, elen, hashlib.sha256(b[pos:pos + elen]).digest()))
+        stored = b[t0 + i * ENT + 24:t0 + i * ENT + 56]
+        chunks.append((off, ulen, elen, stored))
         pos += elen
-    assert pos + 32 == len(b), (path, pos, len(b))
-    # manifest entries -> large files (data_off, size)
+    assert pos == len(b), (path, pos, len(b))
+    # entries -> large files (data_off, size)
     n, = struct.unpack_from("<I", meta, 0); p = 4; files = []
     for _ in range(n):
         kind, mode, uid, gid, mtime, size, data_off, small = struct.unpack_from("<BIIIqQQB", meta, p); p += 38

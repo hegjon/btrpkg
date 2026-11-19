@@ -19,7 +19,7 @@ DEV=/dev/nvme0n1p3; PART=nvme0n1p3; T=/mnt/t; ROOT=/mnt/root
 FS=$DEV; MAP=btrpkg-bench; export DM_DISABLE_UDEV=1  # no udev in the container
 SET=${SET:-/w/bench/installed-set.txt}; CONV=${CONV:-/w/bench/out-l19}
 OUT=/w/bench/results; mkdir -p $OUT $T $ROOT
-B=/w/target/release/btrpkg
+B=${B:-/w/target/release/btrpkg}
 ROUNDS=${ROUNDS:-2}; SCENARIOS=${SCENARIOS:-"pacman btrpkg noenc"}
 
 [[ -b $DEV ]] || { echo "$DEV missing"; exit 1; }

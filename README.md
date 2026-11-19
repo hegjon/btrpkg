@@ -33,35 +33,62 @@ btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # refl
 btrpkg info x.pkg.btr
 ```
 
-`fetch` checks integrity in one of two ways:
-- `.pkg.btr` carries a sha256 of its contents, checked on the way in.
-- For `.pkg.btr.zst`, `fetch` hashes the downloaded file itself (434 MB rather than 2.1 GB of
-  inner stream) and compares it with `--sha256`, which plays the role of the repo database or
-  signature. The zstd frame checksum catches corruption.
+`fetch` reads and checks the index first (header, chunk table, entries, small-file blob, each
+against its hash in the header), then checks every chunk against its hash in the table before
+writing it. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
+compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
+trailing data, and on any failure removes its partial file.
 
-`fetch` also refuses trailing data. On any failure it removes its partial file.
+## Format (version 1)
 
-## Format (version 0, spike-grade)
+The full description is at the top of `src/format.rs`. The same index describes a package in
+all three forms; the other two only append to it, so the header (and later its signature) is
+identical everywhere:
 
-Transport file:
+| form | layout |
+|---|---|
+| index (`.btridx`) | header, chunk table, entries, small-file blob |
+| transport (`.pkg.btr`) | index, then the chunk data in table order |
+| cache file | index, zero padding up to `image_base = align(index length)`, then the image |
 
 | part | contents |
 |---|---|
-| header (64 B) | `BTRPKG\0\0`, version, flags, meta_len, nchunks, image_len, image_base, meta_raw_len |
-| manifest | one zstd frame (level 19): entries (kind, mode, uid, gid, mtime, size, data offset, small flag, path, link target, xattrs) followed by the small-file blob |
-| chunk table | nchunks × 24 B: image_off, unencoded_len (4 KiB multiple, ≤128 KiB), encoded_len, compression (0 raw, 2 zstd) |
-| chunk data | chunk payloads in table order. zstd frames use window ≤128 KiB, no checksum and no dictionary ID |
-| digest | sha256 of all preceding bytes (stand-in for a signature) |
+| header (256 B) | `BTRPKG\0\0`, version 1, hash algorithm (1 = SHA-256), number of chunks, image length, stored and uncompressed length of entries and blob, SHA-256 of the table, entries and blob, 64 reserved zero bytes, SHA-256 of the header (the package's ID; what a signature will cover) |
+| chunk table | per chunk 88 B: image offset, unencoded length (4 KiB multiple, ≤128 KiB), stored length, compression (0 raw, 2 zstd), SHA-256 of the stored bytes, SHA-256 of the unencoded bytes. In image order, no gaps |
+| entries | one zstd frame (level 19): kind, mode, uid, gid, mtime, size, data offset, small flag, path, link target, xattrs |
+| small-file blob | one zstd frame (level 19): the contents of all small files |
+| chunk data | zstd frames with window ≤128 KiB, no checksum, no dictionary ID; or raw data |
 
-Fetched (cache) file: the header with `flags=1` and `image_base` set, then the manifest, table and
-digest, then zero padding up to `image_base` (4 KiB-aligned), then the image, whose chunks are
-btrfs compressed extents.
+Reading checks each section before the next is read, so the chunk table can be used (chunk
+downloads started) before the rest arrives. Readers also check what `install` relies on: safe
+relative paths, known entry kinds, file data inside the image or blob, chunks that tile the
+image. Lengths in the header are capped and nothing is allocated from them before the data has
+arrived. Tests: `cargo test` (every flipped bit and every truncation of an index is rejected,
+corrupt transports and stores leave no files behind).
+
+Checked on the 315-package set (2026-11-19, desktop, bench partition, no LUKS):
+- Converting all 315 at `-l 19`: 20 s (4 in parallel). Transport files 645.4 MB against 642.3 MB
+  in version 0 (+0.5%: the second hash per chunk, 64 B × 48k chunks).
+- `bench.sh` with `fetch` + `install`: 0 differences over 99,562 files against bsdtar
+  (`results/v1-verify.txt`); installed extents `encoded,shared`.
+- Same container run, alternating version 0 and 1 binaries, 3 rounds each
+  (`results/v1-vs-v0.tsv`): 2.84–2.99 s against 2.88–2.97 s, the same device writes (0.98 GB) and
+  root size; root + cache 3 MB larger (the bigger indexes). The earlier 2.52 s for version 0 was
+  measured on another day; today's machine is slower for both.
+- `pull-test.sh` against a version-1 store: the same chunks as before are uploaded and downloaded
+  for the Hyprland upgrades (hyprland: 144 chunks, 5.50 MB; index 177.6 KB, was 155.4 KB),
+  0 differences after installing, a corrupt chunk and a tampered index are refused with no file
+  left behind.
+
+Version 0 (the spike's format until 2026-11-19) had a 64-byte header, one manifest frame with the
+blob inside, 24-byte table entries, the table after the manifest and a single trailing SHA-256.
+The measurements below were made with it; the chunk data is the same in both versions.
 
 Converter rules:
 - Files of `--small` bytes or less go in the blob.
 - Identical file contents are stored once and reflinked more than once (dedup).
 - A chunk stays raw when compressing it doesn't save at least one 4 KiB block.
-- Root-level dotfiles (`.PKGINFO`, `.MTREE`, …) are kept in the manifest and not installed.
+- Root-level dotfiles (`.PKGINFO`, `.MTREE`, …) are kept in the entries and not installed.
 
 ## Results: 2026-11-19, desktop (Ryzen 9, kernel 7.2.15), `/dev/nvme0n1p3`
 
@@ -282,15 +309,20 @@ The store is a tree of static files (`src/store.rs`):
 - `raw/ab/<sha256 of the uncompressed data>` → `compression length chunk-hash`. When the same
   data is published again, the stored chunk is reused even if this build compressed it to
   different bytes (another zstd version or level). Chunks stay stable across compressor upgrades.
-- `index/x.btridx`: header, manifest, chunk table with a hash per chunk, and a sha256 of all of it
-  (stand-in for a signature; `pull --sha256` checks the index file like a repo database entry).
+- `index/x.btridx`: the package's index (format version 1: header with section hashes, chunk
+  table with both hashes per chunk, entries, small-file blob). `pull --sha256` checks the index
+  file like a repo database entry; signatures come in milestone 2.
   Chunks are written before the index, so a published index never refers to a missing chunk.
+  When `publish` reuses a chunk through `raw/`, it first checks that chunk's bytes and that it
+  decompresses to the same data, then writes the index with the stored chunk's entry.
 
-`pull` reads the index and builds a map of the chunks the cache already has from the `.btridx`
-copies kept next to every pulled cache file. It reflinks those from the old cache file and reads
-the rest from the store. Each chunk is checked against its hash before it is written as an encoded
-extent. The result is the same cache file `fetch` makes, so `install` is unchanged. On any error
-the partial file is removed.
+`pull` reads the index, then the header and chunk table of every other cache file in the
+directory (each cache file starts with its own index), and maps their chunks by the hash of the
+unencoded data. It reflinks those from the old cache file and reads the rest from the store. Each
+chunk is checked against its hash before it is written as an encoded extent. The result is the
+same cache file `fetch` makes, so `install` is unchanged. On any error the partial file is
+removed. (Version 0 kept a `.btridx` copy next to each cache file and matched on the stored
+bytes' hash.)
 
 Hyprland upgrades (old versions published and installed first, then the new versions;
 `bench/pull-test.sh`, fresh btrfs on the bench partition, no LUKS). Results:

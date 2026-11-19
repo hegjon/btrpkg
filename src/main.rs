@@ -1,17 +1,16 @@
 //! btrpkg spike: pacman packages whose file data is shipped as btrfs zstd extents.
 //!
-//!   btrpkg convert [-l LEVEL] IN.pkg.tar.zst OUT.btrpkg
-//!   btrpkg fetch [--no-encoded] IN.btrpkg|- CACHEFILE      (needs CAP_SYS_ADMIN for encoded writes)
+//!   btrpkg convert [-l LEVEL] IN.pkg.tar.zst OUT.pkg.btr
+//!   btrpkg fetch [--no-encoded] IN.pkg.btr|- CACHEFILE     (needs CAP_SYS_ADMIN for encoded writes)
 //!   btrpkg install [--copy] CACHEFILE ROOT
 //!   btrpkg info FILE
 //!   btrpkg publish IN.pkg.btr STORE            (content-addressed chunk store, see store.rs)
 //!   btrpkg pull [--no-encoded] [--sha256 HEX] STORE NAME CACHEFILE
 //!
-//! See README.md for the format.
+//! The format is described in format.rs (version 1) and README.md.
 
 use anyhow::{bail, ensure, Context, Result};
 use rayon::prelude::*;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -21,201 +20,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+mod format;
 mod store;
 
-const MAGIC: &[u8; 8] = b"BTRPKG\0\0";
-const VERSION: u32 = 0;
-const FLAG_MATERIALIZED: u32 = 1;
-const HDR: usize = 64;
-const TABLE_ENT: usize = 24;
-const BLOCK: u64 = 4096;
-const MAX_EXTENT: usize = 128 * 1024;
-const COMP_NONE: u8 = 0;
-const COMP_ZSTD: u8 = 2; // BTRFS_ENCODED_IO_COMPRESSION_ZSTD
-
-const K_FILE: u8 = 0;
-const K_DIR: u8 = 1;
-const K_SYMLINK: u8 = 2;
-const K_HARDLINK: u8 = 3;
-
-fn align(x: u64) -> u64 {
-    (x + BLOCK - 1) & !(BLOCK - 1)
-}
-
-// ---------------------------------------------------------------- format
-
-#[derive(Debug, Clone, Default)]
-struct Entry {
-    kind: u8,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    mtime: i64,
-    size: u64,
-    /// image offset (large file) or offset into the small blob (small file)
-    data_off: u64,
-    small: bool,
-    path: Vec<u8>,
-    target: Vec<u8>,
-    xattrs: Vec<(Vec<u8>, Vec<u8>)>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Chunk {
-    image_off: u64,
-    unencoded_len: u32,
-    encoded_len: u32,
-    compression: u8,
-}
-
-#[derive(Debug, Default)]
-struct Header {
-    flags: u32,
-    meta_len: u64,
-    nchunks: u64,
-    image_len: u64,
-    image_base: u64,
-    meta_raw_len: u64,
-}
-
-impl Header {
-    fn encode(&self) -> [u8; HDR] {
-        let mut b = [0u8; HDR];
-        b[0..8].copy_from_slice(MAGIC);
-        b[8..12].copy_from_slice(&VERSION.to_le_bytes());
-        b[12..16].copy_from_slice(&self.flags.to_le_bytes());
-        b[16..24].copy_from_slice(&self.meta_len.to_le_bytes());
-        b[24..32].copy_from_slice(&self.nchunks.to_le_bytes());
-        b[32..40].copy_from_slice(&self.image_len.to_le_bytes());
-        b[40..48].copy_from_slice(&self.image_base.to_le_bytes());
-        b[48..56].copy_from_slice(&self.meta_raw_len.to_le_bytes());
-        b
-    }
-    fn decode(b: &[u8]) -> Result<Header> {
-        ensure!(b.len() >= HDR && &b[0..8] == MAGIC, "not a btrpkg file");
-        let u32_at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-        let u64_at = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
-        ensure!(u32_at(8) == VERSION, "unsupported btrpkg version {}", u32_at(8));
-        let h = Header {
-            flags: u32_at(12),
-            meta_len: u64_at(16),
-            nchunks: u64_at(24),
-            image_len: u64_at(32),
-            image_base: u64_at(40),
-            meta_raw_len: u64_at(48),
-        };
-        ensure!(h.meta_len < 1 << 32 && h.meta_raw_len < 1 << 34 && h.nchunks < 1 << 32, "header sizes out of range");
-        Ok(h)
-    }
-    fn table_len(&self) -> u64 {
-        self.nchunks * TABLE_ENT as u64
-    }
-}
-
-fn encode_table(chunks: &[Chunk]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(chunks.len() * TABLE_ENT);
-    for c in chunks {
-        v.extend_from_slice(&c.image_off.to_le_bytes());
-        v.extend_from_slice(&c.unencoded_len.to_le_bytes());
-        v.extend_from_slice(&c.encoded_len.to_le_bytes());
-        v.push(c.compression);
-        v.extend_from_slice(&[0u8; 7]);
-    }
-    v
-}
-
-fn decode_table(b: &[u8], image_len: u64) -> Result<Vec<Chunk>> {
-    let mut out = Vec::with_capacity(b.len() / TABLE_ENT);
-    for e in b.chunks_exact(TABLE_ENT) {
-        let c = Chunk {
-            image_off: u64::from_le_bytes(e[0..8].try_into().unwrap()),
-            unencoded_len: u32::from_le_bytes(e[8..12].try_into().unwrap()),
-            encoded_len: u32::from_le_bytes(e[12..16].try_into().unwrap()),
-            compression: e[16],
-        };
-        ensure!(c.image_off % BLOCK == 0 && c.unencoded_len as u64 % BLOCK == 0, "unaligned chunk");
-        ensure!(c.unencoded_len as usize <= MAX_EXTENT && c.unencoded_len > 0, "chunk too large");
-        ensure!(c.image_off + c.unencoded_len as u64 <= image_len, "chunk past image end");
-        ensure!(c.compression == COMP_NONE || c.compression == COMP_ZSTD, "unknown compression");
-        ensure!(c.compression != COMP_NONE || c.encoded_len == c.unencoded_len, "raw chunk length mismatch");
-        out.push(c);
-    }
-    Ok(out)
-}
-
-struct W(Vec<u8>);
-impl W {
-    fn u8(&mut self, v: u8) { self.0.push(v) }
-    fn u32(&mut self, v: u32) { self.0.extend_from_slice(&v.to_le_bytes()) }
-    fn u64(&mut self, v: u64) { self.0.extend_from_slice(&v.to_le_bytes()) }
-    fn bytes(&mut self, v: &[u8]) { self.u32(v.len() as u32); self.0.extend_from_slice(v) }
-}
-struct R<'a>(&'a [u8], usize);
-impl<'a> R<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        ensure!(self.1 + n <= self.0.len(), "truncated manifest");
-        let s = &self.0[self.1..self.1 + n];
-        self.1 += n;
-        Ok(s)
-    }
-    fn u8(&mut self) -> Result<u8> { Ok(self.take(1)?[0]) }
-    fn u32(&mut self) -> Result<u32> { Ok(u32::from_le_bytes(self.take(4)?.try_into()?)) }
-    fn u64(&mut self) -> Result<u64> { Ok(u64::from_le_bytes(self.take(8)?.try_into()?)) }
-    fn bytes(&mut self) -> Result<Vec<u8>> { let n = self.u32()? as usize; Ok(self.take(n)?.to_vec()) }
-}
-
-fn encode_meta(entries: &[Entry], small: &[u8]) -> Vec<u8> {
-    let mut w = W(Vec::new());
-    w.u32(entries.len() as u32);
-    for e in entries {
-        w.u8(e.kind);
-        w.u32(e.mode);
-        w.u32(e.uid);
-        w.u32(e.gid);
-        w.u64(e.mtime as u64);
-        w.u64(e.size);
-        w.u64(e.data_off);
-        w.u8(e.small as u8);
-        w.bytes(&e.path);
-        w.bytes(&e.target);
-        w.u32(e.xattrs.len() as u32);
-        for (k, v) in &e.xattrs {
-            w.bytes(k);
-            w.bytes(v);
-        }
-    }
-    w.0.extend_from_slice(small);
-    w.0
-}
-
-fn decode_meta(b: &[u8]) -> Result<(Vec<Entry>, Vec<u8>)> {
-    let mut r = R(b, 0);
-    let n = r.u32()? as usize;
-    let mut v = Vec::with_capacity(n.min(1 << 20));
-    for _ in 0..n {
-        let mut e = Entry {
-            kind: r.u8()?,
-            mode: r.u32()?,
-            uid: r.u32()?,
-            gid: r.u32()?,
-            mtime: r.u64()? as i64,
-            size: r.u64()?,
-            data_off: r.u64()?,
-            small: r.u8()? != 0,
-            path: r.bytes()?,
-            target: r.bytes()?,
-            xattrs: vec![],
-        };
-        let nx = r.u32()?;
-        for _ in 0..nx {
-            e.xattrs.push((r.bytes()?, r.bytes()?));
-        }
-        ensure!(!e.path.is_empty() && !e.path.starts_with(b"/") && !e.path.split(|&c| c == b'/').any(|c| c == b".."),
-            "unsafe path {:?}", String::from_utf8_lossy(&e.path));
-        v.push(e);
-    }
-    Ok((v, b[r.1..].to_vec()))
-}
+use format::*;
 
 // ---------------------------------------------------------------- convert
 
@@ -357,7 +165,7 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
                 ent.read_to_end(&mut data)?;
                 e.size = data.len() as u64;
                 // Identical contents are stored once; installs reflink the same range again.
-                let key: [u8; 32] = Sha256::digest(&data).into();
+                let key = sha256(&data);
                 if let Some(&(small, off)) = seen.get(&key) {
                     e.small = small;
                     e.data_off = off;
@@ -391,43 +199,29 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
         .into_par_iter()
         .map(|(off, data)| -> Result<(Chunk, Vec<u8>)> {
             let unencoded_len = data.len() as u32;
+            let raw = sha256(&data);
             let (comp, bytes) = if level == 0 { (COMP_NONE, data) } else { frame(level, data)? };
-            Ok((Chunk { image_off: off, unencoded_len, encoded_len: bytes.len() as u32, compression: comp }, bytes))
+            let stored = if comp == COMP_NONE { raw } else { sha256(&bytes) };
+            Ok((Chunk { image_off: off, unencoded_len, encoded_len: bytes.len() as u32, compression: comp, stored, raw }, bytes))
         })
         .collect::<Result<_>>()?;
 
-    let meta_raw = encode_meta(&entries, &small);
-    let meta = zstd::bulk::Compressor::new(19)?.compress(&meta_raw)?;
     let chunks: Vec<Chunk> = compressed.iter().map(|(c, _)| *c).collect();
-    let hdr = Header {
-        flags: 0,
-        meta_len: meta.len() as u64,
-        nchunks: chunks.len() as u64,
-        image_len: cursor,
-        image_base: 0,
-        meta_raw_len: meta_raw.len() as u64,
-    };
+    let index = build_index(&entries, &small, &chunks, cursor)?;
     let tmp = { let mut t = output.as_os_str().to_owned(); t.push(".part"); PathBuf::from(t) };
     // .pkg.btr.zst: the whole .pkg.btr wrapped in one solid zstd stream (long window).
     let outer = output.extension().is_some_and(|e| e == "zst");
     let file = File::create(&tmp)?;
-    let total = (HDR + meta.len() + chunks.len() * TABLE_ENT) as u64
-        + compressed.iter().map(|(_, d)| d.len() as u64).sum::<u64>() + 32;
+    let total = index.len() as u64 + compressed.iter().map(|(_, d)| d.len() as u64).sum::<u64>();
     let mut out: Out = if outer {
         Out::Zst(FrameWriter::new(io::BufWriter::new(file.try_clone()?), total, nframes, min_frame, outer_level))
     } else {
         Out::Plain(io::BufWriter::new(file.try_clone()?))
     };
-    let mut hash = Sha256::new();
-    let mut put = |b: &[u8], out: &mut Out| -> Result<()> { hash.update(b); out.write_all(b)?; Ok(()) };
-    put(&hdr.encode(), &mut out)?;
-    put(&meta, &mut out)?;
-    put(&encode_table(&chunks), &mut out)?;
+    out.write_all(&index)?;
     for (_, d) in &compressed {
-        put(d, &mut out)?;
+        out.write_all(d)?;
     }
-    let digest = hash.finalize();
-    out.write_all(&digest)?;
     match out {
         Out::Plain(w) => { w.into_inner()?; }
         Out::Zst(z) => { z.finish()?; }
@@ -512,24 +306,17 @@ fn set_nocomp(f: &File) {
 
 #[derive(Default, Debug)]
 #[allow(dead_code)]
-struct FetchStats { outer: bool, framed_here: bool, file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
+pub(crate) struct FetchStats { outer: bool, framed_here: bool, file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
 
-/// Stream a package into the package cache. Header, manifest and chunk table
-/// are written as normal data; every zstd chunk goes to disk unchanged as a
-/// btrfs compressed extent at image_base + image_off. A .pkg.btr.zst is
-/// decompressed on the way in; raw chunks are framed here (in parallel, at
-/// `level`) so they still land as compressed extents.
 /// Hashes everything read through it: the bytes of the file as downloaded.
-struct HashReader { inner: Box<dyn Read + Send>, h: std::sync::Arc<std::sync::Mutex<Sha256>> }
+struct HashReader { inner: Box<dyn Read + Send>, h: std::sync::Arc<std::sync::Mutex<sha2::Sha256>> }
 impl Read for HashReader {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(b)?;
-        self.h.lock().unwrap().update(&b[..n]);
+        sha2::Digest::update(&mut *self.h.lock().unwrap(), &b[..n]);
         Ok(n)
     }
 }
-
-fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 
 /// Decode a .pkg.btr.zst: find the frame boundaries (block headers only, no
 /// decoding), then decode all frames in parallel. Spike limitation: the whole
@@ -596,39 +383,66 @@ impl Read for BufList {
     }
 }
 
-/// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps
-/// in the repo database). For .pkg.btr.zst that, plus the zstd frame checksum,
-/// replaces hashing the much larger inner stream.
-fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: Option<&str>) -> Result<()> {
+/// Check a chunk's bytes against the table before anything is written: the kernel stores
+/// encoded frames without looking at them.
+fn check_chunk(i: usize, c: &Chunk, d: &[u8]) -> Result<()> {
+    ensure!(d.len() == c.encoded_len as usize && sha256(d) == c.stored, "chunk {i} is corrupt");
+    Ok(())
+}
+
+/// Writes one checked chunk into a cache file at `off`: zstd frames as encoded extents (or
+/// decompressed when encoded writes are unavailable), raw chunks as plain data.
+struct ChunkWriter { encoded_ok: bool, encoded_chunks: u64, encoded_bytes: u64, raw_chunks: u64, raw_bytes: u64, fallback_chunks: u64, fallback_bytes: u64, dctx: zstd::bulk::Decompressor<'static> }
+impl ChunkWriter {
+    fn new(use_encoded: bool) -> Result<ChunkWriter> {
+        Ok(ChunkWriter { encoded_ok: use_encoded, encoded_chunks: 0, encoded_bytes: 0, raw_chunks: 0, raw_bytes: 0, fallback_chunks: 0, fallback_bytes: 0, dctx: zstd::bulk::Decompressor::new()? })
+    }
+    fn write(&mut self, out: &File, off: u64, c: &Chunk, data: &[u8]) -> Result<()> {
+        if c.compression == COMP_NONE {
+            out.write_all_at(data, off)?;
+            self.raw_chunks += 1;
+            self.raw_bytes += data.len() as u64;
+            return Ok(());
+        }
+        if self.encoded_ok {
+            match encoded_write(out, off, c.unencoded_len as u64, data) {
+                Ok(()) => { self.encoded_bytes += data.len() as u64; self.encoded_chunks += 1; return Ok(()); }
+                Err(e) if self.encoded_chunks == 0 => {
+                    eprintln!("btrpkg: encoded write unavailable ({e}); decompressing instead");
+                    self.encoded_ok = false;
+                }
+                Err(e) => return Err(e).context("encoded write"),
+            }
+        }
+        let plain = self.dctx.decompress(data, c.unencoded_len as usize)?;
+        ensure!(plain.len() == c.unencoded_len as usize, "chunk decompressed to the wrong size");
+        out.write_all_at(&plain, off)?;
+        self.fallback_chunks += 1;
+        self.fallback_bytes += plain.len() as u64;
+        Ok(())
+    }
+}
+
+/// Stream a transport file (.pkg.btr, or .pkg.btr.zst) into the package cache.
+/// The index (header, chunk table, entries, blob) is read and checked first; then every chunk
+/// is checked against its hash before it is written. The cache file is the index, padding,
+/// then the image with each zstd chunk as a btrfs compressed extent. Raw chunks of a
+/// .pkg.btr.zst are framed here (in parallel, at `level`) so they land compressed too.
+/// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps in the repo
+/// database); optional, the index and chunk hashes already cover the contents.
+pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: Option<&str>) -> Result<FetchStats> {
     let mut src: Box<dyn Read + Send> = if input == "-" { Box::new(io::stdin()) } else { Box::new(File::open(input)?) };
     let mut magic = [0u8; 4];
     src.read_exact(&mut magic).context("empty package")?;
-    let file_hash = std::sync::Arc::new(std::sync::Mutex::new(Sha256::new()));
-    file_hash.lock().unwrap().update(magic);
+    let file_hash = std::sync::Arc::new(std::sync::Mutex::new(<sha2::Sha256 as sha2::Digest>::new()));
+    sha2::Digest::update(&mut *file_hash.lock().unwrap(), magic);
     let src: Box<dyn Read + Send> = Box::new(HashReader { inner: src, h: file_hash.clone() });
     let chained = io::Cursor::new(magic.to_vec()).chain(src);
     let outer = magic == [0x28, 0xb5, 0x2f, 0xfd];
-    let src: Box<dyn Read + Send> = if outer {
-        decode_frames(chained)?
-    } else {
-        Box::new(chained)
-    };
+    let src: Box<dyn Read + Send> = if outer { decode_frames(chained)? } else { Box::new(chained) };
     let mut rd = BufReader::with_capacity(1 << 20, src);
-    let mut hash = Sha256::new();
-    // The inner stream is hashed only for plain .pkg.btr (its trailer digest).
-    let inner_hash = !outer;
-    let read = move |rd: &mut dyn Read, hash: &mut Sha256, n: usize| -> Result<Vec<u8>> {
-        let mut b = vec![0u8; n];
-        rd.read_exact(&mut b).context("truncated package")?;
-        if inner_hash { hash.update(&b); }
-        Ok(b)
-    };
-    let hb = read(&mut rd, &mut hash, HDR)?;
-    let mut hdr = Header::decode(&hb)?;
-    ensure!(hdr.flags == 0, "input is not a transport package");
-    let meta = read(&mut rd, &mut hash, hdr.meta_len as usize)?;
-    let table_b = read(&mut rd, &mut hash, hdr.table_len() as usize)?;
-    let chunks = decode_table(&table_b, hdr.image_len)?;
+    let idx = read_index(&mut rd)?;
+    let image_base = idx.hdr.image_base();
 
     let tmp = cache.with_extension("part");
     let _ = fs::remove_file(&tmp);
@@ -636,130 +450,103 @@ fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: 
     // Only raw (incompressible) chunks are written as plain data; don't let the
     // kernel try to compress them. Without encoded writes the kernel must compress.
     if use_encoded { set_nocomp(&out); }
-    let prefix = (HDR + meta.len() + table_b.len() + 32) as u64;
-    hdr.image_base = align(prefix);
-    hdr.flags = FLAG_MATERIALIZED;
 
     let mut st = FetchStats { outer, ..Default::default() };
-    let mut encoded_ok = use_encoded;
-    let mut dctx = zstd::bulk::Decompressor::new()?;
+    let mut w = ChunkWriter::new(use_encoded)?;
     const BATCH: usize = 16 << 20;
-    type Batch = Vec<(Chunk, Vec<u8>)>;
-    // Pipeline: a reader thread decompresses the outer zstd and hashes, this
-    // thread frames chunks in parallel and writes them.
+    type Batch = Vec<(usize, Chunk, Vec<u8>)>;
+    let chunks = idx.chunks.clone();
+    // Pipeline: a reader thread decompresses the outer zstd and reads chunks, this
+    // thread checks them (and frames raw ones) in parallel and writes them.
     let (tx, rx) = std::sync::mpsc::sync_channel::<Batch>(2);
-    let result: Result<([u8; 32], bool)> = std::thread::scope(|s| {
-        let reader = s.spawn(move || -> Result<([u8; 32], bool)> {
+    let result: Result<()> = std::thread::scope(|s| {
+        let reader = s.spawn(move || -> Result<()> {
             let mut i = 0;
             while i < chunks.len() {
                 let mut batch = Vec::new();
                 let mut sz = 0;
                 while i < chunks.len() && sz < BATCH {
                     let c = chunks[i];
-                    let d = read(&mut rd, &mut hash, c.encoded_len as usize)?;
+                    let d = read_n(&mut rd, c.encoded_len as u64, "chunk data")?;
                     sz += d.len();
-                    batch.push((c, d));
+                    batch.push((i, c, d));
                     i += 1;
                 }
+                // Checked here, while the writer is busy with the previous batch.
+                batch.par_iter().try_for_each(|(i, c, d)| check_chunk(*i, c, d))?;
                 if tx.send(batch).is_err() { bail!("writer stopped"); }
             }
             drop(tx);
-            let mut want = [0u8; 32];
-            rd.read_exact(&mut want).context("missing digest")?;
             // Read to the end: finishes the outer frame (and checks its checksum),
             // and refuses trailing data.
-            let mut rest = Vec::new();
-            rd.read_to_end(&mut rest).context("reading package end")?;
-            ensure!(rest.is_empty(), "trailing data after package");
-            Ok((want, !inner_hash || hash.finalize().as_slice() == want))
+            let mut rest = [0u8; 1];
+            ensure!(rd.read(&mut rest).context("reading package end")? == 0, "trailing data after package");
+            Ok(())
         });
         let mut write_all = || -> Result<()> {
-            for mut batch in rx.iter() {
-                if encoded_ok && level > 0 && batch.iter().any(|(c, _)| c.compression == COMP_NONE) {
-                    batch = batch
-                        .into_par_iter()
-                        .map(|(c, d)| -> Result<(Chunk, Vec<u8>)> {
-                            if c.compression != COMP_NONE { return Ok((c, d)); }
-                            let (comp, b) = frame(level, d)?;
-                            Ok((Chunk { compression: comp, encoded_len: b.len() as u32, ..c }, b))
-                        })
-                        .collect::<Result<_>>()?;
+            for batch in rx.iter() {
+                // Raw chunks (from a .pkg.btr.zst) are framed here, in parallel, so they land
+                // as compressed extents too. Already-framed .pkg.btr chunks go straight through.
+                let frame_here = use_encoded && w.encoded_ok && level > 0;
+                let batch: Vec<(Chunk, Vec<u8>)> = if frame_here && outer && batch.iter().any(|(_, c, _)| c.compression == COMP_NONE) {
                     st.framed_here = true;
-                }
+                    batch.into_par_iter().map(|(_, c, d)| -> Result<(Chunk, Vec<u8>)> {
+                        if c.compression != COMP_NONE { return Ok((c, d)); }
+                        let (comp, b) = frame(level, d)?;
+                        Ok((Chunk { compression: comp, encoded_len: b.len() as u32, ..c }, b))
+                    }).collect::<Result<_>>()?
+                } else {
+                    batch.into_iter().map(|(_, c, d)| (c, d)).collect()
+                };
                 for (c, data) in batch {
-                    let off = hdr.image_base + c.image_off;
-                    if c.compression == COMP_NONE {
-                        out.write_all_at(&data, off)?;
-                        st.raw_bytes += data.len() as u64;
-                        continue;
-                    }
-                    if encoded_ok {
-                        match encoded_write(&out, off, c.unencoded_len as u64, &data) {
-                            Ok(()) => { st.encoded_bytes += data.len() as u64; st.encoded_chunks += 1; continue; }
-                            Err(e) if st.encoded_chunks == 0 => {
-                                eprintln!("btrpkg: encoded write unavailable ({e}); decompressing instead");
-                                encoded_ok = false;
-                            }
-                            Err(e) => return Err(e).context("encoded write"),
-                        }
-                    }
-                    let plain = dctx.decompress(&data, c.unencoded_len as usize)?;
-                    ensure!(plain.len() == c.unencoded_len as usize, "chunk decompressed to wrong size");
-                    out.write_all_at(&plain, off)?;
-                    st.fallback_bytes += plain.len() as u64;
+                    w.write(&out, image_base + c.image_off, &c, &data)?;
                 }
             }
             Ok(())
         };
-        let w = write_all();
+        let r1 = write_all();
         drop(rx);
-        let r = reader.join().map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
-        w?;
-        r
+        let r2 = reader.join().map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
+        r1?;
+        r2
     });
-    let (want, ok) = match result {
-        Ok(v) => v,
-        Err(e) => { let _ = fs::remove_file(&tmp); return Err(e); }
-    };
-    let file_digest = hex(&file_hash.lock().unwrap().clone().finalize());
-    let file_ok = file_sha256.map_or(true, |e| e.eq_ignore_ascii_case(&file_digest));
-    if !ok || !file_ok {
-        drop(out);
-        let _ = fs::remove_file(&tmp);
-        bail!("digest mismatch: package is corrupt");
-    }
-    st.file_sha256 = file_digest;
-    // Header, manifest, table and digest go in front of the image.
-    let mut pre = hdr.encode().to_vec();
-    pre.extend_from_slice(&meta);
-    pre.extend_from_slice(&table_b);
-    pre.extend_from_slice(&want);
-    out.write_all_at(&pre, 0)?;
-    out.set_len(hdr.image_base + hdr.image_len)?;
+    let file_digest = hex(&sha2::Digest::finalize(file_hash.lock().unwrap().clone()));
+    let result = result.and_then(|()| {
+        ensure!(file_sha256.map_or(true, |e| e.eq_ignore_ascii_case(&file_digest)), "file sha256 mismatch: package is corrupt");
+        // The index goes in front of the image, so the cache file describes itself.
+        out.write_all_at(&idx.bytes, 0)?;
+        out.set_len(idx.hdr.cache_len())?;
+        Ok(())
+    });
     drop(out);
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
     fs::rename(&tmp, cache)?;
-    eprintln!("fetch: {:?}", st);
-    Ok(())
+    st.file_sha256 = file_digest;
+    (st.encoded_bytes, st.encoded_chunks, st.raw_bytes, st.fallback_bytes) = (w.encoded_bytes, w.encoded_chunks, w.raw_bytes, w.fallback_bytes);
+    Ok(st)
+}
+
+/// Open a cache file made by `fetch` or `pull`: the index is checked, and the file must
+/// have exactly the length the index says.
+pub(crate) fn open_cache(p: &Path) -> Result<(Index, File)> {
+    let file = File::open(p).with_context(|| format!("open {}", p.display()))?;
+    let mut hb = [0u8; HDR];
+    file.read_exact_at(&mut hb, 0).context("truncated header")?;
+    let hdr = Header::decode(&hb)?;
+    let len = file.metadata()?.len();
+    ensure!(len == hdr.cache_len(), "{} is not a btrpkg cache file (fetch or pull it first)", p.display());
+    let mut b = vec![0u8; hdr.index_len() as usize];
+    file.read_exact_at(&mut b, 0)?;
+    Ok((parse_index(&b)?, file))
 }
 
 // ---------------------------------------------------------------- install
 
-struct Pkg { hdr: Header, entries: Vec<Entry>, small: Vec<u8>, file: File }
-
-fn open_pkg(p: &Path) -> Result<Pkg> {
-    let file = File::open(p).with_context(|| format!("open {}", p.display()))?;
-    let mut hb = [0u8; HDR];
-    file.read_exact_at(&mut hb, 0)?;
-    let hdr = Header::decode(&hb)?;
-    let mut meta = vec![0u8; hdr.meta_len as usize];
-    file.read_exact_at(&mut meta, HDR as u64)?;
-    let raw = zstd::bulk::decompress(&meta, hdr.meta_raw_len as usize)?;
-    let (entries, small) = decode_meta(&raw)?;
-    Ok(Pkg { hdr, entries, small, file })
-}
-
 #[derive(Default, Debug)]
-struct InstallStats { files: u64, cloned_files: u64, cloned_bytes: u64, small_files: u64, small_bytes: u64, copied_bytes: u64, dirs: u64, symlinks: u64, hardlinks: u64 }
+pub(crate) struct InstallStats { files: u64, cloned_files: u64, cloned_bytes: u64, small_files: u64, small_bytes: u64, copied_bytes: u64, dirs: u64, symlinks: u64, hardlinks: u64 }
 
 fn cpath(p: &Path) -> CString { CString::new(p.as_os_str().as_bytes()).unwrap() }
 
@@ -783,13 +570,13 @@ fn set_attrs(path: &Path, e: &Entry, link: bool) -> Result<()> {
     Ok(())
 }
 
-fn install(cache: &Path, root: &Path, force_copy: bool) -> Result<()> {
-    let pkg = open_pkg(cache)?;
-    ensure!(pkg.hdr.flags & FLAG_MATERIALIZED != 0, "not a fetched package (run btrpkg fetch first)");
+pub(crate) fn install(cache: &Path, root: &Path, force_copy: bool) -> Result<InstallStats> {
+    let (idx, file) = open_cache(cache)?;
+    let image_base = idx.hdr.image_base();
     let mut st = InstallStats::default();
     let mut dirs = Vec::new();
     let mut can_clone = !force_copy;
-    for e in &pkg.entries {
+    for e in &idx.entries {
         // pacman's metadata files live in the package root and are not installed
         if !e.path.contains(&b'/') && e.path.starts_with(b".") { continue; }
         let dst = root.join(std::ffi::OsStr::from_bytes(&e.path));
@@ -820,17 +607,16 @@ fn install(cache: &Path, root: &Path, force_copy: bool) -> Result<()> {
                     .with_context(|| format!("create {}", tmp.display()))?;
                 if e.small {
                     let s = e.data_off as usize;
-                    ensure!(s + e.size as usize <= pkg.small.len(), "small file out of range");
-                    (&f).write_all(&pkg.small[s..s + e.size as usize])?;
+                    (&f).write_all(&idx.small[s..s + e.size as usize])?;
                     st.small_files += 1;
                     st.small_bytes += e.size;
                 } else {
-                    let src = pkg.hdr.image_base + e.data_off;
+                    // check_entries made sure the range lies inside the image
+                    let src = image_base + e.data_off;
                     let alen = align(e.size);
-                    ensure!(e.data_off + alen <= pkg.hdr.image_len, "file out of image");
                     let mut done = false;
                     if can_clone {
-                        match clone_range(&pkg.file, src, alen, &f) {
+                        match clone_range(&file, src, alen, &f) {
                             Ok(()) => { f.set_len(e.size)?; done = true; st.cloned_files += 1; st.cloned_bytes += e.size; }
                             Err(err) => { eprintln!("btrpkg: reflink unavailable ({err}); copying"); can_clone = false; }
                         }
@@ -838,7 +624,7 @@ fn install(cache: &Path, root: &Path, force_copy: bool) -> Result<()> {
                     if !done {
                         let mut off = 0u64;
                         while off < e.size {
-                            let n = unsafe { libc::copy_file_range(pkg.file.as_raw_fd(), &mut ((src + off) as i64) as *mut i64,
+                            let n = unsafe { libc::copy_file_range(file.as_raw_fd(), &mut ((src + off) as i64) as *mut i64,
                                 f.as_raw_fd(), &mut (off as i64) as *mut i64, (e.size - off) as usize, 0) };
                             ensure!(n > 0, "copy_file_range: {}", io::Error::last_os_error());
                             off += n as u64;
@@ -856,24 +642,27 @@ fn install(cache: &Path, root: &Path, force_copy: bool) -> Result<()> {
     }
     // directory attributes last, deepest first, so file creation doesn't bump mtimes
     for (d, e) in dirs.iter().rev() { set_attrs(d, e, false)?; }
-    eprintln!("install: {:?}", st);
-    Ok(())
+    Ok(st)
 }
 
+/// Describe an index, transport or cache file (told apart by their length).
 fn info(p: &Path) -> Result<()> {
-    let pkg = open_pkg(p)?;
-    let mut tb = vec![0u8; pkg.hdr.table_len() as usize];
-    pkg.file.read_exact_at(&mut tb, HDR as u64 + pkg.hdr.meta_len)?;
-    let chunks = decode_table(&tb, pkg.hdr.image_len)?;
-    let enc: u64 = chunks.iter().map(|c| c.encoded_len as u64).sum();
-    let unenc: u64 = chunks.iter().map(|c| c.unencoded_len as u64).sum();
+    let len = fs::metadata(p)?.len();
+    let mut f = BufReader::new(File::open(p)?);
+    let idx = read_index(&mut f)?;
+    let h = &idx.hdr;
+    let form = if len == h.index_len() { "index" } else if len == h.transport_len(&idx.chunks) { "transport" }
+        else if len == h.cache_len() { "cache" } else { "unknown (wrong length)" };
+    let enc: u64 = idx.chunks.iter().map(|c| c.encoded_len as u64).sum();
     let mut kinds: HashMap<u8, u64> = HashMap::new();
-    for e in &pkg.entries { *kinds.entry(e.kind).or_default() += 1; }
-    println!("{:?}\nentries={} files={} dirs={} symlinks={} hardlinks={} small_bytes={}\nchunks={} zstd={} raw={} encoded_bytes={} image_bytes={}",
-        pkg.hdr, pkg.entries.len(), kinds.get(&K_FILE).unwrap_or(&0), kinds.get(&K_DIR).unwrap_or(&0),
-        kinds.get(&K_SYMLINK).unwrap_or(&0), kinds.get(&K_HARDLINK).unwrap_or(&0), pkg.small.len(),
-        chunks.len(), chunks.iter().filter(|c| c.compression == COMP_ZSTD).count(),
-        chunks.iter().filter(|c| c.compression == COMP_NONE).count(), enc, unenc);
+    for e in &idx.entries { *kinds.entry(e.kind).or_default() += 1; }
+    println!("form={form} version={VERSION} id={}\nindex_bytes={} (header {HDR}, table {}, entries {} -> {}, blob {} -> {})",
+        hex(&h.id()), h.index_len(), h.table_len(), h.entries_len, h.entries_raw_len, h.blob_len, h.blob_raw_len);
+    println!("entries={} files={} dirs={} symlinks={} hardlinks={} small_bytes={}\nchunks={} zstd={} raw={} encoded_bytes={} image_bytes={}",
+        idx.entries.len(), kinds.get(&K_FILE).unwrap_or(&0), kinds.get(&K_DIR).unwrap_or(&0),
+        kinds.get(&K_SYMLINK).unwrap_or(&0), kinds.get(&K_HARDLINK).unwrap_or(&0), idx.small.len(),
+        idx.chunks.len(), idx.chunks.iter().filter(|c| c.compression == COMP_ZSTD).count(),
+        idx.chunks.iter().filter(|c| c.compression == COMP_NONE).count(), enc, h.image_len);
     Ok(())
 }
 
@@ -907,11 +696,261 @@ fn main() -> Result<()> {
             let outer = o.ends_with(".zst");
             convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { 19 }), outer_level, small_max, nframes, min_frame)
         }
-        ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref()),
-        ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")),
+        ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref())
+            .map(|st| eprintln!("fetch: {st:?}")),
+        ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")).map(|st| eprintln!("install: {st:?}")),
         ["info", p] => info(Path::new(p)),
-        ["publish", i, st] => store::publish(Path::new(i), Path::new(st)),
-        ["pull", st, n, c] => store::pull(Path::new(st), n, Path::new(c), !flags.contains(&"--no-encoded"), sha.as_deref()),
+        ["publish", i, s] => store::publish(Path::new(i), Path::new(s)).map(|(name, st)| {
+            eprintln!("publish: {st:?}");
+            println!("upload\t{name}\t{}\t{}\t{}\t{}", st.new_chunks, st.new_bytes, st.index_bytes, st.raw_entries);
+        }),
+        ["pull", s, n, c] => store::pull(Path::new(s), n, Path::new(c), !flags.contains(&"--no-encoded"), sha.as_deref()).map(|st| {
+            eprintln!("pull: {st:?}");
+            println!("download\t{n}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes);
+        }),
         _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE | publish IN.pkg.btr STORE | pull [--no-encoded] [--sha256 HEX] STORE NAME CACHE"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    pub(crate) struct TempDir(pub PathBuf);
+    impl TempDir {
+        pub fn new(tag: &str) -> TempDir {
+            static N: AtomicU32 = AtomicU32::new(0);
+            let p = std::env::temp_dir().join(format!("btrpkg-test-{}-{tag}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+            fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    /// Deterministic mix of incompressible and compressible bytes.
+    fn data(len: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len).map(|i| {
+            if (i / 50_000) % 2 == 0 { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x as u8 } else { (i % 251) as u8 }
+        }).collect()
+    }
+
+    pub(crate) struct Spec { pub big: Vec<u8>, pub other: Vec<u8> }
+
+    /// A package with every entry kind: dirs, small and large files, a duplicate, an empty
+    /// file, a symlink, a hardlink, an xattr and pacman's root dotfiles.
+    pub(crate) fn make_pkg(dir: &Path, name: &str, spec: &Spec) -> PathBuf {
+        let (uid, gid) = unsafe { (libc::getuid() as u64, libc::getgid() as u64) };
+        let p = dir.join(format!("{name}.pkg.tar.zst"));
+        let z = zstd::stream::write::Encoder::new(File::create(&p).unwrap(), 3).unwrap().auto_finish();
+        let mut b = tar::Builder::new(z);
+        let add = |b: &mut tar::Builder<_>, path: &str, kind: tar::EntryType, mode: u32, body: &[u8], link: Option<&str>| {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(kind);
+            h.set_mode(mode);
+            h.set_uid(uid);
+            h.set_gid(gid);
+            h.set_mtime(1_700_000_000);
+            h.set_size(body.len() as u64);
+            if let Some(l) = link { h.set_link_name(l).unwrap(); }
+            h.set_path(path).unwrap();
+            h.set_cksum();
+            b.append(&h, body).unwrap();
+        };
+        add(&mut b, ".PKGINFO", tar::EntryType::Regular, 0o644, format!("pkgname = {name}\n").as_bytes(), None);
+        add(&mut b, "usr", tar::EntryType::Directory, 0o755, b"", None);
+        add(&mut b, "usr/bin", tar::EntryType::Directory, 0o755, b"", None);
+        add(&mut b, "usr/bin/tool", tar::EntryType::Regular, 0o755, &spec.big, None);
+        add(&mut b, "usr/bin/tool-copy", tar::EntryType::Regular, 0o755, &spec.big, None);
+        add(&mut b, "usr/bin/hard", tar::EntryType::Link, 0o755, b"", Some("usr/bin/tool"));
+        add(&mut b, "usr/lib", tar::EntryType::Directory, 0o755, b"", None);
+        add(&mut b, "usr/lib/libx.so.1", tar::EntryType::Regular, 0o644, &spec.other, None);
+        add(&mut b, "usr/lib/libx.so", tar::EntryType::Symlink, 0o777, b"", Some("libx.so.1"));
+        add(&mut b, "usr/share", tar::EntryType::Directory, 0o755, b"", None);
+        add(&mut b, "usr/share/readme", tar::EntryType::Regular, 0o644, b"read me\n", None);
+        add(&mut b, "usr/share/empty", tar::EntryType::Regular, 0o600, b"", None);
+        b.append_pax_extensions([("SCHILY.xattr.user.btrpkg", b"yes".as_slice())]).unwrap();
+        add(&mut b, "usr/share/tagged", tar::EntryType::Regular, 0o644, b"tagged\n", None);
+        b.into_inner().unwrap();
+        p
+    }
+
+    fn spec(seed: u64) -> Spec { Spec { big: data(300_000, 7), other: data(200_000, seed) } }
+
+    /// The installed tree matches the package (contents, modes, links).
+    fn check_tree(root: &Path, s: &Spec) {
+        let r = |p: &str| fs::read(root.join(p)).unwrap();
+        assert_eq!(r("usr/bin/tool"), s.big);
+        assert_eq!(r("usr/bin/tool-copy"), s.big);
+        assert_eq!(r("usr/lib/libx.so.1"), s.other);
+        assert_eq!(r("usr/share/readme"), b"read me\n");
+        assert_eq!(r("usr/share/empty"), b"");
+        assert!(!root.join(".PKGINFO").exists());
+        assert_eq!(fs::read_link(root.join("usr/lib/libx.so")).unwrap(), Path::new("libx.so.1"));
+        let m = |p: &str| fs::symlink_metadata(root.join(p)).unwrap();
+        assert_eq!(m("usr/bin/hard").ino(), m("usr/bin/tool").ino());
+        assert_eq!(m("usr/bin/tool").permissions().mode() & 0o7777, 0o755);
+        assert_eq!(m("usr/share/empty").permissions().mode() & 0o7777, 0o600);
+        assert_eq!(m("usr/bin/tool").mtime(), 1_700_000_000);
+        assert_eq!(m("usr/share").mtime(), 1_700_000_000);
+        let mut v = [0u8; 8];
+        let n = unsafe { libc::lgetxattr(cpath(&root.join("usr/share/tagged")).as_ptr(), c"user.btrpkg".as_ptr(), v.as_mut_ptr() as *mut _, 8) };
+        if n >= 0 { assert_eq!(&v[..n as usize], b"yes"); } // tmpfs without user xattrs: skip
+    }
+
+    fn convert_to(src: &Path, out: &Path, level: i32) {
+        let zst = out.extension().is_some_and(|e| e == "zst");
+        convert(src, out, level, 19, 4096, if zst { 2 } else { 1 }, 4096).unwrap();
+    }
+
+    #[test]
+    fn convert_fetch_install() {
+        let t = TempDir::new("cfi");
+        let s = spec(1);
+        let src = make_pkg(&t.0, "p-1-1", &s);
+        for (out, level) in [("p.pkg.btr", 19), ("p.pkg.btr.zst", 0)] {
+            let out = t.0.join(out);
+            convert_to(&src, &out, level);
+            let cache = t.0.join(format!("{}.cache", out.file_name().unwrap().to_string_lossy()));
+            let st = fetch(out.to_str().unwrap(), &cache, true, 3, None).unwrap();
+            assert!(st.encoded_chunks + st.fallback_bytes.min(1) + st.raw_bytes.min(1) > 0);
+            let root = t.0.join(format!("root-{level}"));
+            let ist = install(&cache, &root, false).unwrap();
+            assert_eq!((ist.files, ist.hardlinks, ist.symlinks, ist.dirs), (6, 1, 1, 4));
+            check_tree(&root, &s);
+            // and the file sha256 check
+            let digest = hex(&sha256(&fs::read(&out).unwrap()));
+            fs::remove_file(&cache).unwrap();
+            fetch(out.to_str().unwrap(), &cache, false, 3, Some(&digest)).unwrap();
+            fs::remove_file(&cache).unwrap();
+            assert!(fetch(out.to_str().unwrap(), &cache, false, 3, Some(&"0".repeat(64))).is_err());
+            assert!(!cache.exists() && !cache.with_extension("part").exists());
+        }
+        // the large file is deduplicated: one copy in the image
+        // (parse_index reads the index at the start of the transport file)
+        let idx = parse_index(&fs::read(t.0.join("p.pkg.btr")).unwrap()).unwrap();
+        assert_eq!(idx.hdr.image_len, align(300_000) + align(200_000));
+        // install refuses anything that isn't a cache file
+        assert!(install(&t.0.join("p.pkg.btr"), &t.0.join("root-x"), false).is_err());
+    }
+
+    #[test]
+    fn corrupt_transport_leaves_nothing() {
+        let t = TempDir::new("corrupt");
+        let src = make_pkg(&t.0, "p-1-1", &spec(2));
+        let good = t.0.join("p.pkg.btr");
+        convert_to(&src, &good, 19);
+        let b = fs::read(&good).unwrap();
+        let mut r = &b[..];
+        let idx = read_index(&mut r).unwrap();
+        let h = &idx.hdr;
+        let t0 = HDR as u64;
+        let e0 = t0 + h.table_len();
+        let b0 = e0 + h.entries_len;
+        let c0 = h.index_len();
+        let last = b.len() as u64 - 1;
+        let cache = t.0.join("c.pkg.btr");
+        let bad = t.0.join("bad.pkg.btr");
+        for (what, pos) in [("header", 20), ("header hash", 230), ("table", t0 + 3), ("table hash field", t0 + 30), ("entries", e0 + 5),
+                            ("blob", b0 + 2), ("first chunk", c0 + 10), ("last chunk", last)] {
+            let mut c = b.clone();
+            c[pos as usize] ^= 0x40;
+            fs::write(&bad, &c).unwrap();
+            let e = fetch(bad.to_str().unwrap(), &cache, true, 3, None);
+            assert!(e.is_err(), "{what}: accepted");
+            assert!(!cache.exists() && !cache.with_extension("part").exists(), "{what}: left a file");
+        }
+        for (what, c) in [("truncated", b[..b.len() - 1].to_vec()), ("trailing", [b.as_slice(), b"x"].concat())] {
+            fs::write(&bad, &c).unwrap();
+            assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None).is_err(), "{what}: accepted");
+            assert!(!cache.exists() && !cache.with_extension("part").exists(), "{what}: left a file");
+        }
+        // the outer-zstd form: a flipped byte anywhere is caught
+        let gz = t.0.join("p.pkg.btr.zst");
+        convert_to(&src, &gz, 0);
+        let z = fs::read(&gz).unwrap();
+        for pos in [10, z.len() / 2, z.len() - 3] {
+            let mut c = z.clone();
+            c[pos] ^= 0x01;
+            fs::write(&bad, &c).unwrap();
+            assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None).is_err(), "zst byte {pos}: accepted");
+            assert!(!cache.exists() && !cache.with_extension("part").exists());
+        }
+    }
+
+    #[test]
+    fn publish_pull_reuses_chunks() {
+        let t = TempDir::new("store");
+        let store = t.0.join("store");
+        let (s1, s2) = (spec(3), spec(4)); // same big file, other library
+        for (n, s) in [("q-1-1", &s1), ("q-2-1", &s2)] {
+            let src = make_pkg(&t.0, n, s);
+            convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store).unwrap();
+        }
+        let cdir = t.0.join("cache");
+        fs::create_dir_all(&cdir).unwrap();
+        let p1 = store::pull(&store, "q-1-1", &cdir.join("q-1-1.pkg.btr"), true, None).unwrap();
+        assert_eq!(p1.reused_chunks, 0);
+        let p2 = store::pull(&store, "q-2-1", &cdir.join("q-2-1.pkg.btr"), true, None).unwrap();
+        // tool (300 kB) is unchanged: its 3 chunks come from the first cache file
+        assert_eq!(p2.reused_chunks, 3, "{p2:?}");
+        assert_eq!(p2.fetched_chunks, 2, "{p2:?}");
+        let root = t.0.join("root");
+        install(&cdir.join("q-2-1.pkg.btr"), &root, false).unwrap();
+        check_tree(&root, &s2);
+
+        // the index sha256 from the repo database
+        let ib = fs::read(store.join("index/q-2-1.btridx")).unwrap();
+        let c3 = cdir.join("again.pkg.btr");
+        assert!(store::pull(&store, "q-2-1", &c3, true, Some(&"0".repeat(64))).is_err());
+        store::pull(&store, "q-2-1", &c3, true, Some(&hex(&sha256(&ib)))).unwrap();
+
+        // a damaged chunk in the store: refused, nothing left behind
+        let idx = parse_index(&ib).unwrap();
+        let x = hex(&idx.chunks[3].stored);
+        let cp = store.join("chunks").join(&x[..2]).join(&x);
+        let mut d = fs::read(&cp).unwrap();
+        d[5] ^= 1;
+        fs::write(&cp, &d).unwrap();
+        let fresh = t.0.join("fresh");
+        fs::create_dir_all(&fresh).unwrap();
+        assert!(store::pull(&store, "q-2-1", &fresh.join("q.pkg.btr"), true, None).is_err());
+        assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
+        // a damaged index: refused
+        let mut ib2 = ib.clone();
+        ib2[HDR + 7] ^= 1;
+        fs::write(store.join("index/bad.btridx"), &ib2).unwrap();
+        assert!(store::pull(&store, "bad", &fresh.join("bad.pkg.btr"), true, None).is_err());
+        assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn publish_reuses_chunks_across_compressor_changes() {
+        let t = TempDir::new("remap");
+        let store = t.0.join("store");
+        let s = spec(5);
+        let src = make_pkg(&t.0, "r-1-1", &s);
+        convert_to(&src, &t.0.join("r-1-1.pkg.btr"), 19);
+        let (_, a) = store::publish(&t.0.join("r-1-1.pkg.btr"), &store).unwrap();
+        assert_eq!(a.remapped, 0);
+        // the same data, framed at another level: different bytes, same unencoded data
+        let src2 = make_pkg(&t.0, "r-1-2", &s);
+        convert_to(&src2, &t.0.join("r-1-2.pkg.btr"), 3);
+        let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store).unwrap();
+        assert!(b.remapped > 0, "{b:?}");
+        assert_eq!(b.new_chunks, 0, "{b:?}");
+        let i1 = parse_index(&fs::read(store.join("index/r-1-1.btridx")).unwrap()).unwrap();
+        let i2 = parse_index(&fs::read(store.join("index/r-1-2.btridx")).unwrap()).unwrap();
+        assert_eq!(i1.chunks, i2.chunks);
+        let c = t.0.join("c");
+        fs::create_dir_all(&c).unwrap();
+        store::pull(&store, "r-1-2", &c.join("r.pkg.btr"), true, None).unwrap();
+        install(&c.join("r.pkg.btr"), &t.0.join("root"), false).unwrap();
+        check_tree(&t.0.join("root"), &s);
     }
 }

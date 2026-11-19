@@ -29,7 +29,7 @@ frontend, filesystems other than btrfs, Arch's packages.
 
 ## Milestones
 
-1. **Format v1, with tests.**
+1. **Format v1, with tests.** Done 2026-11-19 (see README, "Format (version 1)").
    Header with format version, hash and signature algorithm IDs, section lengths and a SHA-256
    per section. Order: header, chunk table, entries, small-file blob. Per chunk: the stored-bytes
    hash plus the uncompressed-data hash. Unit tests for round trips and for a flipped byte in

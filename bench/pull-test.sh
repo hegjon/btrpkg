@@ -7,7 +7,7 @@
 # Needs bench/out-store (btrpkg publish of the old and new versions) and bench/out-delta-pkgs.
 # Layout as on Omarchy: @ as root, @pkg at <root>/var/cache/pacman/pkg, compress=zstd:3.
 set -euo pipefail
-B=/w/target/release/btrpkg; S=/w/bench/out-store; P=/w/bench/out-delta-pkgs
+B=/w/target/release/btrpkg; S=${S:-/w/bench/out-store}; P=/w/bench/out-delta-pkgs
 OUT=/w/bench/results; T=/mnt/t; R=/mnt/root; C=$R/var/cache/pacman/pkg
 PAIRS="hyprland-0.57.1-2:hyprland-0.57.2-2 hyprutils-0.14.3-1:hyprutils-0.14.4-1
 aquamarine-0.15.1-1:aquamarine-0.16.0-1 hyprtoolkit-0.6.0-2:hyprtoolkit-0.6.0-3
@@ -40,7 +40,7 @@ u2=$(used)
 echo "== install the new versions over the old ones, then remove the old cache files"
 for pr in $PAIRS; do n=${pr##*:}; $B install $C/$n.pkg.btr $R 2>/dev/null; done
 u3=$(used)
-for pr in $PAIRS; do o=${pr%%:*}; rm $C/$o.pkg.btr $C/$o.pkg.btr.btridx; done
+for pr in $PAIRS; do o=${pr%%:*}; rm $C/$o.pkg.btr; done
 u4=$(used)
 mb() { awk "BEGIN{printf \"%.1f MB\", $1/1e6}"; }
 echo "data used: old installed + cached $(mb $u1); + new versions pulled $(mb $u2); new installed over old $(mb $u3); old cache files removed $(mb $u4)"
@@ -61,11 +61,9 @@ filefrag -v $R/b/usr/bin/Hyprland | sed -n '4,5p'
 echo "== corrupt chunk in the store: pull must fail and leave nothing behind"
 cp -a $S /exp/store-bad
 h=$(python3 - /exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx <<'EOF'
-import struct, sys
+import sys
 b = open(sys.argv[1], "rb").read()
-meta_len, n = struct.unpack_from("<QQ", b, 16)
-t = 64 + meta_len
-print(b[t + 24:t + 56].hex())   # first chunk of the image
+print(b[256 + 24:256 + 56].hex())   # format v1: stored hash of the first chunk in the table
 EOF
 )
 f=/exp/store-bad/chunks/${h:0:2}/$h
@@ -73,7 +71,7 @@ printf '\xff' | dd of=$f bs=1 seek=100 conv=notrunc status=none
 mkdir -p $C/fresh
 if $B pull /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: corrupt chunk accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"
-echo "== tampered index digest"
-printf '\x00' | dd of=/exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx bs=1 seek=200 conv=notrunc status=none
+echo "== tampered index"
+printf '\x00' | dd of=/exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx bs=1 seek=300 conv=notrunc status=none
 if $B pull /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: bad index accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"
