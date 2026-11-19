@@ -1,0 +1,10 @@
+compared: {'file': 2355, 'dir': 281, 'link': 102, 'bytes': 121724639, 'xattr': 0}
+problems: 0
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/libc.a is 7000522 (1710 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     532883..    532914:     32:             encoded,shared
+   1:       32..      63:     532892..    532923:     32:     532915: encoded,shared
+   2:       64..      95:     532901..    532932:     32:     532924: encoded,shared
+   3:       96..     127:     532908..    532939:     32:     532933: encoded,shared
+   4:      128..     159:     532913..    532944:     32:     532940: encoded,shared

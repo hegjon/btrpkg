@@ -1,0 +1,56 @@
+staging inputs into tmpfs
+485103593	/exp/pkg
+642292785	/exp/btr
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+pacman	1	4.78	1889910784	1621794816	1136050176
+btrpkg	1	2.52	973697024	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+noenc	1	4.09	1411624960	1195577344	1188274176
+pacman	2	4.77	1878163456	1621774336	1136029696
+btrpkg	2	2.51	973008896	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+noenc	2	4.10	1403002880	1187971072	1180684288
+pacman	3	4.78	1888296960	1632141312	1146396672
+btrpkg	3	2.51	975859712	745492480	718733312
+/tmp/fetch.log:0
+/tmp/install.log:0
+noenc	3	4.13	1432338432	1216454656	1209126912
+== verify
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+sample: /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     326456..    326487:     32:             encoded,shared
+   1:       32..      63:     326466..    326497:     32:     326488: encoded,shared
+   2:       64..      95:     326478..    326509:     32:     326498: encoded,shared
+   3:       96..     127:     326487..    326518:     32:     326510: encoded,shared
+   4:      128..     159:     326494..    326525:     32:     326519: encoded,shared
+staging inputs into tmpfs
+485103593	/exp/pkg
+559259661	/exp/btr
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+btrpkg	1	3.38	1183174656	925184000	816898048
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrpkg	2	3.39	1183109120	925184000	816898048
+/tmp/fetch.log:0
+/tmp/install.log:0
+btrpkg	3	3.46	1184288768	925184000	816898048
+/tmp/fetch.log:0
+/tmp/install.log:0
+== verify
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+sample: /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     590277..    590308:     32:             encoded,shared
+   1:       32..      63:     590287..    590318:     32:     590309: encoded,shared
+   2:       64..      95:     590298..    590329:     32:     590319: encoded,shared
+   3:       96..     127:     590307..    590338:     32:     590330: encoded,shared
+   4:      128..     159:     590314..    590345:     32:     590339: encoded,shared

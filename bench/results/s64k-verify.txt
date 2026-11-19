@@ -1,0 +1,10 @@
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     590277..    590308:     32:             encoded,shared
+   1:       32..      63:     590287..    590318:     32:     590309: encoded,shared
+   2:       64..      95:     590298..    590329:     32:     590319: encoded,shared
+   3:       96..     127:     590307..    590338:     32:     590330: encoded,shared
+   4:      128..     159:     590314..    590345:     32:     590339: encoded,shared

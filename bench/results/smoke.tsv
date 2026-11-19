@@ -1,0 +1,4 @@
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+pacman	1	0.25	83062784	73224192	57663488
+btrpkg	1	0.10	52649984	40484864	39600128
+noenc	1	0.18	125923328	114544640	114532352
