@@ -1,0 +1,11 @@
+old -> new	pkg.tar.zst	.pkg.btr	file_reuse	chunk_reuse	patch_from	files_same	bytes_same
+hyprland-0.57.1-2-x86_64 -> hyprland-0.57.2-2-x86_64	53698516	53312099	5685906	5636984	1495717	132/142	74%
+hyprland-0.57.0-2-x86_64 -> hyprland-0.57.2-2-x86_64	53698516	53312099	5690666	5641744	1617669	129/142	74%
+hyprutils-0.14.3-1-x86_64 -> hyprutils-0.14.4-1-x86_64	240498	255279	240617	240617	90720	9/12	15%
+aquamarine-0.15.1-1-x86_64 -> aquamarine-0.16.0-1-x86_64	476451	507243	500758	500758	135565	4/9	3%
+hyprtoolkit-0.6.0-2-x86_64 -> hyprtoolkit-0.6.0-3-x86_64	529384	574144	571323	73449	3044	2/4	83%
+hyprgraphics-0.5.1-4-x86_64 -> hyprgraphics-0.6.0-1-x86_64	92603	94035	94035	94035	29802	0/2	0%
+hyprcursor-0.1.13-7-x86_64 -> hyprcursor-0.1.14-1-x86_64	228503	302123	300386	300386	74150	1/4	1%
+xdg-desktop-portal-hyprland-1.4.1-2-x86_64 -> xdg-desktop-portal-hyprland-1.5.0-1-x86_64	376709	425451	425451	425451	216955	0/3	0%
+hyprland-guiutils-0.2.2-5-x86_64 -> hyprland-guiutils-0.2.2-6-x86_64	184174	321341	321341	321341	6634	0/6	0%
+hyprpicker-0.4.7-4-x86_64 -> hyprpicker-0.4.8-1-x86_64	98401	99669	99669	99669	39520	0/2	0%

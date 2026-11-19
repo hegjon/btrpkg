@@ -232,6 +232,42 @@ Verify with level-19 chunks + outer `-10`: 0 differences. Converting the set too
   download is 153 MB (33%) bigger. On download time alone, it only wins on links faster than about
   1.1 Gbit/s.
 
+## Upgrades: reusing data from the installed version (Hyprland packages)
+
+`bench/delta.py` works out what an upgrade would download if `fetch` reflinked whatever the
+installed version already has. Frames are deterministic (same converter, level 19), so an
+unchanged chunk has byte-identical frame bytes in both versions.
+- **File reuse** (OSTree-like): a file whose frames all exist in the old version isn't downloaded.
+- **Chunk reuse** (casync-like, on the fixed 128 KiB boundaries btrfs extents need): any frame
+  the old version has isn't downloaded.
+- Both always download the header, manifest (including small files), chunk table and digest.
+- Reference: `zstd -19 --long=27 --patch-from` over the uncompressed tars. That's a binary diff:
+  the client would have to rebuild and recompress, which btrpkg is meant to avoid.
+
+Old versions came from pacoloco (hyprutils, hyprland via pkgs.omarchy.org) and the Arch archive.
+Results: `bench/results/delta-hypr.tsv`.
+
+| upgrade | `.pkg.tar.zst` | `.pkg.btr` | file reuse | chunk reuse | binary diff | unchanged |
+|---|---:|---:|---:|---:|---:|---:|
+| hyprland 0.57.1-2 → 0.57.2-2 (Omarchy) | 53.70 MB | 53.31 MB | 5.69 MB | **5.64 MB** | 1.50 MB | 132/142 files, 74% of bytes |
+| hyprtoolkit 0.6.0-2 → 0.6.0-3 (rebuild) | 529 KB | 574 KB | 571 KB | **73 KB** | 3 KB | 83% of bytes |
+| hyprland-guiutils 0.2.2-5 → 0.2.2-6 (rebuild) | 184 KB | 321 KB | 321 KB | 321 KB | 7 KB | 0% |
+| hyprutils 0.14.3 → 0.14.4 | 240 KB | 255 KB | 241 KB | 241 KB | 91 KB | 15% |
+| aquamarine 0.15.1 → 0.16.0 | 476 KB | 507 KB | 501 KB | 501 KB | 136 KB | 3% |
+| hyprcursor, hyprgraphics, hyprpicker, xdg-desktop-portal-hyprland | 796 KB | 921 KB | 919 KB | 919 KB | 360 KB | 0–1% |
+| **all 9 upgrades** | **55.93 MB** | 55.89 MB | 8.24 MB | **7.69 MB (−86%)** | 2.09 MB | |
+| the 8 without hyprland | 2.23 MB | 2.58 MB | 2.55 MB | 2.06 MB (−8%) | 0.60 MB | |
+
+- hyprland's saving is its wallpapers: `wall0-2.png` (48 MB) didn't change. The `Hyprland`
+  binary (17 MB) changed, and chunk reuse found almost nothing inside it (49 KB). A new build
+  changes addresses everywhere, so practically every 128 KiB chunk differs.
+- Rebuilds differ: hyprtoolkit's rebuild left most chunks identical, hyprland-guiutils' changed
+  all of them.
+- For a new upstream version of a library, reuse finds almost nothing, and `.pkg.btr`'s +15–30%
+  over `.pkg.tar.zst` remains.
+- A binary diff would be 4x smaller again, but needs the client to recompress (the deltarpm /
+  pacman-delta trade-off).
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
