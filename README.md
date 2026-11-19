@@ -453,6 +453,14 @@ HTTP/1.1, HTTP/2 and HTTP/3 against the same server (Arch's mirror, which offers
 
 ### Signatures
 
+Hash: SHA-256 over the chunk bytes as stored (compressed), as the prototype does. Measured on
+the desktop (Ryzen 9 9950X, SHA-NI): SHA-256 2.6 GB/s per core, BLAKE3 9.4 GB/s per core (36 GB/s
+on all cores). Hashing the 635 MB of chunks takes 0.25 s on one core against about 25 s of
+download, so BLAKE3's speed buys nothing here. SHA-256 is what pacman (`%SHA256SUM%`), OpenPGP,
+fs-verity and S3's upload checksums already use, and `sha256sum` can check a chunk's name.
+Not xxhash or CRC: chunk names are content addresses shared across packages, so they must be
+collision resistant. Put an algorithm id in the index header so it can change later.
+
 What this machine does today: `SigLevel = Required DatabaseOptional`. Every package has a
 detached OpenPGP signature (Arch packagers, or "Omarchy <pkgs@omarchy.org>" for the Omarchy
 repo). The repo databases are unsigned (`omarchy.db.sig` is a 404).
