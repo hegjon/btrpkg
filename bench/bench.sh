@@ -9,8 +9,14 @@
 #   pacman  - copy .pkg.tar.zst into the cache (the download), bsdtar -xp into the root
 #   btrpkg  - btrpkg fetch (encoded writes into the cache), btrpkg install (reflinks)
 #   noenc   - btrpkg fetch --no-encoded (decompress, kernel recompresses), btrpkg install
+#   fNAME   - btrpkg fetch -l $FETCHLEVEL of .pkg.btr.zst from bench/out-fNAME (list in ZSTDIRS)
+# LUKS=1: LUKS2 (aes-xts-plain64, 4096-byte sectors, LUKS_SECTOR to override) between partition
+#   and btrfs.
+#   Each scenario TRIMs the partition, formats and opens LUKS, then mkfs.btrfs on the mapper.
+#   Device writes are still counted on the raw partition. Fast pbkdf (only affects unlock).
 set -uo pipefail
 DEV=/dev/nvme0n1p3; PART=nvme0n1p3; T=/mnt/t; ROOT=/mnt/root
+FS=$DEV; MAP=btrpkg-bench; export DM_DISABLE_UDEV=1  # no udev in the container
 SET=${SET:-/w/bench/installed-set.txt}; CONV=${CONV:-/w/bench/out-l19}
 OUT=/w/bench/results; mkdir -p $OUT $T $ROOT
 B=/w/target/release/btrpkg
@@ -35,15 +41,25 @@ now() { date +%s.%N; }
 
 setup() {
   umount -R $ROOT 2>/dev/null; umount $T 2>/dev/null
-  wipefs -aq $DEV; mkfs.btrfs -q -f $DEV || exit 1
-  mount -o compress=zstd:3 $DEV $T || exit 1
+  [[ -e /dev/mapper/$MAP ]] && cryptsetup close $MAP
+  wipefs -aq $DEV
+  if [[ -n ${LUKS:-} ]]; then
+    blkdiscard -f $DEV || exit 1
+    head -c 64 /dev/urandom >/exp/luks.key
+    cryptsetup luksFormat -q --type luks2 --sector-size ${LUKS_SECTOR:-4096} --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+      --key-file /exp/luks.key $DEV || exit 1
+    cryptsetup open --key-file /exp/luks.key $DEV $MAP || exit 1
+    FS=/dev/mapper/$MAP
+  fi
+  mkfs.btrfs -q -f $FS || exit 1
+  mount -o compress=zstd:3 $FS $T || exit 1
   btrfs -q subvolume create $T/@ $T/@pkg
-  mount -o compress=zstd:3,subvol=@ $DEV $ROOT
+  mount -o compress=zstd:3,subvol=@ $FS $ROOT
   mkdir -p $ROOT/var/cache/pacman/pkg
-  mount -o compress=zstd:3,subvol=@pkg $DEV $ROOT/var/cache/pacman/pkg
+  mount -o compress=zstd:3,subvol=@pkg $FS $ROOT/var/cache/pacman/pkg
   sync; echo 3 >/proc/sys/vm/drop_caches
 }
-teardown() { umount -R $ROOT; umount $T; }
+teardown() { umount -R $ROOT; umount $T; [[ -n ${LUKS:-} ]] && cryptsetup close $MAP; true; }
 
 run_pacman() {
   local c=$ROOT/var/cache/pacman/pkg

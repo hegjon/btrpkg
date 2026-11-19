@@ -1,0 +1,3 @@
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+pacman	1	0.27	83292160	73224192	57663488
+f2l19	1	0.16	57700352	45993984	45109248

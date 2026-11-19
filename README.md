@@ -170,6 +170,27 @@ Findings:
   extents without a dictionary. They could only apply to the outer stream, where they would mainly
   help the many tiny packages, which are a small share of the bytes.
 
+## Under LUKS2, outer level `-19`, 1/2/4 frames
+
+`bench.sh` with `LUKS=1`: LUKS2 `aes-xts-plain64` with 4096-byte sectors between the partition and
+btrfs, set up fresh for each scenario. Same 315 packages, `fetch -l 3`, 3 rounds (spread ≤0.15 s),
+idle machine. Results: `bench/results/luks-l19.tsv`.
+
+| | download | install end to end | device writes | space (root + cache) | space after cache removed |
+|---|---:|---:|---:|---:|---:|
+| pacman baseline | 485 MB | 4.71 s | 1881 MB | 1623 MB | 1138 MB |
+| 1 frame `-19` | 434 MB (−10%) | 4.57 s (−3%) | 1059 MB (−44%) | 831 MB (−49%) | 804 MB (−29%) |
+| 2 frames `-19` | 451 MB (−7%) | 4.30 s (−9%) | 1059 MB (−44%) | 831 MB | 804 MB |
+| 4 frames `-19` | 463 MB (−4%) | 4.00 s (−15%) | 1060 MB (−44%) | 831 MB | 804 MB |
+
+Verify with 4 frames: 0 differences over 99,562 files.
+
+- With LUKS, timings are within 0.1 s of the runs without it (pacman 4.78 s, 4 frames 4.02 s):
+  AES-NI keeps up on this machine, and the writes btrpkg saves are encrypted writes saved too.
+- At `-19`, 2 frames cost +4% download over 1 frame and 4 frames cost +7%. Even 4 frames stay
+  smaller than the `.pkg.tar.zst` download.
+- Conversion at `-19` for the whole set (32 threads): 2 frames 57 s, 4 frames 92 s.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:

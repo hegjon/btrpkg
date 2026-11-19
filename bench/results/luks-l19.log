@@ -1,0 +1,60 @@
+staging inputs into tmpfs
+485103593	/exp/pkg
+642292785	/exp/btr
+0	/exp/btrzst
+scenario	round	seconds	dev_written	data_used	data_used_after_cache_rm
+blkdiscard: Operation forced, data will be lost!
+pacman	1	4.71	1887731712	1633935360	1148190720
+blkdiscard: Operation forced, data will be lost!
+f1l19	1	4.58	1058922496	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f2l19	1	4.37	1060200448	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f4l19	1	4.02	1061347328	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+pacman	2	4.72	1877012480	1611681792	1125937152
+blkdiscard: Operation forced, data will be lost!
+f1l19	2	4.58	1059282944	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f2l19	2	4.22	1057054720	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f4l19	2	4.03	1058365440	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+pacman	3	4.71	1877123072	1624276992	1138532352
+blkdiscard: Operation forced, data will be lost!
+f1l19	3	4.55	1058856960	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f2l19	3	4.30	1060200448	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+blkdiscard: Operation forced, data will be lost!
+f4l19	3	3.96	1058988032	830783488	804126720
+/tmp/fetch.log:0
+/tmp/install.log:0
+== verify
+blkdiscard: Operation forced, data will be lost!
+compared: {'file': 99562, 'dir': 9069, 'link': 2693, 'bytes': 2259940433, 'xattr': 2}
+problems: 0
+sample: /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD
+Filesystem type is: 9123683e
+File size of /mnt/root/b/usr/lib/python3.14/site-packages/ansible-14.6.0.dist-info/RECORD is 2944188 (719 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..      31:     328331..    328362:     32:             encoded,shared
+   1:       32..      63:     328341..    328372:     32:     328363: encoded,shared
+   2:       64..      95:     328352..    328383:     32:     328373: encoded,shared
+   3:       96..     127:     328361..    328392:     32:     328384: encoded,shared
+   4:      128..     159:     328369..    328400:     32:     328393: encoded,shared
