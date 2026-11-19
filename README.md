@@ -191,6 +191,24 @@ Verify with 4 frames: 0 differences over 99,562 files.
   smaller than the `.pkg.tar.zst` download.
 - Conversion at `-19` for the whole set (32 threads): 2 frames 57 s, 4 frames 92 s.
 
+6 and 8 frames, same setup, with pacman and 4 frames rerun alongside (`luks-l19-f68.tsv`):
+
+| | download | install end to end |
+|---|---:|---:|
+| pacman baseline | 485 MB | 4.76 s |
+| 4 frames `-19` | 463 MB (−4%) | 4.03 s (−15%) |
+| 6 frames `-19` | 469 MB (−3%) | 3.93 s (−17%) |
+| 8 frames `-19` | 480 MB (−1%) | 3.90 s (−18%) |
+
+Device writes and space are the same as above. Verify with 8 frames: 0 differences. Conversion
+takes 86 s for 6 frames and 87 s for 8.
+
+- From 4 to 6 frames: +5 MB for −0.10 s. That only pays off on links faster than about 400 Mbit/s.
+- From 6 to 8 frames: +11 MB for −0.03 s. That only pays off above about 3 Gbit/s, so 8 frames is
+  not worth it.
+- The benches read packages from RAM, so download time is not included. On a slow link, fewer
+  frames finish first overall.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
