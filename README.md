@@ -27,7 +27,7 @@ Two variants of the same file:
 ```sh
 cargo build --release
 btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.pkg.btr          # post-processor
-btrpkg convert [--outer-level 19] in.pkg.tar.zst out.pkg.btr.zst           # raw chunks, solid zstd
+btrpkg convert [--outer-level 19] [--frames N] [--min-frame B] in.pkg.tar.zst out.pkg.btr.zst  # raw chunks, solid zstd
 btrpkg fetch [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
 btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # reflinks, falls back to copy
 btrpkg info x.pkg.btr
@@ -130,6 +130,45 @@ Where `fetch` spends its time (all 315 packages, no install):
 The critical path is now the single-threaded outer zstd decode (about 1.3 s for 2.1 GB). Parallel
 decode would need a multi-frame outer stream. Real pacman also downloads several packages at once,
 so several `fetch`es would overlap.
+
+## Splitting the outer stream into frames for parallel decode
+
+`convert --frames N` writes the outer zstd as N independent frames of about size/N each (at least
+`--min-frame`, default 1 MiB). Each frame has its content size in the header and a window sized to
+the frame, capped at 2^27. `fetch` finds the frame boundaries from the block headers without
+decoding and decodes all frames in parallel. A single-frame file is still stream-decoded, so its
+decoding overlaps with framing and writing.
+
+Spike limitation: the whole download is held in memory, and parallel decoding starts only once the
+download is complete.
+
+Same 315 packages, outer level `-15` (quicker benchmarks), `fetch -l 3`, 3 rounds:
+
+| outer stream | download | conversion (32 threads) | `fetch` only, all | install end to end |
+|---|---:|---:|---:|---:|
+| pacman-style baseline | 485 MB | | | 4.78 s |
+| `.pkg.btr` (no outer zstd) | 642 MB | | 1.4 s | 2.98 s |
+| 1 frame | 481 MB | 16 s | 2.8–3.0 s | 4.46 s |
+| 4 frames (size/4) | 505 MB (+5%) | 20 s | 2.50 s | 4.02 s (−10%) |
+| 8 frames (size/8) | 521 MB (+8%) | 30 s | 2.40 s | 3.92 s (−12%) |
+| 16 frames | 530 MB (+10%) | 33 s | 2.36 s | |
+| 8 frames, each ≥32 MiB (12 packages split) | 503 MB (+5%) | 28 s | 2.72 s | |
+| for reference: 1 frame at `-19` | 434 MB | 87 s | 2.8 s | 4.5 s |
+
+Written bytes and space used are identical for all variants (same inner frames at level 3).
+Verify: 0 differences over 99,562 files with 8 frames.
+
+Findings:
+- A frame can't use matches from earlier frames, and the long-range matches are in the big
+  packages, the same ones that gain from parallel decode. Splitting only packages of 256 MiB or
+  more still costs +5%.
+- Splitting saves 0.4–0.55 s across the whole set, because decoding is only part of `fetch`. The
+  rest is framing at level 3 (about 9 CPU-s), writes and install.
+- `-19` instead of `-15` saves more download (−10%) than any frame split costs, so the outer level
+  matters more than the frame count.
+- Zstd dictionaries ("learning files") can't be used for the inner frames: btrfs decompresses
+  extents without a dictionary. They could only apply to the outer stream, where they would mainly
+  help the many tiny packages, which are a small share of the bytes.
 
 ## Verdict: VALIDATED for install cost, with a download-size cost
 

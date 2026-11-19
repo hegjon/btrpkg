@@ -25,6 +25,7 @@ mkdir -p /exp/pkg /exp/btr /exp/btrzst
 while read -r f; do
   cp /pkgs/$f /exp/pkg/; cp $CONV/${f%.pkg.tar.zst}.btrpkg /exp/btr/
   [[ -d ${CONVZST:-/nonexistent} ]] && cp $CONVZST/${f%.pkg.tar.zst}.pkg.btr.zst /exp/btrzst/
+  for d in ${ZSTDIRS:-}; do mkdir -p /exp/$d; cp /w/bench/out-$d/${f%.pkg.tar.zst}.pkg.btr.zst /exp/$d/; done
 done <$SET
 du -sb /exp/pkg /exp/btr /exp/btrzst
 
@@ -72,6 +73,7 @@ for round in $(seq $ROUNDS); do
       btrpkg) run_btrpkg "" ;;
       noenc)  run_btrpkg --no-encoded ;;
       btrzst-l*) run_btrpkg "-l ${s#btrzst-l}" btrzst .pkg.btr.zst ;;
+      f[0-9]*) run_btrpkg "-l ${FETCHLEVEL:-3}" $s .pkg.btr.zst ;;
     esac || { echo "$s failed"; tail /tmp/*.log; exit 1; }
     sync; t1=$(now); w1=$(written)
     u=$(used)
@@ -93,7 +95,7 @@ while read -r f; do
   bsdtar -xp --numeric-owner -f /exp/pkg/$f -C $ROOT/a \
     --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || exit 1
   g=${f%.pkg.tar.zst}.btrpkg; in=/exp/btr/$g
-  [[ -n ${VERIFYZST:-} ]] && in=/exp/btrzst/${f%.pkg.tar.zst}.pkg.btr.zst
+  [[ -n ${VERIFYZST:-} ]] && in=/exp/${VERIFYZST/#1/btrzst}/${f%.pkg.tar.zst}.pkg.btr.zst
   $B fetch $in $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
 done <$SET
 python3 /w/bench/compare.py $ROOT/a $ROOT/b | tee $OUT/${OUTNAME:-matrix}-verify.txt

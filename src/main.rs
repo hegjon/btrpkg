@@ -215,10 +215,65 @@ fn decode_meta(b: &[u8]) -> Result<(Vec<Entry>, Vec<u8>)> {
 
 // ---------------------------------------------------------------- convert
 
-enum Out {
-    Plain(io::BufWriter<File>),
-    Zst(zstd::stream::write::Encoder<'static, io::BufWriter<File>>),
+/// Writes the .pkg.btr stream as `n` independent zstd frames of about
+/// total/n bytes each (at least `min_frame`), so fetch can decode them in
+/// parallel. Each frame's window is sized to the frame (capped at 2^27, as
+/// --long=27), and its content size is in the header.
+struct FrameWriter {
+    out: Option<io::BufWriter<File>>,
+    enc: Option<zstd::stream::write::Encoder<'static, io::BufWriter<File>>>,
+    frame_size: u64,
+    remaining: u64,
+    left_in_frame: u64,
+    level: i32,
+    frames: u32,
 }
+impl FrameWriter {
+    fn new(out: io::BufWriter<File>, total: u64, n: u64, min_frame: u64, level: i32) -> FrameWriter {
+        let frame_size = total.div_ceil(n.max(1)).max(min_frame).min(total.max(1));
+        FrameWriter { out: Some(out), enc: None, frame_size, remaining: total, left_in_frame: 0, level, frames: 0 }
+    }
+    fn start(&mut self) -> io::Result<()> {
+        let len = self.frame_size.min(self.remaining);
+        let wl = (64 - (len.max(1) - 1).leading_zeros()).clamp(10, 27);
+        let mut z = zstd::stream::write::Encoder::new(self.out.take().unwrap(), self.level)?;
+        z.set_pledged_src_size(Some(len))?;
+        z.include_contentsize(true)?;
+        z.include_checksum(true)?;
+        z.window_log(wl)?;
+        if wl >= 23 { z.long_distance_matching(true)?; }
+        z.multithread(std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1))?;
+        self.enc = Some(z);
+        self.left_in_frame = len;
+        self.frames += 1;
+        Ok(())
+    }
+    fn finish(mut self) -> Result<u32> {
+        ensure!(self.remaining == 0 && self.enc.is_none(), "frame writer: {} bytes short", self.remaining);
+        self.out.take().unwrap().into_inner()?;
+        Ok(self.frames)
+    }
+}
+impl Write for FrameWriter {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        if b.is_empty() { return Ok(0); }
+        if self.enc.is_none() {
+            if self.remaining == 0 { return Err(io::Error::other("write past announced size")); }
+            self.start()?;
+        }
+        let n = (b.len() as u64).min(self.left_in_frame) as usize;
+        self.enc.as_mut().unwrap().write_all(&b[..n])?;
+        self.left_in_frame -= n as u64;
+        self.remaining -= n as u64;
+        if self.left_in_frame == 0 {
+            self.out = Some(self.enc.take().unwrap().finish()?);
+        }
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
+enum Out { Plain(io::BufWriter<File>), Zst(FrameWriter) }
 impl Write for Out {
     fn write(&mut self, b: &[u8]) -> io::Result<usize> {
         match self { Out::Plain(w) => w.write(b), Out::Zst(w) => w.write(b) }
@@ -241,7 +296,7 @@ fn frame(level: i32, data: Vec<u8>) -> Result<(u8, Vec<u8>)> {
     if align(z.len() as u64) < data.len() as u64 { Ok((COMP_ZSTD, z)) } else { Ok((COMP_NONE, data)) }
 }
 
-fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64) -> Result<()> {
+fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64, nframes: u64, min_frame: u64) -> Result<()> {
     let f = File::open(input).with_context(|| format!("open {}", input.display()))?;
     let dec = zstd::stream::read::Decoder::new(BufReader::new(f))?;
     let mut ar = tar::Archive::new(dec);
@@ -352,13 +407,10 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
     // .pkg.btr.zst: the whole .pkg.btr wrapped in one solid zstd stream (long window).
     let outer = output.extension().is_some_and(|e| e == "zst");
     let file = File::create(&tmp)?;
+    let total = (HDR + meta.len() + chunks.len() * TABLE_ENT) as u64
+        + compressed.iter().map(|(_, d)| d.len() as u64).sum::<u64>() + 32;
     let mut out: Out = if outer {
-        let mut z = zstd::stream::write::Encoder::new(io::BufWriter::new(file.try_clone()?), outer_level)?;
-        z.long_distance_matching(true)?;
-        z.window_log(27)?;
-        z.multithread(std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1))?;
-        z.include_checksum(true)?;
-        Out::Zst(z)
+        Out::Zst(FrameWriter::new(io::BufWriter::new(file.try_clone()?), total, nframes, min_frame, outer_level))
     } else {
         Out::Plain(io::BufWriter::new(file.try_clone()?))
     };
@@ -374,7 +426,7 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
     out.write_all(&digest)?;
     match out {
         Out::Plain(w) => { w.into_inner()?; }
-        Out::Zst(z) => { z.finish()?.into_inner()?; }
+        Out::Zst(z) => { z.finish()?; }
     }
     file.sync_all()?;
     fs::rename(&tmp, output)?;
@@ -451,6 +503,7 @@ fn set_nocomp(f: &File) {
 // ---------------------------------------------------------------- fetch
 
 #[derive(Default, Debug)]
+#[allow(dead_code)]
 struct FetchStats { outer: bool, framed_here: bool, file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
 
 /// Stream a package into the package cache. Header, manifest and chunk table
@@ -470,6 +523,71 @@ impl Read for HashReader {
 
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 
+/// Decode a .pkg.btr.zst: find the frame boundaries (block headers only, no
+/// decoding), then decode all frames in parallel. Spike limitation: the whole
+/// download and the whole inner stream are held in memory, and decoding starts
+/// once the download is complete.
+fn decode_frames(mut src: impl Read) -> Result<Box<dyn Read + Send>> {
+    let mut all = Vec::new();
+    src.read_to_end(&mut all)?;
+    // One frame: stream it, so decoding overlaps with framing and writing.
+    if zstd::zstd_safe::find_frame_compressed_size(&all).is_ok_and(|n| n == all.len()) {
+        let mut d = zstd::stream::read::Decoder::with_buffer(io::Cursor::new(all))?;
+        d.window_log_max(31)?;
+        return Ok(Box::new(d));
+    }
+    let mut frames = Vec::new();
+    let mut pos = 0;
+    while pos < all.len() {
+        let n = zstd::zstd_safe::find_frame_compressed_size(&all[pos..])
+            .map_err(|e| anyhow::anyhow!("truncated package: bad zstd frame at {pos}: {}", zstd::zstd_safe::get_error_name(e)))?;
+        frames.push(pos..pos + n);
+        pos += n;
+    }
+    let bufs = frames
+        .par_iter()
+        .map(|r| -> Result<Vec<u8>> {
+            let f = &all[r.clone()];
+            match zstd::zstd_safe::get_frame_content_size(f) {
+                Ok(Some(size)) => {
+                    ensure!(size <= 1 << 34, "zstd frame too large");
+                    let mut d = zstd::bulk::Decompressor::new()?;
+                    d.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(31))?;
+                    let out = d.decompress(f, size as usize).context("truncated package: zstd frame")?;
+                    ensure!(out.len() as u64 == size, "zstd frame decoded to the wrong size");
+                    Ok(out)
+                }
+                _ => {
+                    // no content size (older single-frame files): stream it
+                    let mut d = zstd::stream::read::Decoder::new(f)?;
+                    d.window_log_max(31)?;
+                    let mut out = Vec::new();
+                    d.read_to_end(&mut out).context("truncated package: zstd frame")?;
+                    Ok(out)
+                }
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Box::new(BufList { bufs: bufs.into(), pos: 0 }))
+}
+
+struct BufList { bufs: std::collections::VecDeque<Vec<u8>>, pos: usize }
+impl Read for BufList {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        while let Some(b) = self.bufs.front() {
+            if self.pos < b.len() {
+                let n = out.len().min(b.len() - self.pos);
+                out[..n].copy_from_slice(&b[self.pos..self.pos + n]);
+                self.pos += n;
+                return Ok(n);
+            }
+            self.bufs.pop_front();
+            self.pos = 0;
+        }
+        Ok(0)
+    }
+}
+
 /// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps
 /// in the repo database). For .pkg.btr.zst that, plus the zstd frame checksum,
 /// replaces hashing the much larger inner stream.
@@ -483,9 +601,7 @@ fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: 
     let chained = io::Cursor::new(magic.to_vec()).chain(src);
     let outer = magic == [0x28, 0xb5, 0x2f, 0xfd];
     let src: Box<dyn Read + Send> = if outer {
-        let mut d = zstd::stream::read::Decoder::new(chained)?;
-        d.window_log_max(31)?;
-        Box::new(d)
+        decode_frames(chained)?
     } else {
         Box::new(chained)
     };
@@ -760,11 +876,15 @@ fn main() -> Result<()> {
     let mut level: Option<i32> = None;
     let mut outer_level = 19;
     let mut sha: Option<String> = None;
+    let mut nframes = 1u64;
+    let mut min_frame = 1u64 << 20;
     let mut small_max = 4096u64;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-l" | "--level" => level = Some(it.next().context("-l needs a value")?.parse()?),
+            "--frames" => nframes = it.next().context("--frames needs a value")?.parse()?,
+            "--min-frame" => min_frame = it.next().context("--min-frame needs a value")?.parse()?,
             "--sha256" => sha = Some(it.next().context("--sha256 needs a value")?.clone()),
             "--outer-level" => outer_level = it.next().context("--outer-level needs a value")?.parse()?,
             "--small" => small_max = it.next().context("--small needs a value")?.parse()?,
@@ -777,11 +897,11 @@ fn main() -> Result<()> {
         // by default) inside one solid zstd stream at --outer-level.
         ["convert", i, o] => {
             let outer = o.ends_with(".zst");
-            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { 19 }), outer_level, small_max)
+            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { 19 }), outer_level, small_max, nframes, min_frame)
         }
         ["fetch", i, c] => fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref()),
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")),
         ["info", p] => info(Path::new(p)),
-        _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE"),
+        _ => bail!("usage: btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN OUT(.pkg.btr|.pkg.btr.zst) | fetch [--no-encoded] [-l N] [--sha256 HEX] IN CACHE | install [--copy] CACHE ROOT | info FILE"),
     }
 }
