@@ -231,8 +231,8 @@ Costs:
 Not covered yet:
 - pacman integration: DB, hooks, scriptlets, backup files, conflicts. Baseline is bsdtar, not
   `pacman -U`.
-- LUKS (the real system), network, and signatures. sha256 is checked after the encoded writes, but
-  before anything reads the data.
+- Network and signatures. sha256 is checked after the encoded writes, but before anything reads the
+  data. (LUKS2 with 4K sectors is covered above.)
 - Upgrades: replacing files, reflinking unchanged extents from the previous version
   (delta downloads).
 - Hostile input: the kernel decompresses frames that userspace supplied. A signature check must
