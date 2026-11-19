@@ -437,6 +437,20 @@ slower of bytes and requests:
   `--small`) are cached better.
 - These are estimates from small objects; not yet measured with a real chunk store on R2/S3.
 
+HTTP/1.1, HTTP/2 and HTTP/3 against the same server (Arch's mirror, which offers all three, same
+250 `.sig` files) at the same parallelism were equal: 0.45 to 0.48 s with 100 in flight, 2.3 to
+2.4 s with 8. What changes is how much parallelism each one gets cheaply:
+- HTTP/1.1 runs one request per connection at a time, so in-flight requests = connections. The
+  790 req/s above needed 100 TLS connections; pacman's `ParallelDownloads` default is 5, which at
+  32 ms per request gives about 155 req/s, or about 5 minutes for 47,833 objects.
+- HTTP/2 multiplexes up to the server's stream limit (typically 100 to 256) on one connection, so
+  the request floor drops to 47,833 × 32 ms / 100 = about 15 s and the byte floor (about 25 s)
+  decides. HPACK also shrinks the response headers, 851 B per object on pkgs.omarchy.org today
+  (40 MB over the set, 6% of the bytes).
+- HTTP/3 has the same multiplexing. It adds a faster handshake (one round trip less, irrelevant over
+  a 25 s download) and no TCP head-of-line blocking: a lost packet stalls one stream, not all of
+  them. That helps on lossy wifi or mobile links, not on a clean wired one.
+
 ### Signatures
 
 What this machine does today: `SigLevel = Required DatabaseOptional`. Every package has a
