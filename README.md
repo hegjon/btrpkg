@@ -536,6 +536,33 @@ Known gaps:
 - **Never run:** `bench/nonbtrfs-test.sh` (tmpfs, ext4 and XFS against `bsdtar`) is written but
   hasn't been run yet.
 
+## pacman integration (design; step 1 tested by hand)
+
+Step 1, no pacman change: btrpkg places the files, then hands pacman a metadata-only package.
+`pacman -U --dbonly x-meta.pkg.tar.zst` with only `.PKGINFO`, `.BUILDINFO`, `.MTREE` (and
+`.INSTALL`) writes a full local DB entry: libalpm builds the file list from `.MTREE`
+(`be_package.c`, `build_filelist_from_mtree`). Tested with pacman 7.1.0 on `tree` in an Arch
+container: 2,552 B metadata tar, `pacman -Qkk tree` "7 total files, 0 altered", `pacman -R` removes
+the files. `--dbonly` skips the file-conflict check (`sync.c` `_alpm_sync_check`), the removal of the
+old version's files (`remove.c`) and all extraction, including `.pacnew`/backup handling, but still
+runs scriptlets and hooks. So btrpkg would have to do conflicts, removals and backups itself, and
+`pre_upgrade` would run after the files are already in place. Good for measuring, not for real use.
+
+Step 2, a libalpm patch, where each part plugs in (pacman `a6f7467d`):
+- sync DB: `btrpkg.index=` / `btrpkg.index_sha256=` in `%DATA%` (works today).
+- download (`sync.c` `find_dl_candidates`/`download_files`): when the entry has an index and the
+  cache supports encoded writes, fetch the index and the missing chunks into `.pkg.btr` with the
+  existing libcurl multi code; otherwise `%FILENAME%` as now.
+- validation (`sync.c` `check_validity`): the index's sha256 from the (signed) DB, or its `.sig`.
+- loading (`be_package.c` `_alpm_pkg_load_internal`): `.PKGINFO` and `.MTREE` come from the index
+  manifest instead of libarchive.
+- extraction (`add.c`): keep `commit_single_pkg` and `extract_single_file` (backup, `.pacnew`,
+  NoExtract, conflicts); only `perform_extraction`, which calls `archive_read_extract2`, gets a
+  second path: `FICLONERANGE` from the cache file for large files, the small-file blob for the rest,
+  then mode, owner, mtime and xattrs.
+- cache (`_alpm_filecache_find`, `-Sc`, paccache): know `.pkg.btr` + `.btridx`.
+The client side has to be C (libalpm is C); the Rust converter stays on the build server.
+
 ## Rollback on a failed install (decision, not implemented)
 
 Chosen (Jonny, 2026-11-19): **snapshot first, install live, roll back only on failure**. This is what
