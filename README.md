@@ -504,6 +504,17 @@ For btrpkg:
 Not implemented yet: `publish --sign KEYID`, verifying in `pull` (`gpgv` with pacman's keyring,
 or `sqv`), re-verifying the cache, and checking the `raw/` map in `publish`.
 
+Alternative to OpenPGP for btrpkg's own signatures (Jonny asked, 2026-11-19): plain Ed25519, the
+apk/signify/minisign model. Public keys are files shipped in a keyring package, verified in-process
+(libcrypto or libsodium), no `pacman-key --init`, trustdb, agent or keyserver. Measured on the
+desktop: Ed25519 verify 22,584/s (44 µs) with `openssl speed`; `gpgv` 6.8 ms per package of which
+about 4.8 ms is hashing the package; `ssh-keygen -Y verify` 1.4 ms including process start (298 B
+signature). Sign with a namespace string (e.g. `btrpkg-index-v1`) so a signature can't be reused
+elsewhere. What GPG gave that has to be replaced: revocation (a revoked-keys list in the keyring
+package) and rotation (new keyring package signed by the old key). pacman's `.pkg.tar.zst` path
+still needs the OpenPGP keyring for Arch's packager signatures; the build server checks those once
+and signs the index with the repo key.
+
 ## Other filesystems than btrfs (from the code, not tested yet)
 
 Installing works on any filesystem, but only btrfs gets the benefits. The format itself has
