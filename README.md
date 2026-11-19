@@ -479,6 +479,30 @@ Known gaps:
 - **Never run:** `bench/nonbtrfs-test.sh` (tmpfs, ext4 and XFS against `bsdtar`) is written but
   hasn't been run yet.
 
+## Rollback on a failed install (decision, not implemented)
+
+Chosen (Jonny, 2026-11-19): **snapshot first, install live, roll back only on failure**. This is what
+`omarchy-update` already does through `omarchy-snapshot` (snapper config `root`, Limine boots the
+snapshots):
+
+1. Take a snapper snapshot of `@` before the transaction.
+2. Install into the live root as now.
+3. If the install fails, the snapshot is the way back (`snapper rollback` or boot the snapshot,
+   then reboot). The snapshot also covers `/var/lib/pacman`, so the database and the files roll back
+   together. That closes pacman's half-written `desc` and upgrade-gap problems for the failure case.
+
+Why not install into a snapshot and switch to it at boot (transactional-update / OSTree style):
+btrfs can't merge, so anything written to the live `@` between the snapshot and the switch is lost.
+On Omarchy only `/home`, `/var/log` and `/var/cache/pacman/pkg` are separate subvolumes; `/etc`
+and `/var/lib` (docker, tailscale, bluetooth, NetworkManager, ollama, ...) are in `@`.
+
+Notes:
+- The snapshot is metadata only. With btrpkg the old files' extents are shared with `@pkg` anyway,
+  so keeping the snapshot costs little extra space.
+- `@home`, `@log` and `@pkg` are not rolled back, which is what we want.
+- Not checked yet: whether a booted older snapshot has a matching kernel and initramfs on the ESP
+  (limine-snapper-sync).
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
