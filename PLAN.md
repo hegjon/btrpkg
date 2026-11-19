@@ -78,7 +78,13 @@ frontend, filesystems other than btrfs, Arch's packages.
 - pkgs.omarchy.org serves only HTTP/1.1: many small requests are slow until HTTP/2 or HTTP/3 is on.
 - Frame bytes depend on the zstd version: the server's `raw/` map and the uncompressed hash cover it.
 
+## Answered
+
+- Test repo: a local HTTP server on the desktop (Jonny, 11-19). The lab machines reach it over the
+  LAN. pkgs.omarchy.org's HTTP/1.1-only limit is measured separately (README).
+- Packages: Omarchy's own only (Jonny, 11-19).
+- Client language: Rust for iteration 1 (default; not answered yet). C only for the libalpm patch.
+
 ## Open questions
 
-- Where the test repo lives: a local HTTP server on the desktop, or a test R2 bucket.
 - Which lab machines; they are busy with the night run until 09:00 on 11-20.
