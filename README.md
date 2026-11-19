@@ -359,7 +359,11 @@ Median index 10 KB, 90th percentile 115 KB, largest ansible at 3.5 MB (53,668 fi
 ```
 
 The database entry for a package names its index and the index's sha256 (`pull --sha256`), the
-way `%FILENAME%` and `%SHA256SUM%` name a `.pkg.tar.zst` today. The publish order is: chunks,
+way `%FILENAME%` and `%SHA256SUM%` name a `.pkg.tar.zst` today. Put them in the entry's `%DATA%`
+block as `key=value` lines (`btrpkg.index=…`, `btrpkg.index_sha256=…`), next to the normal fields,
+so one `omarchy.db` serves pacman and btrpkg. Tested with pacman 7.1.0: `%DATA%` lines are read
+silently, while a new `%KEY%` section prints "unknown key" on every database read. A `%DATA%` line
+without `=` makes pacman drop the whole package entry. The publish order is: chunks,
 then index and signature, then the database. A client never sees a database entry whose objects
 are missing.
 
