@@ -209,6 +209,29 @@ takes 86 s for 6 frames and 87 s for 8.
 - The benches read packages from RAM, so download time is not included. On a slow link, fewer
   frames finish first overall.
 
+## Level-19 chunks inside an outer zstd `-10`
+
+`convert -l 19 --outer-level 10 … .pkg.btr.zst`: the chunks are btrfs frames at level 19 (the
+inner file is byte-for-byte the `.pkg.btr`), wrapped in one outer zstd frame at level 10. `fetch`
+only decodes the outer stream and writes the frames as they are. LUKS2 4K, 3 rounds
+(`luks-i19o10.tsv`), with the other variants rerun alongside:
+
+| | download | install end to end | device writes | space (root + cache) | space after cache removed |
+|---|---:|---:|---:|---:|---:|
+| pacman baseline | 485 MB | 4.69 s | 1887 MB | 1624 MB | 1138 MB |
+| `.pkg.btr` (level-19 chunks, no outer zstd) | 642 MB (+32%) | 2.86 s (−39%) | 973 MB (−48%) | 745 MB (−54%) | 719 MB (−37%) |
+| level-19 chunks + outer `-10` | 616 MB (+27%) | 2.94 s (−37%) | 974 MB (−48%) | 745 MB (−54%) | 719 MB (−37%) |
+| raw chunks + outer `-19`, 4 frames | 463 MB (−4%) | 4.01 s (−15%) | 1059 MB (−44%) | 831 MB (−49%) | 804 MB (−29%) |
+
+Verify with level-19 chunks + outer `-10`: 0 differences. Converting the set took 25 s wall
+(657 CPU-s, nearly all of it the level-19 chunks).
+
+- The outer `-10` only takes 4% off `.pkg.btr` (compressed chunks leave little to find) and costs
+  0.08 s of decoding. That pays off on links slower than about 2.6 Gbit/s.
+- Against raw chunks with 4 frames, it installs 1.07 s faster and uses 85 MB less disk, but the
+  download is 153 MB (33%) bigger. On download time alone, it only wins on links faster than about
+  1.1 Gbit/s.
+
 ## Verdict: VALIDATED for install cost, with a download-size cost
 
 What worked:
