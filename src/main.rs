@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod format;
 mod fsx;
+mod repo;
 mod sign;
 mod store;
 
@@ -667,6 +668,7 @@ const USAGE: &str = "usage:
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
   btrpkg pull [TRUST] [--no-encoded] STORE NAME CACHE
+  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
 
@@ -706,6 +708,8 @@ fn main() -> Result<()> {
     let mut min_frame = 1u64 << 20;
     let mut small_max = 4096u64;
     let mut key: Option<PathBuf> = None;
+    let mut gpg_keyring: Option<PathBuf> = Some("/etc/pacman.d/gnupg/pubring.gpg".into());
+    let mut jobs = 4usize;
     let mut trust = TrustArgs { id: None, sig: None, keys: vec![], unverified: false };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -722,6 +726,9 @@ fn main() -> Result<()> {
             "--sig" => trust.sig = Some(val("--sig")?.into()),
             "--keys" => trust.keys.push(val("--keys")?.into()),
             "--unverified" => trust.unverified = true,
+            "--gpg-keyring" => gpg_keyring = Some(val("--gpg-keyring")?.into()),
+            "--no-gpg" => gpg_keyring = None,
+            "--jobs" => jobs = val("--jobs")?.parse()?,
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
             s if s.starts_with("--") => flags.push(s),
             s => pos.push(s),
@@ -765,6 +772,15 @@ fn main() -> Result<()> {
                 eprintln!("pull: {st:?}");
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes);
             })
+        }
+        ["repo-update", d, r] => {
+            let k = sec_key(key.as_ref())?;
+            let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),
+                level: level.unwrap_or(19), small: small_max, jobs };
+            let st = repo::repo_update(Path::new(d), r, &o)?;
+            eprintln!("repo-update: {st:?}");
+            ensure!(st.failed == 0, "{} packages failed (left to pacman)", st.failed);
+            Ok(())
         }
         _ => bail!("{USAGE}"),
     }
@@ -1085,6 +1101,67 @@ mod tests {
         let tp = t.0.join("s-1-1.pkg.btr");
         let tsig = k.sign(&fs::read(&tp).unwrap()[..HDR], "repo");
         fetch(tp.to_str().unwrap(), &cdir.join("d.pkg.btr"), true, 3, None, &trust(tsig)).unwrap();
+    }
+
+
+    #[test]
+    fn repo_update_adds_fields() {
+        let t = TempDir::new("repo");
+        let d = t.0.join("repo");
+        fs::create_dir_all(&d).unwrap();
+        let mut tb = tar::Builder::new(Vec::new());
+        for (n, v, present) in [("p", "1-1", true), ("q", "2-1", true), ("gone", "1-1", false)] {
+            let fname = format!("{n}-{v}-x86_64.pkg.tar.zst");
+            let sum = if present {
+                let src = make_pkg(&d, &format!("{n}-{v}-x86_64"), &spec(n.len() as u64));
+                hex(&sha256(&fs::read(src).unwrap()))
+            } else { "0".repeat(64) };
+            let desc = format!("%FILENAME%\n{fname}\n\n%NAME%\n{n}\n\n%VERSION%\n{v}\n\n%SHA256SUM%\n{sum}\n\n%DATA%\nother.key=1\n\n");
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Directory);
+            h.set_path(format!("{n}-{v}/")).unwrap();
+            h.set_mode(0o755);
+            h.set_size(0);
+            h.set_cksum();
+            tb.append(&h, &[][..]).unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_path(format!("{n}-{v}/desc")).unwrap();
+            h.set_mode(0o644);
+            h.set_size(desc.len() as u64);
+            h.set_cksum();
+            tb.append(&h, desc.as_bytes()).unwrap();
+        }
+        fs::write(d.join("t.db.tar.zst"), zstd::bulk::compress(&tb.into_inner().unwrap(), 3).unwrap()).unwrap();
+        std::os::unix::fs::symlink("t.db.tar.zst", d.join("t.db")).unwrap();
+        sign::keygen(&t.0.join("k")).unwrap();
+        let k = sign::SecretKey::load(&t.0.join("k.sec")).unwrap();
+        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, level: 19, small: 4096, jobs: 2 };
+        let st = repo::repo_update(&d, "t", &o).unwrap();
+        assert_eq!((st.packages, st.converted, st.missing, st.dropped, st.failed), (3, 2, 1, 1, 0), "{st:?}");
+        // the database: same layout, fields added, other %DATA% kept, the missing package gone
+        let db = zstd::stream::decode_all(&fs::read(d.join("t.db.tar.zst")).unwrap()[..]).unwrap();
+        let mut descs = std::collections::BTreeMap::new();
+        for e in tar::Archive::new(&db[..]).entries().unwrap() {
+            let mut e = e.unwrap();
+            let p = e.path().unwrap().to_string_lossy().to_string();
+            let mut s = String::new();
+            e.read_to_string(&mut s).unwrap();
+            descs.insert(p, s);
+        }
+        assert_eq!(descs.keys().cloned().collect::<Vec<_>>(), ["p-1-1/", "p-1-1/desc", "q-2-1/", "q-2-1/desc"]);
+        let q = &descs["q-2-1/desc"];
+        assert!(q.contains("%DATA%\nother.key=1\nbtrpkg.index=index/q-2-1-x86_64.btridx\nbtrpkg.id="), "{q}");
+        let id = q.lines().find_map(|l| l.strip_prefix("btrpkg.id=")).unwrap();
+        // the ID from the database is enough to pull, and the signature is there too
+        let c = t.0.join("cache");
+        fs::create_dir_all(&c).unwrap();
+        store::pull(&d, "q-2-1-x86_64", &c.join("q.pkg.btr"), true, &sign::Trust::Id(store::unhex(id).unwrap())).unwrap();
+        assert!(store::read_sig(&d, "q-2-1-x86_64").is_some());
+        // the original packages stay
+        assert!(d.join("q-2-1-x86_64.pkg.tar.zst").exists());
+        // a second run converts nothing
+        let st = repo::repo_update(&d, "t", &o).unwrap();
+        assert_eq!((st.converted, st.unchanged), (0, 2), "{st:?}");
     }
 
     #[test]

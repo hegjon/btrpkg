@@ -48,7 +48,11 @@ frontend, filesystems other than btrfs, Arch's packages.
    holds every hash).
    Done when: a valid index passes, and a tampered index, an unknown key and a revoked key fail.
 
-3. **Repo tool.**
+3. **Repo tool.** Done 2026-11-20 (`src/repo.rs`, `btrpkg repo-update`). Test repo
+   `~/Work/btrpkg-repo/omarchy/x86_64`: the 51 Omarchy packages installed on p14s, x200, t490 and
+   t460s (current edge, 851 MB), all gpgv-checked and converted in 4 min (866 MB of chunks, 7.6 MB
+   of indexes). In an Arch container `pacman -Si` of all 51 is byte-identical against the original
+   database with no warnings, and signed installs (`SigLevel = Required`) work, `-Qkk` clean.
    `btrpkg repo-update DIR`: for each `.pkg.tar.zst`, check its OpenPGP signature (`gpgv`, pacman's
    keyring), convert, publish chunks, then index and signature, then write the database with the
    `%DATA%` fields. Publish order: chunks, indexes, database last. Keep the `.pkg.tar.zst` files.

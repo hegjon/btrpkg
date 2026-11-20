@@ -26,7 +26,7 @@ pub(crate) fn unhex(s: &str) -> Result<Hash> {
     Ok(o)
 }
 
-fn write_atomic(p: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(p: &Path, data: &[u8]) -> Result<()> {
     if let Some(d) = p.parent() { fs::create_dir_all(d)?; }
     let tmp = { let mut t = p.as_os_str().to_owned(); t.push(format!(".tmp{}", std::process::id())); PathBuf::from(t) };
     let mut f = File::create(&tmp)?;
