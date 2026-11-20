@@ -37,7 +37,9 @@ frontend, filesystems other than btrfs, Arch's packages.
    Done when: the 315-package set converts and installs with 0 differences (as in v0), and every
    corruption test is rejected before anything is written.
 
-2. **Signing and keys.**
+2. **Signing and keys.** Done 2026-11-20 (`src/sign.rs`): signify's file formats, so `signify -V`
+   verifies a btrpkg signature (checked in an Arch container, signify 33). The signed message is
+   the 256-byte header; its magic and version are the namespace, so no separate namespace string.
    `btrpkg keygen`, `publish --key`, Ed25519 over the header with the namespace
    `btrpkg-index-v1`; the signature names its key file. A revoked-keys file in the key directory.
    Sign in `publish`, after any raw-map remapping: remapping rewrites the table and so the header,
@@ -74,6 +76,11 @@ frontend, filesystems other than btrfs, Arch's packages.
    History bullet in the infrastructure notes.
 
 ## Review findings to fix before milestone 2 (2026-11-20)
+
+Fixed 2026-11-20 with tests (`cargo test`: 14), except "`pull` opens every cache file", which
+milestone 4 replaces. Checked as root on p14s (LUKS2 + btrfs, throwaway subvolumes,
+`bench/verify-host.sh`): the 315 set fetches with encoded writes and installs with 0 differences
+against bsdtar.
 
 From a review of `eca5b8b`; the first three are shown by working proofs of concept.
 - **Critical: `install` follows symlinks the package created.** A symlink `a` → `/etc`, then a

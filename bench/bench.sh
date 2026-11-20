@@ -74,7 +74,7 @@ run_btrpkg() {  # $1 = extra fetch flags, $2 = input dir, $3 = input extension
   while read -r f; do
     local in=/exp/${2:-btr}/${f%.pkg.tar.zst}${3:-.btrpkg}
     f=${f%.pkg.tar.zst}.pkg.btr
-    $B fetch $1 $in $c/$f 2>>/tmp/fetch.log || return 1
+    $B fetch --unverified $1 $in $c/$f 2>>/tmp/fetch.log || return 1
     $B install $c/$f $ROOT 2>>/tmp/install.log || return 1
   done <$SET
 }
@@ -112,7 +112,7 @@ while read -r f; do
     --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || exit 1
   g=${f%.pkg.tar.zst}.btrpkg; in=/exp/btr/$g
   [[ -n ${VERIFYZST:-} ]] && in=/exp/${VERIFYZST/#1/btrzst}/${f%.pkg.tar.zst}.pkg.btr.zst
-  $B fetch $in $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
+  $B fetch --unverified $in $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
 done <$SET
 python3 /w/bench/compare.py $ROOT/a $ROOT/b | tee $OUT/${OUTNAME:-matrix}-verify.txt
 # Are installed extents shared with the cache, and still compressed?

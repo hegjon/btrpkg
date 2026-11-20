@@ -52,10 +52,15 @@ pub const K_DIR: u8 = 1;
 pub const K_SYMLINK: u8 = 2;
 pub const K_HARDLINK: u8 = 3;
 
-/// Limits on lengths a header may announce (checked before anything is allocated).
+/// Limits on lengths a header may announce (checked before anything is allocated). The largest
+/// package seen (ansible) has 9.6 MB of entries and a 19.5 MB blob; caps leave room for much more
+/// while keeping a decompression bomb small.
 const MAX_SECTION: u64 = 1 << 32;
-const MAX_RAW: u64 = 1 << 34;
+const MAX_ENTRIES_RAW: u64 = 256 << 20;
+const MAX_BLOB_RAW: u64 = 1 << 30;
 const META_LEVEL: i32 = 19;
+/// btrfs reads back a zstd extent with a window of at most 128 KiB.
+const CHUNK_WINDOW_LOG: u32 = 17;
 
 pub type Hash = [u8; 32];
 
@@ -63,8 +68,14 @@ pub fn sha256(b: &[u8]) -> Hash {
     Sha256::digest(b).into()
 }
 
+/// Round up to a 4 KiB block. Only for lengths already known to be sane; use `checked_align` on
+/// values read from a file.
 pub fn align(x: u64) -> u64 {
-    (x + BLOCK - 1) & !(BLOCK - 1)
+    checked_align(x).expect("length too large to align")
+}
+
+pub fn checked_align(x: u64) -> Option<u64> {
+    x.checked_add(BLOCK - 1).map(|v| v & !(BLOCK - 1))
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -159,7 +170,7 @@ impl Header {
         ensure!(h.nchunks <= MAX_SECTION / ENT as u64, "too many chunks");
         ensure!(h.image_len <= h.nchunks * MAX_EXTENT as u64, "image longer than its chunks");
         ensure!(h.entries_len < MAX_SECTION && h.blob_len < MAX_SECTION, "section too large");
-        ensure!(h.entries_raw_len < MAX_RAW && h.blob_raw_len < MAX_RAW, "section too large");
+        ensure!(h.entries_raw_len <= MAX_ENTRIES_RAW && h.blob_raw_len <= MAX_BLOB_RAW, "section too large");
         Ok(h)
     }
 
@@ -307,24 +318,77 @@ fn safe_path(p: &[u8]) -> bool {
         && p.split(|&c| c == b'/').all(|c| !c.is_empty() && c != b"." && c != b"..")
 }
 
-/// Everything `install` relies on: safe paths, known kinds, data inside the image or blob.
+/// Everything `install` relies on: safe paths, known kinds, data inside the image or blob, no
+/// path that leads through a symlink or file of the same package, and hardlinks only to files
+/// the package placed before. (Symlinks already on disk are refused by `install` itself.)
 pub fn check_entries(entries: &[Entry], image_len: u64, blob_len: u64) -> Result<()> {
+    let mut files: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
+    let mut not_dirs: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
     for e in entries {
         let name = || String::from_utf8_lossy(&e.path).into_owned();
         ensure!(safe_path(&e.path), "unsafe path {:?}", name());
+        for (i, _) in e.path.iter().enumerate().filter(|(_, &c)| c == b'/') {
+            ensure!(!not_dirs.contains(&e.path[..i]), "{}: leads through a symlink or file of the package", name());
+        }
         ensure!(!e.target.contains(&0), "{}: NUL in link target", name());
         ensure!(e.xattrs.iter().all(|(k, _)| !k.is_empty() && !k.contains(&0)), "{}: bad xattr name", name());
         match e.kind {
             K_DIR => {}
             K_SYMLINK => ensure!(!e.target.is_empty(), "{}: symlink without target", name()),
-            K_HARDLINK => ensure!(safe_path(&e.target), "{}: unsafe hardlink target", name()),
+            K_HARDLINK => ensure!(safe_path(&e.target) && files.contains(e.target.as_slice()),
+                "{}: hardlink to something other than an earlier file of the package", name()),
             K_FILE if e.small => ensure!(e.data_off.checked_add(e.size).is_some_and(|end| end <= blob_len),
                 "{}: small file outside the blob", name()),
             K_FILE => ensure!(e.size > 0 && e.data_off % BLOCK == 0
-                && e.data_off.checked_add(align(e.size)).is_some_and(|end| end <= image_len),
+                && checked_align(e.size).and_then(|a| e.data_off.checked_add(a)).is_some_and(|end| end <= image_len),
                 "{}: file outside the image", name()),
             k => anyhow::bail!("{}: unknown entry kind {k}", name()),
         }
+        match e.kind {
+            K_FILE => { files.insert(&e.path); not_dirs.insert(&e.path); }
+            K_SYMLINK | K_HARDLINK => { not_dirs.insert(&e.path); }
+            _ => ensure!(!not_dirs.contains(e.path.as_slice()), "{}: a directory where the package has a file or symlink", name()),
+        }
+    }
+    Ok(())
+}
+
+thread_local! {
+    static DCTX: std::cell::RefCell<Option<zstd::bulk::Decompressor<'static>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The unencoded data of a zstd chunk, decoded the way btrfs will read it back: one frame, window
+/// at most 128 KiB, no dictionary, exactly `unencoded_len` bytes.
+pub fn decode_chunk(c: &Chunk, d: &[u8]) -> Result<Vec<u8>> {
+    ensure!(d.len() >= 5 && d[..4] == [0x28, 0xb5, 0x2f, 0xfd], "not a zstd frame");
+    // frame header descriptor: no dictionary ID, no checksum
+    ensure!(d[4] & 0x07 == 0, "zstd frame with a dictionary ID or checksum");
+    ensure!(zstd::zstd_safe::find_frame_compressed_size(d).is_ok_and(|n| n == d.len()), "not exactly one zstd frame");
+    DCTX.with(|cell| -> Result<Vec<u8>> {
+        let mut cell = cell.borrow_mut();
+        if cell.is_none() {
+            let mut z = zstd::bulk::Decompressor::new()?;
+            z.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(CHUNK_WINDOW_LOG))?;
+            *cell = Some(z);
+        }
+        let out = cell.as_mut().unwrap().decompress(d, c.unencoded_len as usize).context("zstd chunk")?;
+        ensure!(out.len() == c.unencoded_len as usize, "zstd chunk decoded to the wrong length");
+        Ok(out)
+    })
+}
+
+/// Check a chunk's bytes before anything is written: the stored hash, and the hash of the data
+/// it decodes to, which reuse across packages relies on. The kernel stores encoded frames without
+/// looking at them, so this is the only check before the data is on disk.
+pub fn check_chunk(i: usize, c: &Chunk, d: &[u8]) -> Result<()> {
+    ensure!(d.len() == c.encoded_len as usize && sha256(d) == c.stored, "chunk {i} is corrupt");
+    match c.compression {
+        COMP_ZSTD => {
+            let plain = decode_chunk(c, d).with_context(|| format!("chunk {i}"))?;
+            ensure!(sha256(&plain) == c.raw, "chunk {i}: its data doesn't match the unencoded hash");
+        }
+        COMP_NONE => ensure!(c.stored == c.raw && d.len() == c.unencoded_len as usize, "chunk {i}: its data doesn't match the unencoded hash"),
+        x => anyhow::bail!("chunk {i}: unknown compression {x}"),
     }
     Ok(())
 }
@@ -396,8 +460,15 @@ fn decompress_exact(z: &[u8], raw_len: u64, what: &str) -> Result<Vec<u8>> {
 
 /// Header and chunk table only, checked: enough to start fetching chunks.
 pub fn read_head(r: &mut impl Read) -> Result<(Header, Vec<u8>, Vec<Chunk>, Vec<u8>)> {
+    read_head_checked(r, &|_| Ok(()))
+}
+
+/// Like `read_head`, but `trust` sees the header (whose hash covers every section) before
+/// anything else is read: an expected ID or a signature.
+pub fn read_head_checked(r: &mut impl Read, trust: &dyn Fn(&[u8]) -> Result<()>) -> Result<(Header, Vec<u8>, Vec<Chunk>, Vec<u8>)> {
     let hb = read_n(r, HDR as u64, "header")?;
     let hdr = Header::decode(&hb)?;
+    trust(&hb)?;
     let tb = read_n(r, hdr.table_len(), "chunk table")?;
     ensure!(sha256(&tb) == hdr.table_hash, "chunk table checksum mismatch");
     let chunks = decode_table(&tb, hdr.image_len)?;
@@ -406,7 +477,11 @@ pub fn read_head(r: &mut impl Read) -> Result<(Header, Vec<u8>, Vec<Chunk>, Vec<
 
 /// Read and check a whole index, section by section.
 pub fn read_index(r: &mut impl Read) -> Result<Index> {
-    let (hdr, hb, chunks, tb) = read_head(r)?;
+    read_index_checked(r, &|_| Ok(()))
+}
+
+pub fn read_index_checked(r: &mut impl Read, trust: &dyn Fn(&[u8]) -> Result<()>) -> Result<Index> {
+    let (hdr, hb, chunks, tb) = read_head_checked(r, trust)?;
     let ez = read_n(r, hdr.entries_len, "entries")?;
     ensure!(sha256(&ez) == hdr.entries_hash, "entries checksum mismatch");
     let entries = decode_entries(&decompress_exact(&ez, hdr.entries_raw_len, "entries")?)?;
@@ -489,11 +564,15 @@ mod tests {
     fn huge_lengths_fail_without_allocating() {
         // a header with a valid checksum that announces 4 GiB sections and is followed by nothing
         let h = Header { nchunks: (MAX_SECTION / ENT as u64) - 1, image_len: 4096, entries_len: MAX_SECTION - 1,
-            entries_raw_len: MAX_RAW - 1, blob_len: 1, blob_raw_len: 1, ..Default::default() };
+            entries_raw_len: MAX_ENTRIES_RAW, blob_len: 1, blob_raw_len: 1, ..Default::default() };
         let e = parse_index(&h.encode()).err().unwrap().to_string();
         assert!(e.contains("truncated"), "{e}");
         let too_big = Header { entries_len: MAX_SECTION, ..h.clone() };
         assert!(Header::decode(&too_big.encode()).is_err());
+        let bomb = Header { entries_raw_len: MAX_ENTRIES_RAW + 1, ..h.clone() };
+        assert!(Header::decode(&bomb.encode()).is_err());
+        let bomb = Header { blob_raw_len: MAX_BLOB_RAW + 1, ..h.clone() };
+        assert!(Header::decode(&bomb.encode()).is_err());
     }
 
     #[test]

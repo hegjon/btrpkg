@@ -28,14 +28,27 @@ Two variants of the same file:
 cargo build --release
 btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.pkg.btr          # post-processor
 btrpkg convert [--outer-level 19] [--frames N] [--min-frame B] in.pkg.tar.zst out.pkg.btr.zst  # raw chunks, solid zstd
-btrpkg fetch [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
+btrpkg keygen NAME                                                        # NAME.sec + NAME.pub (signify format)
+btrpkg sign --key NAME.sec x.pkg.btr                                      # x.pkg.btr.sig over the header
+btrpkg publish [--key NAME.sec] x.pkg.btr STORE                           # chunks, signature, index
+btrpkg fetch TRUST [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
+btrpkg pull TRUST STORE NAME /var/cache/pacman/pkg/x.pkg.btr
 btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # reflinks, falls back to copy
 btrpkg info x.pkg.btr
+# TRUST: --id HEX (header ID from the repo db) | --sig FILE [--keys DIR] (default IN.sig or the
+#        store's NAME.btridx.sig, keys in /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified
 ```
 
-`fetch` reads and checks the index first (header, chunk table, entries, small-file blob, each
-against its hash in the header), then checks every chunk against its hash in the table before
-writing it. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
+`fetch` and `pull` check the header first, against an expected ID or a signature, and refuse to
+go on without one (`--unverified` is for benchmarks). Then they check the index (chunk table,
+entries, small-file blob, each against its hash in the header), then every chunk before writing
+it: the hash of its stored bytes, and for a zstd chunk the hash of the data it decodes to, decoded
+the way btrfs will read it (one frame, window at most 128 KiB, no dictionary or checksum flag).
+`pull` reuses data from other cache files only after reading the range back and checking its hash.
+`install` resolves every path from a root directory fd with `openat2(RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS)`, so nothing is written, changed or linked through a symlink, whether the
+package made it or it was on disk (pacman refuses to extract through a symlink too); hardlinks may
+only point at earlier files of the same package. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
 compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
 trailing data, and on any failure removes its partial file.
 

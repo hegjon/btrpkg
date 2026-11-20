@@ -30,14 +30,14 @@ for fs in $FSTYPES; do
   echo "-- fetch + install (.pkg.btr, smoke set)"
   while read -r f; do
     g=${f%.pkg.tar.zst}
-    $B fetch /w/bench/out-s4k/$g.btrpkg $C/$g.pkg.btr 2>>$T/fetch.log
+    $B fetch --unverified /w/bench/out-s4k/$g.btrpkg $C/$g.pkg.btr 2>>$T/fetch.log
     $B install $C/$g.pkg.btr $R 2>>$T/install.log
     bsdtar -xp --numeric-owner -f /pkgs/$f -C $T/ref \
       --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG
   done <$SET
   echo "-- pull + install (hyprland 0.57.1-2, then 0.57.2-2 reusing its chunks)"
-  $B pull $S hyprland-0.57.1-2-x86_64 $C/hyprland-0.57.1-2.pkg.btr 2>>$T/fetch.log >/dev/null
-  $B pull $S hyprland-0.57.2-2-x86_64 $C/hyprland-0.57.2-2.pkg.btr 2>>$T/fetch.log | cut -f2-
+  $B pull --unverified $S hyprland-0.57.1-2-x86_64 $C/hyprland-0.57.1-2.pkg.btr 2>>$T/fetch.log >/dev/null
+  $B pull --unverified $S hyprland-0.57.2-2-x86_64 $C/hyprland-0.57.2-2.pkg.btr 2>>$T/fetch.log | cut -f2-
   $B install $C/hyprland-0.57.2-2.pkg.btr $R 2>>$T/install.log
   bsdtar -xp --numeric-owner -f $P/hyprland-0.57.2-2-x86_64.pkg.tar.zst -C $T/ref \
     --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG

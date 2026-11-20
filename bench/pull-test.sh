@@ -32,10 +32,10 @@ mount -o compress=zstd:3,subvol=@pkg $L $C
 
 echo "== initial install of the old versions (nothing cached)"
 u0=$(used)
-for pr in $PAIRS; do o=${pr%%:*}; $B pull $S $o-x86_64 $C/$o.pkg.btr 2>/dev/null; $B install $C/$o.pkg.btr $R 2>/dev/null; done | tee $OUT/pull-hypr-old.tsv
+for pr in $PAIRS; do o=${pr%%:*}; $B pull --unverified $S $o-x86_64 $C/$o.pkg.btr 2>/dev/null; $B install $C/$o.pkg.btr $R 2>/dev/null; done | tee $OUT/pull-hypr-old.tsv
 u1=$(used)
 echo "== upgrade: pull the new versions, reusing chunks of the cached old ones"
-for pr in $PAIRS; do n=${pr##*:}; $B pull $S $n-x86_64 $C/$n.pkg.btr 2>/tmp/pull.err || { cat /tmp/pull.err; exit 1; }; if grep -q unavailable /tmp/pull.err; then cat /tmp/pull.err; fi; done | tee $OUT/pull-hypr-new.tsv
+for pr in $PAIRS; do n=${pr##*:}; $B pull --unverified $S $n-x86_64 $C/$n.pkg.btr 2>/tmp/pull.err || { cat /tmp/pull.err; exit 1; }; if grep -q unavailable /tmp/pull.err; then cat /tmp/pull.err; fi; done | tee $OUT/pull-hypr-new.tsv
 u2=$(used)
 echo "== install the new versions over the old ones, then remove the old cache files"
 for pr in $PAIRS; do n=${pr##*:}; $B install $C/$n.pkg.btr $R 2>/dev/null; done
@@ -69,9 +69,9 @@ EOF
 f=/exp/store-bad/chunks/${h:0:2}/$h
 printf '\xff' | dd of=$f bs=1 seek=100 conv=notrunc status=none
 mkdir -p $C/fresh
-if $B pull /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: corrupt chunk accepted"; exit 1; fi
+if $B pull --unverified /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: corrupt chunk accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"
 echo "== tampered index"
 printf '\x00' | dd of=/exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx bs=1 seek=300 conv=notrunc status=none
-if $B pull /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: bad index accepted"; exit 1; fi
+if $B pull --unverified /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: bad index accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"
