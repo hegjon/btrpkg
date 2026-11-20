@@ -626,6 +626,16 @@ Other existing formats, none a drop-in:
 - **Generic encodings** (CBOR, protobuf, FlatBuffers, mtree) would fit only the entries section,
   which is 1.2 MB of the 23.7 MB. The fixed header, table and per-section hashes stay either way.
 
+`.MTREE` (makepkg's `bsdtar --format=mtree`, gzip, keywords `type uid gid mode time size sha256 link`,
+no xattrs) already travels inside every `.pkg.btr` as an ordinary file: 4.40 MB over the 315 set
+(0.7% of the 645.4 MB transport; 4.06 MB of it in chunks, being over the 4 KiB small-file limit).
+It holds what the entries hold, except data offsets and xattrs, plus a hex SHA-256 per file. Hyprland
+0.57.2: `.MTREE` 117 KB raw, 36.4 KB gzip, 31 KB zstd -19; its entries 80 KB raw, 10.9 KB zstd. Keep
+it: libalpm needs it for the local database (`--dbonly` builds the file list from it,
+`build_filelist_from_mtree` in `be_package.c`, and `pacman -Qkk` checks against it in `check.c`).
+Making it from the entries on the client instead would need a per-file SHA-256 in the entries
+(32 B per file) and would save about 1 MB (0.2%), so not worth a format change.
+
 ## pacman integration (design; step 1 tested by hand)
 
 Step 1, no pacman change: btrpkg places the files, then hands pacman a metadata-only package.
