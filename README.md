@@ -366,15 +366,17 @@ Prototype limits:
 
 A package is now its **index** (`x.btridx`): a small file with the package's metadata, its tiny
 files and a list of chunk hashes. The file data lives in chunk objects shared by all packages and
-versions. For the 315-package set (`--small 4096`):
+versions. For the 315-package set (`--small 4096`, format version 1):
 
 | part of the index | total (315 indexes) | |
 |---|---:|---|
-| manifest, zstd | 19.4 MB (88%) | paths, modes, owners, mtimes, xattrs, symlinks, **plus the contents of all files ≤ 4 KiB** (60 MB uncompressed) |
-| chunk table | 2.7 MB (12%) | 48,118 entries × 56 B (offset, lengths, compression, sha256) |
-| header + digest | 0.03 MB | |
+| small-file blob, zstd | 18.2 MB (77%) | the contents of all files ≤ 4 KiB (60.3 MB uncompressed) |
+| chunk table | 4.2 MB (18%) | 48,118 entries × 88 B (offset, lengths, compression, SHA-256 of stored and of uncompressed bytes) |
+| entries, zstd | 1.2 MB (5%) | paths, modes, owners, mtimes, xattrs, symlinks (15.6 MB uncompressed) |
+| headers | 0.08 MB | 256 B each, with the section hashes (what the signature covers) |
 
-Median index 10 KB, 90th percentile 115 KB, largest ansible at 3.5 MB (53,668 files).
+Median index 11.4 KB, 90th percentile 124 KB, largest ansible at 4.2 MB (53,668 files). Total
+23.7 MB; it was 22.1 MB in format version 0 (56 B table entries).
 
 ### Layout
 
@@ -382,7 +384,7 @@ Median index 10 KB, 90th percentile 115 KB, largest ansible at 3.5 MB (53,668 fi
 <repo root>/                                  (bucket, or a directory served over HTTP)
   x86_64/omarchy.db[.sig]                     repo database: the only object that changes
   index/hyprland-0.57.2-2-x86_64.btridx        one per package version, immutable
-  index/hyprland-0.57.2-2-x86_64.btridx.sig    detached signature, immutable
+  index/hyprland-0.57.2-2-x86_64.btridx.sig    detached Ed25519 signature, immutable
   chunks/ab/ab12…ef                            chunk bytes as stored on disk, named by their sha256;
                                                shared by all packages, versions, repos and architectures
 (build server only, not published)
@@ -419,6 +421,8 @@ are missing.
 | 4 KiB | 47,518 | 612.7 MB | 22.1 MB | 634.8 MB | 4.5 KB |
 | 16 KiB | 22,939 | 535.4 MB | 53.8 MB | 589.2 MB | 12.4 KB |
 | 64 KiB | 12,326 | 447.1 MB | 105.1 MB | 552.2 MB | 31.8 KB |
+
+  (Index sizes measured with format version 0; version 1 adds 32 B per chunk, 23.7 MB at 4 KiB.)
 
   Files inside the index are written as plain data at install (the kernel compresses them at
   `zstd:3`). At 64 KiB the earlier bench measured 1.18 GB written against 0.97 GB at 4 KiB, still
@@ -497,55 +501,56 @@ What this machine does today: `SigLevel = Required DatabaseOptional`. Every pack
 detached OpenPGP signature (Arch packagers, or "Omarchy <pkgs@omarchy.org>" for the Omarchy
 repo). The repo databases are unsigned (`omarchy.db.sig` is a 404).
 
+**Decision: plain Ed25519, as OpenBSD does, in the Alpine apk v3 structure.**
+- **OpenBSD** (`signify`, `pkg_add`): Ed25519, public keys as files in `/etc/signify/*-pkg.pub`,
+  and the signature is checked before anything is decompressed.
+- **Alpine apk v3:** one metadata block holds every file's hash. A digest of that block is
+  signed, the data blocks are covered by the hashes, and keys are files (`/etc/apk/keys`) looked
+  up by key ID. Alpine still signs with RSA keys (apk v2 `.SIGN.RSA.*`; v3 lists "newer signature
+  algorithms"), so btrpkg takes the structure from Alpine and the algorithm from OpenBSD.
+
 For btrpkg:
-1. **Sign the index, not the chunks.** `x.btridx.sig` is a detached OpenPGP signature, made and
-   checked with the same tools and keyring as pacman (`gpg --detach-sign`, `gpgv` / libalpm
-   against `/etc/pacman.d/gnupg`). The index holds every chunk's sha256, so one signature covers
-   manifest, small files, layout and all data, as a hash tree (like an OSTree commit signature
-   or a signed casync index). Chunks need no signatures of their own.
-2. **Order on the client.** Download the index and its `.sig`, and verify before parsing
-   anything. Check each chunk's sha256 before it reaches `BTRFS_IOC_ENCODED_WRITE` (`pull`
-   already does). The kernel stores frames without checking them, so this check is the only
-   protection against a bad frame. A malicious frame signed by a trusted key is the same risk as
-   a malicious signed package, which runs as root anyway.
-3. **Re-verifying the cache.** pacman checks the signature of a cached package at every install.
-   A btrpkg cache file is assembled, not the signed bytes, so re-verification means: verify the
-   kept index and its `.sig`, then hash each chunk in the cache file. `BTRFS_IOC_ENCODED_READ`
-   returns the stored compressed bytes, so this needs no decompression (root, as installs are).
-   On filesystems without encoded I/O the cache holds plain data. That would need the
-   uncompressed hash in the index too (+32 B per chunk, 1.5 MB for the set).
-4. **Who signs.** Arch's packager signatures cover the `.pkg.tar.zst` bytes. Converting creates
-   new bytes, so those signatures can't be carried over, nor checked without downloading the
-   original. Converted packages are signed by whoever converts, in practice the Omarchy repo
-   key. This machine already fully trusts that key, but only for Omarchy's own packages; trusting
-   it for Arch's packages is a new trust decision. The converter must verify the Arch signature on
-   every input before converting. The index can record the original file's sha256 and its Arch
-   signature for audit. Conversion is deterministic, so anyone can download the original,
-   convert it and compare the uncompressed chunk hashes to check what the converter signed.
-5. **The `raw/` map stays private** on the build server. Before reusing a mapped chunk,
-   `publish` must check that it decompresses to the same data (the prototype trusts the map).
-   Otherwise a corrupted map would get a wrong chunk signed.
-6. **Repo database.** Signing the index doesn't stop a mirror from serving an older, validly
-   signed index or database (freeze or rollback). That's the same gap pacman has today with
+1. **Sign the index header.** The header holds the SHA-256 of the chunk table, entries and blob,
+   and the table holds every chunk's hashes. So one Ed25519 signature over the header covers
+   manifest, small files, layout and all data, with a namespace string (`btrpkg-index-v1`) so it
+   can't be reused elsewhere. Chunks have no signatures of their own.
+2. **Keys are files.** Public keys go in `/usr/share/btrpkg/keys/` (from a keyring package) and
+   `/etc/btrpkg/keys/` (local). The signature names its key. There's no GPG, trustdb, agent or
+   keyserver on the btrpkg path. What GPG did that has to be replaced: revocation (a
+   revoked-keys file in the key directory) and rotation (a new keyring package signed by the
+   old key).
+3. **Speed** (desktop): Ed25519 verify 44 µs (22,584/s, `openssl speed`), against `gpgv` 6.8 ms
+   per package, of which about 4.8 ms is hashing the package.
+4. **Order on the client.** Download the index and its signature, and verify before parsing
+   anything else. Check every chunk before it reaches `BTRFS_IOC_ENCODED_WRITE`. The kernel
+   stores frames without checking them, so this check is the only protection against a bad
+   frame.
+5. **Sign what is published.** `publish` can rewrite the chunk table when it reuses stored
+   chunks (a compressor change), which changes the header. So the signature is made over the
+   index as published, not at convert time.
+6. **Re-verifying the cache.** Verify the cache file's own index header against its signature,
+   then hash the chunks in the image. `BTRFS_IOC_ENCODED_READ` returns the stored bytes, so no
+   decompression is needed. On other filesystems the table's uncompressed hash (format
+   version 1) covers plain data.
+7. **Who signs.** Iteration 1 covers Omarchy's own packages only (`PLAN.md`), signed with the
+   Omarchy repo key. Arch's packages would need converting, and Arch's OpenPGP packager
+   signatures cover the `.pkg.tar.zst` bytes, which a conversion changes. The build server would
+   check those signatures once with `gpgv` and pacman's keyring, then sign the index with the repo
+   key. That's a new trust decision, so it stays out of scope for now. Conversion is
+   deterministic, so anyone can download the original, convert it and compare the uncompressed
+   chunk hashes.
+8. **The `raw/` map stays private** on the build server. `publish` checks that a mapped chunk
+   decompresses to the same data before reusing it (format version 1).
+9. **Repo database.** Signing the index doesn't stop a mirror from serving an older, validly
+   signed index or database (freeze or rollback). That's the same gap pacman has with
    `DatabaseOptional`. Signing the database (or TUF-style timestamped metadata) closes it for
    both.
-7. **On S3** signatures are ordinary immutable objects. The signing key stays on the build host:
-   whoever can write to the bucket can delete objects or serve old ones, but can't forge a
-   package.
+10. **On S3,** signatures are ordinary immutable objects. The signing key stays on the build host:
+    whoever can write to the bucket can delete objects or serve old ones, but can't forge a
+    package.
 
-Not implemented yet: `publish --sign KEYID`, verifying in `pull` (`gpgv` with pacman's keyring,
-or `sqv`), re-verifying the cache, and checking the `raw/` map in `publish`.
-
-Alternative to OpenPGP for btrpkg's own signatures (Jonny asked, 2026-11-19): plain Ed25519, the
-apk/signify/minisign model. Public keys are files shipped in a keyring package, verified in-process
-(libcrypto or libsodium), no `pacman-key --init`, trustdb, agent or keyserver. Measured on the
-desktop: Ed25519 verify 22,584/s (44 µs) with `openssl speed`; `gpgv` 6.8 ms per package of which
-about 4.8 ms is hashing the package; `ssh-keygen -Y verify` 1.4 ms including process start (298 B
-signature). Sign with a namespace string (e.g. `btrpkg-index-v1`) so a signature can't be reused
-elsewhere. What GPG gave that has to be replaced: revocation (a revoked-keys list in the keyring
-package) and rotation (new keyring package signed by the old key). pacman's `.pkg.tar.zst` path
-still needs the OpenPGP keyring for Arch's packager signatures; the build server checks those once
-and signs the index with the repo key.
+Not implemented yet (milestone 2 in `PLAN.md`): `btrpkg keygen`, `publish --key`, verifying in
+`fetch`/`pull`/`install`, revoked keys, and re-verifying the cache.
 
 ## Other filesystems than btrfs (from the code, not tested yet)
 

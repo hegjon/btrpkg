@@ -40,6 +40,10 @@ frontend, filesystems other than btrfs, Arch's packages.
 2. **Signing and keys.**
    `btrpkg keygen`, `publish --key`, Ed25519 over the header with the namespace
    `btrpkg-index-v1`; the signature names its key file. A revoked-keys file in the key directory.
+   Sign in `publish`, after any raw-map remapping: remapping rewrites the table and so the header,
+   so a signature made at convert time would not match the published index. Model: OpenBSD
+   signify (Ed25519, keys as files) in Alpine apk v3's structure (one signed metadata block that
+   holds every hash).
    Done when: a valid index passes, and a tampered index, an unknown key and a revoked key fail.
 
 3. **Repo tool.**
@@ -68,6 +72,35 @@ frontend, filesystems other than btrfs, Arch's packages.
    The same upgrades through pacman and btrpkg on several lab machines: bytes downloaded, time,
    bytes written, disk used, plus a fresh install of a package set. Results in the README and a
    History bullet in the infrastructure notes.
+
+## Review findings to fix before milestone 2 (2026-11-20)
+
+From a review of `eca5b8b`; the first three are shown by working proofs of concept.
+- **Critical: `install` follows symlinks the package created.** A symlink `a` → `/etc`, then a
+  file `a/passwd`, writes outside the root; so do a directory entry over a symlink (chmod follows
+  it) and hardlinks to existing files. Resolve every path from a root dirfd without following
+  symlinks (`openat2` `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS`, `fchmodat`/`fchownat`). Hardlink
+  targets must be earlier files of the same package. The bug has been there since version 0.
+- **High: the uncompressed hash is never checked**, but `pull` reuses chunks by it, so one
+  self-consistent package can plant bad data in a later one. Decompress every zstd chunk before
+  `ENCODED_WRITE` (window ≤ 2^17, exactly `unencoded_len` bytes, hash = `raw`), and check reused
+  ranges or only reuse from verified cache files.
+- **High: `fetch` writes chunks before the index is authenticated.** `--sha256` is checked
+  after the writes and is optional. Check an expected header ID (later: the signature) right after
+  reading the index.
+- **Medium:**
+  - Decompression bomb: `MAX_RAW` 16 GiB per section; a 33 KB index reached 1.5 GB RSS.
+  - `align` overflows on huge sizes.
+  - `install` leaves `.btrpkg-new` files behind on errors.
+  - The outer-zstd reader allocates from frame content sizes and allows a 2 GiB window.
+- **Low:**
+  - No fsync before renames.
+  - `unhex` panics on non-ASCII text.
+  - `publish` trusts existing store chunks.
+  - `with_extension("part")` can make two cache files share one temp name.
+  - `pull` opens every cache file in the directory on every pull.
+- **Tests to add:** symlink escape, a wrong uncompressed hash, reuse from a bad cache file, a bad
+  raw-map entry, cleanup after a failed install.
 
 ## Risks
 
