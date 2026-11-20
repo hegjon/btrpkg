@@ -1,0 +1,16 @@
+host t460s part nvme0n1p2 cpu 'Intel(R) Core(TM) i7-6600U CPU @ 2.60GHz' cache /var/cache/pacman/pkg/
+targets (10): aether mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros omasnap owe owe-lockfeed qtengine quickshell
+aether 4.32.0-2 mise-bin 2026.11.7-1 omarchy-dev 4.0.0.r7840.gac6cb9c-1 omarchy-local-ai 0.6.4-1 omarchy-themes-intros 2026.10.25-1 omasnap 1.26.2-2 owe 0.2.15-1 owe-lockfeed 0.2.15-1 qtengine 0.2.4-5 quickshell 0.3.2.r7.g2b4501a-10 
+pacman would download: 334907812 bytes
+baseline snapshot 14 (0.42 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	9.19	334909002	738906112	698638336	0	426ca57e
+btrpkg	1	0	6.48	161764794	202055680	172097536	0	426ca57e
+btrpkg	2	0	6.55	161764794	202268672	141856768	0	426ca57e
+pacman	2	0	9.55	334909002	724131840	482111488	0	426ca57e
+pacman	3	0	9.03	334909002	723202048	529920000	0	426ca57e
+btrpkg	3	0	6.54	161764794	202223616	172097536	0	426ca57e
+load at end: 1.59 0.76 0.57
+phases: [("databases+indexes", 0.674615415), ("conflicts", 0.145548401), ("pull", 4.853031756), ("pacman-check", 0.08130708), ("place", 0.345833761), ("remove", 0.000588179), ("pacman-dbonly+hooks", 0.231578711)], targets
+phases: [("databases+indexes", 0.68637029), ("conflicts", 0.182515968), ("pull", 4.891363435), ("pacman-check", 0.080130681), ("place", 0.34066464), ("remove", 0.000566659), ("pacman-dbonly+hooks", 0.221426794)], targets
+phases: [("databases+indexes", 0.692694055), ("conflicts", 0.174840896), ("pull", 4.86591369), ("pacman-check", 0.079250132), ("place", 0.347121055), ("remove", 0.000545699), ("pacman-dbonly+hooks", 0.225643135)], targets

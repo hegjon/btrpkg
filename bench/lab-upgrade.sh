@@ -3,7 +3,7 @@
 #   root@host: bash lab-upgrade.sh OUTDIR [ROUNDS]
 # OUTDIR must be outside the root subvolume (e.g. /var/log/..., which is @log on Omarchy): every
 # reset rolls @ back to the baseline snapshot and would take the results with it.
-# Needs: /usr/local/bin/pacbtr, /etc/btrpkg/keys/*.pub, /etc/btrpkg/pacman-test.conf (its [omarchy]
+# Needs: /tmp/fix-mtimes.py, /usr/local/bin/pacbtr, /etc/btrpkg/keys/*.pub, /etc/btrpkg/pacman-test.conf (its [omarchy]
 # points at the btrpkg test repo), snapper config `root`.
 # Takes a baseline snapshot S of the current ("old") state, then per round and scenario:
 #   empty the package cache of the target versions, drop caches, run the upgrade, sync, record
@@ -39,6 +39,8 @@ echo "baseline snapshot $S ($(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.2f", b-a}')
 clean_cache() { for f in $newfiles; do rm -f "$CACHE/$f" "$CACHE/$f.sig"; done; rm -f "$CACHE"/*.pkg.btr "$CACHE"/*.pkg.btr.part; }
 reset() {
   snapper -c root undochange $S..0 >/dev/null 2>&1 || { echo "undochange failed"; exit 1; }
+  # undochange stamps restored files with the current time; put the packages' times back
+  python3 /tmp/fix-mtimes.py "${T[@]}" >/dev/null
   clean_cache; sync
 }
 run() { # $1 scenario, $2 round

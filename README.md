@@ -42,15 +42,95 @@ btrpkg info x.pkg.btr
 `fetch` and `pull` check the header first, against an expected ID or a signature, and refuse to
 go on without one (`--unverified` is for benchmarks). Then they check the index (chunk table,
 entries, small-file blob, each against its hash in the header), then every chunk before writing
-it: the hash of its stored bytes, and for a zstd chunk the hash of the data it decodes to, decoded
-the way btrfs will read it (one frame, window at most 128 KiB, no dictionary or checksum flag).
-`pull` reuses data from other cache files only after reading the range back and checking its hash.
+it: the hash of its stored bytes (which the signed index covers) and, for a zstd chunk, the frame
+header btrfs relies on (one frame, no dictionary ID or checksum flag, content size = unencoded
+length). `--verify-data` also decodes every frame the way btrfs will (window at most 128 KiB) and
+checks the unencoded hash; `publish` always does. The client doesn't need it for safety: data is
+only ever reused (from an older cache file or an installed file) after reading it back and
+checking its unencoded hash, and on a CPU without SHA instructions the full check cost 7 s of 27 s
+for the 315-package set (t460s).
 `install` resolves every path from a root directory fd with `openat2(RESOLVE_BENEATH |
 RESOLVE_NO_SYMLINKS)`, so nothing is written, changed or linked through a symlink, whether the
 package made it or it was on disk (pacman refuses to extract through a symlink too); hardlinks may
 only point at earlier files of the same package. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
 compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
 trailing data, and on any failure removes its partial file.
+
+## Iteration 1: repo, client and upgrades on the lab (2026-11-21)
+
+`PLAN.md` has the milestones. What exists now:
+- `btrpkg repo-update DIR REPO`: checks each package's OpenPGP signature (`gpgv`, pacman's
+  keyring) and its sha256 against the database, converts, publishes chunks, a signify signature
+  and the index, then rewrites the database with `btrpkg.index=`, `btrpkg.id=`, `btrpkg.size=` in
+  `%DATA%`. Plain pacman reads the result unchanged (`pacman -Si` byte-identical for all 51 test
+  packages, signed installs work).
+- `btrpkg pull DIR|URL`: libcurl multi, HTTP/2 (64 in flight) or HTTP/1.1 (8 connections). Each
+  chunk comes from an older cache file of the same package, then from the installed file of the
+  same path (read back, checked against the unencoded hash, whole pieces reflinked), then the
+  server.
+- `btrpkg upgrade` / `pacbtr`: targets are installed packages whose sync entry has btrpkg data and
+  no `.INSTALL` or backup files; indexes must match the database's ID and carry a signature from
+  `/etc/btrpkg/keys`; `pacman -U --print` of metadata-only packages checks dependencies and
+  conflicts; file conflicts against the local database; pull; `syncfs`; snapper snapshot; place;
+  remove the old versions' files; `pacman -U --dbonly` (hooks run there). On failure:
+  `snapper undochange` and the snapshot's mtimes put back (undochange alone stamps restored files
+  with the current time and `pacman -Qkk` reports them).
+
+### Upgrades: pacman against btrpkg on four lab machines
+
+`bench/lab-upgrade.sh`, 3 rounds, alternating order, reset between runs with a baseline snapper
+snapshot (`snapper undochange`, then `bench/fix-mtimes.py`). Real pending upgrades from the
+Omarchy edge test repo (51 packages, `~/Work/btrpkg-repo`, caddy on the desktop with h1 + h2c):
+x200, t490 and t460s 10 packages (aether, mise-bin, omarchy-dev, omarchy-local-ai,
+omarchy-themes-intros, omasnap, owe, owe-lockfeed, qtengine, quickshell; their installed versions
+were 1-4 weeks old), p14s 5 of them. pacman: `pacman -S --needed` (download, signature checks,
+extraction, hooks). btrpkg: `pacbtr --no-snapshot` (the snapshot alone took 0.37 s on t460s).
+Times include the final `sync`; writes are counted on the root's partition (below LUKS2); space is
+btrfs data used afterwards, package cache included. Every run ended with the same package versions
+and `pacman -Qkk` clean. Binary `43ffda5`; results in `bench/results/lab-20261121/`.
+
+| host | pacman | btrpkg | downloaded pacman / btrpkg | written pacman / btrpkg | space pacman / btrpkg |
+|---|---:|---:|---:|---:|---:|
+| p14s (Ryzen 7 5850U, NVMe) | 5.11 s | 2.38 s | 318 / 69 MB | 685 / 105 MB | 414 / 79 MB |
+| t460s (i7-6600U, NVMe) | 9.19 s | 6.54 s | 335 / 162 MB | 724 / 202 MB | 530 / 172 MB |
+| t490 (i5-8265U, SATA SSD) | 11.44 s | 7.54 s | 335 / 162 MB | 722 / 200 MB | 530 / 172 MB |
+| x200 (Core 2 Duo P8400, SATA SSD) | 34.78 s | 22.41 s | 335 / 162 MB | 737 / 206 MB | 530 / 172 MB |
+
+btrpkg: half the download (a fifth on p14s; the rest comes from the installed versions), 3.5-6.5x
+fewer bytes written, 3-5x less space, 1.4-2.1x faster. `pull` is most of btrpkg's time (p14s 1.2 s,
+t460s 4.9 s, x200 17.6 s of the totals); placing the files takes 0.3-0.7 s and `pacman --dbonly`
+with hooks 0.2-0.6 s. On the older machines `pull` is CPU: reading back and hashing the unchanged
+data of installed files (one thread, SHA-256 without CPU instructions) and per-package requests,
+not the network (the tunnel moved 117 MB/s, line rate, for p14s).
+
+### Fresh install of the 315-package set on the same machines
+
+`bench/lab-fresh.sh`, 3 rounds, throwaway subvolumes (cache inside `@pkg`, root inside `@`), inputs
+from tmpfs. pacman-style: copy the `.pkg.tar.zst` into the cache, `bsdtar -xp` (no signature
+checks); btrpkg: `fetch --no-fsync` + `install`, one `sync` at the end.
+
+| host | pacman-style | btrpkg | written | cache + root | root alone |
+|---|---:|---:|---:|---:|---:|
+| p14s | 11.58 s | 9.29 s | 1,910 / 990 MB | 1,640 / 749 MB | 1,154 / 719 MB |
+| t460s | 17.68 s | 15.74 s | 1,918 / 1,000 MB | 1,634 / 749 MB | 1,148 / 719 MB |
+| t490 | 17.78 s | 14.67 s | 1,897 / 991 MB | 1,620 / 749 MB | 1,134 / 719 MB |
+| x200 | 56.14 s | 37.20 s | 1,905 / 1,004 MB | 1,622 / 749 MB | 1,136 / 719 MB |
+
+### What the first lab round changed
+
+The first round (binary `2e610de`, same machines, same night) had btrpkg *slower* than bsdtar for
+fresh installs on t460s (26.8 s against 17.7 s) and writing 340-370 MB for the upgrades. Three
+causes, measured on t460s: decoding and hashing every chunk at fetch time (7.3 s; now opt-in, see
+above), an fsync per cache file (1.4 s; now one `syncfs` per upgrade), and data taken from installed
+files being compressed and written into the cache again (now reflinked when it is a whole piece).
+Plus fewer syscalls in `install`: new paths are created under their own name (a temporary name and
+rename only when replacing a file), and the parent directory fd is reused.
+
+Not covered: the network path is an ssh reverse tunnel, because the desktop's firewall only lets
+the lab reach pacoloco; a real mirror has latency, and pkgs.omarchy.org serves only HTTP/1.1.
+Packages left to pacman in this set: limine-mkinitcpio-hook, limine-snapper-sync (backup files),
+omarchy-settings-dev, omawrite, signed (install scripts). The local database records
+`%VALIDATION% none` for packages upgraded this way.
 
 ## Format (version 1)
 

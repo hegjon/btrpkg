@@ -89,7 +89,9 @@ frontend, filesystems other than btrfs, Arch's packages.
    Done when: after an upgrade `pacman -Qkk` is clean, a later `pacman -Syu` sees nothing odd,
    and a failure injected mid-upgrade is undone by the snapshot.
 
-6. **Measure on the lab.**
+6. **Measure on the lab.** Done 2026-11-21: p14s, t460s, t490, x200; tables in the README
+   ("Iteration 1"). Upgrades 1.4-2.1x faster with a fifth to half of the download and 3.5-6.5x fewer writes;
+   fresh installs of the 315 set 1.1-1.5x faster with half the writes.
    The same upgrades through pacman and btrpkg on several lab machines: bytes downloaded, time,
    bytes written, disk used, plus a fresh install of a package set. Results in the README and a
    History bullet in the infrastructure notes.

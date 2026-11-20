@@ -1,0 +1,16 @@
+host p14s part nvme0n1p2 cpu 'AMD Ryzen 7 PRO 5850U with Radeon Graphics' cache /var/cache/pacman/pkg/
+targets (5): mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros owe
+mise-bin 2026.11.9-1 omarchy-dev 4.0.0.r8025.gb972bd8-1 omarchy-local-ai 0.6.5-1 omarchy-themes-intros 2026.11.18-1 owe 0.2.16-1 
+pacman would download: 317998811 bytes
+baseline snapshot 8 (0.16 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	5.05	317999406	693870592	663052288	0	62308c4c
+btrpkg	1	0	2.38	68811587	104833024	78884864	0	62308c4c
+btrpkg	2	0	2.38	68811587	104513536	56139776	0	62308c4c
+pacman	2	0	5.17	317999406	684937216	392445952	0	62308c4c
+pacman	3	0	5.11	317999406	685158400	414380032	0	62308c4c
+btrpkg	3	0	2.39	68811587	105234432	78884864	0	62308c4c
+load at end: 0.84 0.37 0.24
+phases: [("databases+indexes", 0.412472164), ("conflicts", 0.090542433), ("pull", 1.240223631), ("pacman-check", 0.05120774), ("place", 0.312240936), ("remove", 0.000266793), ("pacman-dbonly+hooks", 0.156618472)], targets
+phases: [("databases+indexes", 0.421555936), ("conflicts", 0.092854296), ("pull", 1.2262165999999999), ("pacman-check", 0.051675342), ("place", 0.311694103), ("remove", 0.00024337), ("pacman-dbonly+hooks", 0.15670249)], targets
+phases: [("databases+indexes", 0.420202986), ("conflicts", 0.090742048), ("pull", 1.242383542), ("pacman-check", 0.052279121), ("place", 0.313215199), ("remove", 0.000283596), ("pacman-dbonly+hooks", 0.156952289)], targets
