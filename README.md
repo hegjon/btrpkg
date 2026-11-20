@@ -584,6 +584,48 @@ Known gaps:
 - **Never run:** `bench/nonbtrfs-test.sh` (tmpfs, ext4 and XFS against `bsdtar`) is written but
   hasn't been run yet.
 
+## A standard index format? SQLite and others (measured 2026-11-20)
+
+`bench/sqlite_index.py bench/out-v1 OUT` rewrites the 315 version-1 indexes (118,286 entries,
+48,118 chunks) as SQLite files:
+
+| index | on disk | download (zstd -19) | read all 315 (Python) |
+|---|---:|---:|---:|
+| version 1 | 23.7 MB | 23.7 MB | 129 ms |
+| SQLite, small files as one row each | 101.7 MB | 24.3 MB (+3%) | 137 ms |
+| SQLite, small-file blob as one zstd column | 40.3 MB | 23.6 MB (−1%) | 127 ms |
+
+SQLite doesn't hurt speed or download size: about 0.4 ms per package against about 9 ms of install
+per package. It doesn't suit the transport, for other reasons:
+- A database has to be downloaded whole and decompressed before the first query. Version 1 checks
+  the header and chunk table first and starts chunk downloads while the entries and blob arrive.
+- The index is the first part of `.pkg.btr` and of the cache file, so one header (and later one
+  signature) holds everywhere. A database would be a separate file.
+- The bytes depend on the SQLite version, so a republished index can get a new hash and name.
+- libalpm doesn't link SQLite. The reader in `src/format.rs` (header, table, entries, checks) is
+  about 150 lines, small enough to port to C for the libalpm patch.
+
+Where the 23.7 MB goes: small-file blob 18.2 MB, chunk table 4.2 MB, entries 1.2 MB, headers 0.08 MB.
+
+SQLite does fit on the client: as the local index of which chunk hashes are in the cache (`pull`
+opens every cache file on every pull now), or as a local package database later.
+
+Other existing formats, none a drop-in:
+- **zstd:chunked / eStargz** (containers/storage, OCI layers): a `.tar.zst` with each file's data
+  in its own zstd frames and a table of contents in a trailing skippable frame. This is the closest
+  match, and it points to a design: a `.pkg.btr` whose 128 KiB frames sit inside a valid tar
+  stream would also be a `.pkg.tar.zst` that pacman installs unchanged. Tested only that libarchive
+  accepts it: a pax tar cut into separate 128 KiB zstd frames, plus a trailing skippable frame,
+  passes `zstd -t` and `bsdtar -x` (byte-identical). Not built: aligning frame boundaries with file
+  data, `.PKGINFO` first, and its size (the +15–32% of per-extent frames would then hit pacman
+  users too).
+- **casync `.caidx`**: a chunk list without file metadata, with content-defined chunks that don't
+  fit btrfs extents.
+- **composefs/EROFS** (OSTree, bootc): a metadata image plus objects named by digest, close to the
+  store layout, but its objects are whole uncompressed files, not encoded extents.
+- **Generic encodings** (CBOR, protobuf, FlatBuffers, mtree) would fit only the entries section,
+  which is 1.2 MB of the 23.7 MB. The fixed header, table and per-section hashes stay either way.
+
 ## pacman integration (design; step 1 tested by hand)
 
 Step 1, no pacman change: btrpkg places the files, then hands pacman a metadata-only package.
