@@ -432,7 +432,15 @@ impl ChunkWriter {
 /// .pkg.btr.zst are framed here (in parallel, at `level`) so they land compressed too.
 /// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps in the repo
 /// database); optional, the index and chunk hashes already cover the contents.
+pub(crate) struct FetchOpts { pub use_encoded: bool, pub level: i32, pub verify_data: bool, pub fsync: bool }
+
+#[allow(dead_code)]
 pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: Option<&str>, trust: &sign::Trust) -> Result<FetchStats> {
+    fetch_with(input, cache, file_sha256, trust, &FetchOpts { use_encoded, level, verify_data: false, fsync: true })
+}
+
+pub(crate) fn fetch_with(input: &str, cache: &Path, file_sha256: Option<&str>, trust: &sign::Trust, o: &FetchOpts) -> Result<FetchStats> {
+    let (use_encoded, level) = (o.use_encoded, o.level);
     let mut src: Box<dyn Read + Send> = if input == "-" { Box::new(io::stdin()) } else { Box::new(File::open(input)?) };
     let mut magic = [0u8; 4];
     src.read_exact(&mut magic).context("empty package")?;
@@ -476,7 +484,7 @@ pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, fi
                     i += 1;
                 }
                 // Checked here, while the writer is busy with the previous batch.
-                batch.par_iter().try_for_each(|(i, c, d)| check_chunk(*i, c, d))?;
+                batch.par_iter().try_for_each(|(i, c, d)| if o.verify_data { check_chunk_full(*i, c, d) } else { check_chunk(*i, c, d) })?;
                 if tx.send(batch).is_err() { bail!("writer stopped"); }
             }
             drop(tx);
@@ -519,7 +527,7 @@ pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, fi
         // The index goes in front of the image, so the cache file describes itself.
         out.write_all_at(&idx.bytes, 0)?;
         out.set_len(idx.hdr.cache_len())?;
-        out.sync_all()?;
+        if o.fsync { out.sync_all()?; }
         Ok(())
     });
     drop(out);
@@ -663,13 +671,13 @@ fn info(p: &Path) -> Result<()> {
 
 const USAGE: &str = "usage:
   btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN.pkg.tar.zst OUT(.pkg.btr|.pkg.btr.zst)
-  btrpkg fetch [TRUST] [--no-encoded] [-l N] [--sha256 HEX] IN|- CACHE
+  btrpkg fetch [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [-l N] [--sha256 HEX] IN|- CACHE
   btrpkg install [--copy] CACHE ROOT
   btrpkg info FILE
   btrpkg keygen NAME                      (writes NAME.sec and NAME.pub)
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
-  btrpkg pull [TRUST] [--no-encoded] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
+  btrpkg pull [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
@@ -744,7 +752,7 @@ fn main() -> Result<()> {
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
-            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" => flags.push(a.as_str()),
+            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" => flags.push(a.as_str()),
             s if s.starts_with('-') && s.len() > 1 => bail!("unknown option {s}\n{USAGE}"),
             s => pos.push(s),
         }
@@ -758,8 +766,8 @@ fn main() -> Result<()> {
         }
         ["fetch", i, c] => {
             let t = trust.resolve(if *i == "-" { None } else { fs::read_to_string(format!("{i}.sig")).ok() })?;
-            fetch(i, Path::new(c), !flags.contains(&"--no-encoded"), level.unwrap_or(3), sha.as_deref(), &t)
-                .map(|st| eprintln!("fetch: {st:?}"))
+            let fo = FetchOpts { use_encoded: !flags.contains(&"--no-encoded"), level: level.unwrap_or(3), verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync") };
+            fetch_with(i, Path::new(c), sha.as_deref(), &t, &fo).map(|st| eprintln!("fetch: {st:?}"))
         }
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")).map(|st| eprintln!("install: {st:?}")),
         ["info", p] => info(Path::new(p)),
@@ -786,7 +794,8 @@ fn main() -> Result<()> {
             let mut ns = net::NetStats::default();
             let (ib, sig) = store::fetch_index(&src, n, &mut ns)?;
             let t = trust.resolve(sig)?;
-            let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3) };
+            let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3),
+                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync") };
             store::pull_index(&src, n, &ib, Path::new(c), &t, &o, ns).map(|st| {
                 eprintln!("pull: {st:?}");
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
@@ -822,7 +831,7 @@ mod tests {
     const U: sign::Trust = sign::Trust::Unverified;
 
     fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
-        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3 })
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true })
     }
 
     pub(crate) struct TempDir(pub PathBuf);
@@ -1079,7 +1088,7 @@ mod tests {
     #[test]
     fn wrong_unencoded_hash_is_refused() {
         let t = TempDir::new("rawhash");
-        let src = make_pkg(&t.0, "w-1-1", &spec(6));
+        let src = make_pkg(&t.0, "w-1-1", &spec(10));
         let good = t.0.join("w.pkg.btr");
         convert_to(&src, &good, 19);
         let b = fs::read(&good).unwrap();
@@ -1092,11 +1101,27 @@ mod tests {
         let bad = t.0.join("bad.pkg.btr");
         fs::write(&bad, [ib.as_slice(), &b[idx.bytes.len()..]].concat()).unwrap();
         let cache = t.0.join("c.pkg.btr");
-        let e = fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U).unwrap_err();
+        // --verify-data decodes every chunk: refused, nothing left
+        let full = FetchOpts { use_encoded: true, level: 3, verify_data: true, fsync: false };
+        let e = fetch_with(bad.to_str().unwrap(), &cache, None, &U, &full).unwrap_err();
         assert!(format!("{e:#}").contains("unencoded hash"), "{e:#}");
         assert!(!cache.exists() && !part_path(&cache).exists());
-        // and publish refuses it too
+        // publish refuses it too
         assert!(store::publish(&bad, &t.0.join("store"), None).is_err());
+        // the default fetch checks what the signed stored hash covers, so it takes the chunk; the
+        // wrong unencoded hash can't be used for reuse later: reuse reads the data back
+        let cdir = t.0.join("cdir");
+        fs::create_dir_all(&cdir).unwrap();
+        fetch(bad.to_str().unwrap(), &cdir.join("w-1-1.pkg.btr"), true, 3, None, &U).unwrap();
+        let store = t.0.join("store");
+        let src2 = make_pkg(&t.0, "w-1-2", &spec(10));
+        convert_to(&src2, &t.0.join("w-1-2.pkg.btr"), 19);
+        store::publish(&t.0.join("w-1-2.pkg.btr"), &store, None).unwrap();
+        let p = pull_dir(&store, "w-1-2", &cdir.join("w-1-2.pkg.btr"), &U).unwrap();
+        assert!(p.bad_local == 0 && p.reused_chunks == (idx.chunks.len() - 1) as u64, "{p:?}");
+        let root = t.0.join("root");
+        install(&cdir.join("w-1-2.pkg.btr"), &root, false).unwrap();
+        check_tree(&root, &spec(10));
     }
 
     #[test]
@@ -1216,7 +1241,7 @@ mod tests {
         fs::remove_dir_all(&other).unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3 };
+        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true };
         let src = net::Source::Dir(store.clone());
         let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
         // tool (300 kB, 3 chunks) is unchanged and comes from the installed file

@@ -55,7 +55,7 @@ pub(crate) fn publish(input: &Path, store: &Path, key: Option<(&sign::SecretKey,
         pos += e;
     }
     // Check every chunk, and the raw hash too: it is what reuse across builds relies on.
-    items.par_iter().enumerate().try_for_each(|(i, (c, d))| check_chunk(i, c, d))?;
+    items.par_iter().enumerate().try_for_each(|(i, (c, d))| check_chunk_full(i, c, d))?;
 
     let mut st = PublishStats::default();
     let mut out = Vec::with_capacity(items.len());
@@ -71,8 +71,8 @@ pub(crate) fn publish(input: &Path, store: &Path, key: Option<(&sign::SecretKey,
                 ensure!(f.len() == 3, "bad raw map entry {}", rp.display());
                 let c2 = Chunk { compression: f[0].parse()?, encoded_len: f[1].parse()?, stored: unhex(f[2])?, ..c };
                 let cd = fs::read(hpath(store, "chunks", &c2.stored)).context("raw map points at a missing chunk")?;
-                // check_chunk covers the raw hash: a mapped chunk with other data is refused
-                check_chunk(0, &c2, &cd).context("raw map points at a bad chunk")?;
+                // check_chunk_full covers the raw hash: a mapped chunk with other data is refused
+                check_chunk_full(0, &c2, &cd).context("raw map points at a bad chunk")?;
                 if c2.stored != c.stored { st.remapped += 1; }
                 st.reused_chunks += 1;
                 st.reused_bytes += c2.encoded_len as u64;
@@ -82,6 +82,7 @@ pub(crate) fn publish(input: &Path, store: &Path, key: Option<(&sign::SecretKey,
                 let cp = hpath(store, "chunks", &c.stored);
                 // an existing chunk is reused only if it is intact; a damaged one is replaced
                 if fs::read(&cp).is_ok_and(|old| old == d) {
+                    // (identical bytes, so the full check above covers them)
                     st.reused_chunks += 1;
                     st.reused_bytes += d.len() as u64;
                 } else {
@@ -118,8 +119,8 @@ pub(crate) struct PullStats {
     pub chunks: u64, pub index_bytes: u64,
     /// from older cache files of the same package (reflinked)
     pub reused_chunks: u64, pub reused_bytes: u64,
-    /// from installed files (read, checked, compressed here)
-    pub installed_chunks: u64, pub installed_bytes: u64,
+    /// from installed files (read and checked; whole pieces reflinked, tails compressed here)
+    pub installed_chunks: u64, pub installed_bytes: u64, pub installed_cloned: u64,
     /// downloaded
     pub fetched_chunks: u64, pub fetched_bytes: u64,
     /// cache ranges that failed their check and were not used
@@ -178,15 +179,15 @@ fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
 }
 
 /// Read a piece of an installed file (a regular file, not followed through a final symlink),
-/// zero-padded to `len`.
-fn read_installed(root: &Path, path: &[u8], off: u64, data_len: u64, len: u32) -> Option<Vec<u8>> {
+/// zero-padded to `len`. Returns the open file too, for reflinking the piece.
+fn read_installed(root: &Path, path: &[u8], off: u64, data_len: u64, len: u32) -> Option<(File, Vec<u8>)> {
     let p = root.join(std::ffi::OsStr::from_bytes(path));
     let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(p).ok()?;
     let md = f.metadata().ok()?;
     if !md.is_file() || md.len() < off + data_len { return None; }
     let mut buf = vec![0u8; len as usize];
     f.read_exact_at(&mut buf[..data_len as usize], off).ok()?;
-    Some(buf)
+    Some((f, buf))
 }
 
 pub(crate) struct PullOpts<'a> {
@@ -196,6 +197,11 @@ pub(crate) struct PullOpts<'a> {
     pub installed: Option<&'a Path>,
     /// zstd level for chunks compressed here (from installed files)
     pub level: i32,
+    /// decode every downloaded chunk and check its unencoded hash too
+    pub verify_data: bool,
+    /// fsync the cache file before renaming it into place (a caller placing many packages syncs
+    /// the filesystem once instead)
+    pub fsync: bool,
 }
 
 /// Pull NAME from a source into CACHE. The index must pass `trust` before anything is written.
@@ -267,8 +273,19 @@ pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path,
                 }
             }
             if let (Some(root), Some((path, foff, dlen))) = (o.installed, files.get(&c.image_off)) {
-                if let Some(buf) = read_installed(root, path, *foff, *dlen, c.unencoded_len) {
-                    if sha256(&buf) == c.raw { from_installed.push((*c, buf)); continue; }
+                if let Some((f, buf)) = read_installed(root, path, *foff, *dlen, c.unencoded_len) {
+                    if sha256(&buf) == c.raw {
+                        // A whole piece (not a file's unaligned tail) is shared with the installed
+                        // file's extents instead of being compressed and written again.
+                        if can_clone && *dlen == c.unencoded_len as u64 && clone_range_at(&f, *foff, *dlen, &out, off).is_ok() {
+                            st.installed_chunks += 1;
+                            st.installed_bytes += c.unencoded_len as u64;
+                            st.installed_cloned += 1;
+                            continue;
+                        }
+                        from_installed.push((*c, buf));
+                        continue;
+                    }
                 }
             }
             missing.push((i, *c));
@@ -290,7 +307,7 @@ pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path,
         // The rest from the source, checked in parallel as batches arrive.
         let items: Vec<(String, usize)> = missing.iter().map(|(_, c)| { let x = hex(&c.stored); (format!("chunks/{}/{x}", &x[..2]), c.encoded_len as usize) }).collect();
         src.get_many(&items, &mut ns, |batch| {
-            batch.par_iter().try_for_each(|(k, d)| check_chunk(missing[*k].0, &missing[*k].1, d))?;
+            batch.par_iter().try_for_each(|(k, d)| if o.verify_data { check_chunk_full(missing[*k].0, &missing[*k].1, d) } else { check_chunk(missing[*k].0, &missing[*k].1, d) })?;
             for (k, d) in batch {
                 let c = missing[k].1;
                 st.fetched_chunks += 1;
@@ -303,7 +320,7 @@ pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path,
         // Same cache-file layout as `fetch`, so `install` works unchanged.
         out.write_all_at(ib, 0)?;
         out.set_len(idx.hdr.cache_len())?;
-        out.sync_all()?;
+        if o.fsync { out.sync_all()?; }
         Ok(())
     };
     let r = run();

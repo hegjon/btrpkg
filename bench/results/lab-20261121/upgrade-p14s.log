@@ -1,0 +1,13 @@
+host p14s part nvme0n1p2 cpu 'AMD Ryzen 7 PRO 5850U with Radeon Graphics' cache /var/cache/pacman/pkg/
+targets (5): mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros owe
+mise-bin 2026.11.9-1 omarchy-dev 4.0.0.r8025.gb972bd8-1 omarchy-local-ai 0.6.5-1 omarchy-themes-intros 2026.11.18-1 owe 0.2.16-1 
+pacman would download: 317998811 bytes
+baseline snapshot 7 (0.17 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	5.03	317999406	690847744	663044096	0	62308c4c
+btrpkg	1	0	2.56	68811587	341569536	70565888	0	62308c4c
+btrpkg	2	0	3.65	68811587	341630976	71553024	0	62308c4c
+pacman	2	0	5.09	317999406	685817856	416522240	0	62308c4c
+pacman	3	0	5.13	317999406	683610112	414982144	0	62308c4c
+btrpkg	3	0	2.63	68811587	341643264	70565888	0	62308c4c
+load at end: 0.76 0.41 0.24

@@ -1,0 +1,13 @@
+host x200 part sda2 cpu 'Intel(R) Core(TM)2 Duo CPU P8400 @ 2.26GHz' cache /var/cache/pacman/pkg/
+targets (10): aether mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros omasnap owe owe-lockfeed qtengine quickshell
+aether 4.32.0-2 mise-bin 2026.11.7-1 omarchy-dev 4.0.0.r7840.gac6cb9c-1 omarchy-local-ai 0.6.4-1 omarchy-themes-intros 2026.10.25-1 omasnap 1.26.2-2 owe 0.2.15-1 owe-lockfeed 0.2.15-1 qtengine 0.2.4-5 quickshell 0.3.2.r7.g2b4501a-10 
+pacman would download: 334907812 bytes
+baseline snapshot 10 (0.29 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	36.84	334909002	789630976	726122496	0	426ca57e
+btrpkg	1	0	25.46	161764794	375422976	167251968	0	426ca57e
+btrpkg	2	0	26.86	161764794	370106368	168239104	0	426ca57e
+pacman	2	0	37.29	334909002	735416320	530231296	0	426ca57e
+pacman	3	0	36.08	334909002	737046528	530235392	0	426ca57e
+btrpkg	3	0	24.68	161764794	368418816	167251968	0	426ca57e
+load at end: 2.10 1.91 1.00

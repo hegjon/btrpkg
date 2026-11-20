@@ -11,6 +11,7 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
+use std::rc::Rc;
 
 #[repr(C)]
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
@@ -41,7 +42,18 @@ pub fn open_beneath(dir: RawFd, path: &[u8], flags: i32) -> io::Result<OwnedFd> 
     }
 }
 
-pub struct Root { fd: OwnedFd, n: std::cell::Cell<u64> }
+pub struct Root {
+    fd: OwnedFd,
+    n: std::cell::Cell<u64>,
+    pid: u32,
+    /// the last directory opened (packages list their entries directory by directory)
+    last: std::cell::RefCell<Option<(Vec<u8>, Rc<OwnedFd>)>>,
+}
+
+fn is_root() -> bool {
+    static R: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *R.get_or_init(|| unsafe { libc::geteuid() } == 0)
+}
 
 pub fn split(path: &[u8]) -> (&[u8], &[u8]) {
     match path.iter().rposition(|&c| c == b'/') { Some(i) => (&path[..i], &path[i + 1..]), None => (b"", path) }
@@ -53,7 +65,7 @@ impl Root {
         let c = cstr(std::os::unix::ffi::OsStrExt::as_bytes(p.as_os_str()))?;
         let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) };
         if fd < 0 { return Err(io::Error::last_os_error()).with_context(|| format!("open {}", p.display())); }
-        Ok(Root { fd: unsafe { OwnedFd::from_raw_fd(fd) }, n: std::cell::Cell::new(0) })
+        Ok(Root { fd: unsafe { OwnedFd::from_raw_fd(fd) }, n: std::cell::Cell::new(0), pid: std::process::id(), last: Default::default() })
     }
 
     /// Like `open`, for a directory that must exist already (nothing is created).
@@ -63,7 +75,16 @@ impl Root {
     }
 
     /// A directory below the root (empty = the root), made when missing and `create` is set.
-    pub fn dir(&self, dir: &[u8], create: bool) -> Result<OwnedFd> {
+    pub fn dir(&self, dir: &[u8], create: bool) -> Result<Rc<OwnedFd>> {
+        if let Some((p, fd)) = self.last.borrow().as_ref() {
+            if p == dir { return Ok(fd.clone()); }
+        }
+        let fd = Rc::new(self.open_dir_path(dir, create)?);
+        *self.last.borrow_mut() = Some((dir.to_vec(), fd.clone()));
+        Ok(fd)
+    }
+
+    fn open_dir_path(&self, dir: &[u8], create: bool) -> Result<OwnedFd> {
         let flags = libc::O_PATH | libc::O_DIRECTORY;
         let dir = if dir.is_empty() { b"." as &[u8] } else { dir };
         match open_beneath(self.fd.as_raw_fd(), dir, flags) {
@@ -94,16 +115,24 @@ impl Root {
     /// A fresh temporary name for an entry in a directory.
     fn tmp_name(&self) -> CString {
         self.n.set(self.n.get() + 1);
-        CString::new(format!(".btrpkg-new-{}-{}", std::process::id(), self.n.get())).unwrap()
+        CString::new(format!(".btrpkg-new-{}-{}", self.pid, self.n.get())).unwrap()
     }
 
-    /// Create `path` through `make(parent fd, temporary name)`, then rename it into place. The
-    /// temporary file is removed if anything fails.
+    /// Create `path` through `make(parent fd, name)`. A new path is made under its own name; an
+    /// existing one under a temporary name that is then renamed over it, so the old file stays
+    /// whole until the new one is. Whatever `make` created is removed if anything fails.
     pub fn place(&self, path: &[u8], make: impl FnOnce(RawFd, &CString) -> Result<()>) -> Result<()> {
         let (parent, name) = split(path);
         let pfd = self.dir(parent, true)?;
-        let tmp = self.tmp_name();
         let name = cstr(name)?;
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(pfd.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0
+            && io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+            let r = make(pfd.as_raw_fd(), &name);
+            if r.is_err() { unsafe { libc::unlinkat(pfd.as_raw_fd(), name.as_ptr(), 0); } }
+            return r;
+        }
+        let tmp = self.tmp_name();
         let r = make(pfd.as_raw_fd(), &tmp).and_then(|()| {
             check(unsafe { libc::renameat(pfd.as_raw_fd(), tmp.as_ptr(), pfd.as_raw_fd(), name.as_ptr()) }, "rename to", path)
         });
@@ -140,7 +169,7 @@ impl Root {
     }
 
     /// Parent fd and name of an existing entry, for linking to it.
-    pub fn existing(&self, path: &[u8]) -> Result<(OwnedFd, CString)> {
+    pub fn existing(&self, path: &[u8]) -> Result<(Rc<OwnedFd>, CString)> {
         let (parent, name) = split(path);
         Ok((self.dir(parent, false)?, cstr(name)?))
     }
@@ -151,7 +180,7 @@ impl Root {
 pub fn set_attrs_fd(fd: RawFd, uid: u32, gid: u32, mode: u32, xattrs: &[(Vec<u8>, Vec<u8>)], mtime: i64, path: &[u8]) -> Result<()> {
     unsafe {
         // as tar does: owners are restored only when running as root
-        if libc::geteuid() == 0 { check(libc::fchown(fd, uid, gid), "chown", path)?; }
+        if is_root() { check(libc::fchown(fd, uid, gid), "chown", path)?; }
         check(libc::fchmod(fd, mode & 0o7777), "chmod", path)?;
         for (k, v) in xattrs {
             let kc = cstr(k)?;
@@ -166,7 +195,7 @@ pub fn set_attrs_fd(fd: RawFd, uid: u32, gid: u32, mode: u32, xattrs: &[(Vec<u8>
 /// The same for a symlink, by parent fd and name (no mode: symlinks have none).
 pub fn set_attrs_link(pfd: RawFd, name: &CString, uid: u32, gid: u32, xattrs: &[(Vec<u8>, Vec<u8>)], mtime: i64, path: &[u8]) -> Result<()> {
     unsafe {
-        if libc::geteuid() == 0 { check(libc::fchownat(pfd, name.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW), "chown", path)?; }
+        if is_root() { check(libc::fchownat(pfd, name.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW), "chown", path)?; }
         if !xattrs.is_empty() {
             // no fd-based call for a symlink's xattrs: go through the parent's /proc fd link
             let p = cstr(format!("/proc/self/fd/{pfd}/{}", name.to_string_lossy()).as_bytes())?;

@@ -64,6 +64,7 @@ const CHUNK_WINDOW_LOG: u32 = 17;
 
 pub type Hash = [u8; 32];
 
+
 pub fn sha256(b: &[u8]) -> Hash {
     Sha256::digest(b).into()
 }
@@ -377,11 +378,31 @@ pub fn decode_chunk(c: &Chunk, d: &[u8]) -> Result<Vec<u8>> {
     })
 }
 
-/// Check a chunk's bytes before anything is written: the stored hash, and the hash of the data
-/// it decodes to, which reuse across packages relies on. The kernel stores encoded frames without
-/// looking at them, so this is the only check before the data is on disk.
+/// Check a chunk's bytes before anything is written: the stored hash (which the signed index
+/// covers), and for a zstd chunk the frame header btrfs relies on (one frame, no dictionary ID or
+/// checksum, content size = unencoded length). Cheap: nothing is decoded.
+/// The unencoded hash is not checked here: every reuse path (older cache files, installed files)
+/// reads the data back and checks it before sharing it, and publish checks it on the server
+/// (`check_chunk_full`). Decoding and hashing everything again on the client cost 7 s of 27 s on
+/// a t460s (no SHA instructions) for the 315-package set.
 pub fn check_chunk(i: usize, c: &Chunk, d: &[u8]) -> Result<()> {
     ensure!(d.len() == c.encoded_len as usize && sha256(d) == c.stored, "chunk {i} is corrupt");
+    match c.compression {
+        COMP_ZSTD => {
+            ensure!(d.len() >= 5 && d[..4] == [0x28, 0xb5, 0x2f, 0xfd] && d[4] & 0x07 == 0, "chunk {i}: not a plain zstd frame");
+            ensure!(zstd::zstd_safe::find_frame_compressed_size(d).is_ok_and(|n| n == d.len()), "chunk {i}: not exactly one zstd frame");
+            ensure!(matches!(zstd::zstd_safe::get_frame_content_size(d), Ok(Some(n)) if n == c.unencoded_len as u64), "chunk {i}: wrong content size");
+        }
+        COMP_NONE => ensure!(c.stored == c.raw && d.len() == c.unencoded_len as usize, "chunk {i}: its data doesn't match the unencoded hash"),
+        x => anyhow::bail!("chunk {i}: unknown compression {x}"),
+    }
+    Ok(())
+}
+
+/// `check_chunk` plus decoding the frame as btrfs will (window at most 128 KiB) and checking the
+/// unencoded hash: for publishing, and for clients that ask for it (`--verify-data`).
+pub fn check_chunk_full(i: usize, c: &Chunk, d: &[u8]) -> Result<()> {
+    check_chunk(i, c, d)?;
     match c.compression {
         COMP_ZSTD => {
             let plain = decode_chunk(c, d).with_context(|| format!("chunk {i}"))?;

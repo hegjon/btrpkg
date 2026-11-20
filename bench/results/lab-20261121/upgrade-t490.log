@@ -1,0 +1,13 @@
+host t490 part sda2 cpu 'Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz' cache /var/cache/pacman/pkg/
+targets (10): aether mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros omasnap owe owe-lockfeed qtengine quickshell
+aether 4.32.0-2 mise-bin 2026.11.7-1 omarchy-dev 4.0.0.r7840.gac6cb9c-1 omarchy-local-ai 0.6.4-1 omarchy-themes-intros 2026.10.25-1 omasnap 1.26.2-2 owe 0.2.15-1 owe-lockfeed 0.2.15-1 qtengine 0.2.4-5 quickshell 0.3.2.r7.g2b4501a-10 
+pacman would download: 334907812 bytes
+baseline snapshot 9 (0.14 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	9.77	334909002	730771456	698707968	0	426ca57e
+btrpkg	1	0	7.89	161764794	363114496	167247872	0	426ca57e
+btrpkg	2	0	8.04	161764794	361750528	168239104	0	426ca57e
+pacman	2	0	11.06	334909002	722866176	530325504	0	426ca57e
+pacman	3	0	10.14	334909002	722341888	528994304	0	426ca57e
+btrpkg	3	0	8.46	161764794	362639360	167247872	0	426ca57e
+load at end: 1.35 0.87 0.46

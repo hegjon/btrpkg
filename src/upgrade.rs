@@ -210,7 +210,7 @@ fn restore_mtimes(snap: &Path, root: &Path, paths: &[&str]) -> Result<u64> {
 struct Target { name: String, repo: usize, old: DbEntry, new: DbEntry, file: String, idx: Index, sig: Option<String> }
 
 #[derive(Default, Debug)]
-pub(crate) struct UpgradeStats { pub targets: u64, pub left_to_pacman: u64, pub fetched_bytes: u64, pub index_bytes: u64, pub reused_chunks: u64, pub installed_chunks: u64, pub fetched_chunks: u64, pub removed_files: u64, pub snapshot: Option<u32> }
+pub(crate) struct UpgradeStats { pub phases: Vec<(&'static str, f64)>, pub targets: u64, pub left_to_pacman: u64, pub fetched_bytes: u64, pub index_bytes: u64, pub reused_chunks: u64, pub installed_chunks: u64, pub fetched_chunks: u64, pub removed_files: u64, pub snapshot: Option<u32> }
 
 pub(crate) struct UpgradeOpts { pub conf: PathBuf, pub root: PathBuf, pub keys: Vec<PathBuf>, pub snapshot: bool, pub h2c: bool, pub parallel: Option<usize>, pub dry_run: bool, pub list_only: bool, pub fail_after: Option<usize>, pub use_encoded: bool }
 
@@ -218,6 +218,8 @@ fn log(s: &str) { eprintln!(":: {s}"); }
 
 pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> {
     let mut st = UpgradeStats::default();
+    let mut t = std::time::Instant::now();
+    let mut lap = |st: &mut UpgradeStats, name: &'static str| { st.phases.push((name, t.elapsed().as_secs_f64())); t = std::time::Instant::now(); };
     let conf = read_conf(&o.conf)?;
     let local = read_local(&conf.db_path)?;
     let mut sync: BTreeMap<String, (usize, DbEntry)> = BTreeMap::new();
@@ -279,6 +281,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         targets.push(Target { name, repo: ri, old, new, file, idx, sig });
     }
     if targets.is_empty() { log("nothing to upgrade through btrpkg"); return Ok(st); }
+    lap(&mut st, "databases+indexes");
     st.targets = targets.len() as u64;
     if o.list_only {
         for t in &targets { println!("{}", t.name); }
@@ -323,13 +326,14 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
                 }
             }
         }
+        lap(&mut st, "conflicts");
         // 6. pull
         for t in &targets {
             let cache = conf.cache_dir.join(format!("{}.pkg.btr", t.file));
             let src = net::Source::parse(&conf.repos[t.repo].servers[0], o.h2c, o.parallel);
             let trust = sign::Trust::Id(t.idx.hdr.id()); // already checked above; same bytes
             let _ = &t.sig;
-            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3 };
+            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false };
             let ps = store::pull_index(&src, &t.file, &t.idx.bytes, &cache, &trust, &po, net::NetStats::default()).with_context(|| t.name.clone())?;
             st.fetched_bytes += ps.fetched_bytes;
             st.reused_chunks += ps.reused_chunks;
@@ -345,8 +349,13 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
             }
         }
         // --print stops after pacman's transaction preparation (dependencies, conflicts, replaces)
+        // the cache files are on disk before any installed file refers to their extents
+        let cd = File::open(&conf.cache_dir)?;
+        ensure!(unsafe { libc::syncfs(cd.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
+        lap(&mut st, "pull");
         let p = pacman(&o.conf, &["-U", "--noconfirm", "--print", "--print-format", "%n %v"], &metas)?;
         ensure!(p.status.success(), "pacman's dependency check failed:\n{}{}", String::from_utf8_lossy(&p.stdout), String::from_utf8_lossy(&p.stderr));
+        lap(&mut st, "pacman-check");
         if o.dry_run { log("dry run: stopping before any change"); return Ok(std::mem::take(&mut st)); }
 
         // 7. snapshot
@@ -356,6 +365,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
             ensure!(out.status.success(), "snapper: {}", String::from_utf8_lossy(&out.stderr));
             st.snapshot = Some(String::from_utf8_lossy(&out.stdout).trim().parse().context("snapper's snapshot number")?);
             log(&format!("snapshot {}", st.snapshot.unwrap()));
+            lap(&mut st, "snapshot");
         }
         // 8. place, remove, database
         let r = (|| -> Result<()> {
@@ -372,6 +382,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
                     gone.push(f.as_str());
                 }
             }
+            lap(&mut st, "place");
             gone.sort_by(|a, b| b.len().cmp(&a.len()).then(b.cmp(a))); // deepest first
             let root = fsx::Root::open(&o.root)?;
             for f in gone {
@@ -381,7 +392,9 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
                 if r == 0 { st.removed_files += 1; }
                 else if !is_dir { let e = io::Error::last_os_error(); if e.raw_os_error() != Some(libc::ENOENT) { bail!("remove {f}: {e}"); } }
             }
+            lap(&mut st, "remove");
             let p = pacman(&o.conf, &["-U", "--dbonly", "--noconfirm"], &metas)?;
+            lap(&mut st, "pacman-dbonly+hooks");
             eprint!("{}", String::from_utf8_lossy(&p.stdout));
             ensure!(p.status.success(), "pacman -U --dbonly failed:\n{}", String::from_utf8_lossy(&p.stderr));
             Ok(())

@@ -9,7 +9,7 @@
 # Records wall time incl. the final sync, bytes written to the root's partition, data space used
 # (cache + root, and root alone after deleting the cache).
 set -uo pipefail
-D=$(realpath "$1"); OUT=$2; ROUNDS=${3:-3}; B=/usr/local/bin/btrpkg
+D=$(realpath "$1"); OUT=$2; ROUNDS=${3:-3}; B=${B:-/usr/local/bin/btrpkg}; SCEN=${SCEN:-pacman btrpkg}
 mkdir -p $OUT; exec > >(tee -a $OUT/log) 2>&1
 CACHE=/var/cache/pacman/pkg/btrpkg-fresh; R=/btrpkg-fresh; S=/dev/shm/btrpkg-fresh
 for s in $CACHE $R; do [[ -e $s ]] && { echo "$s exists, refusing"; exit 1; }; done
@@ -32,7 +32,7 @@ run() {
     if [[ $1 == pacman ]]; then
       cp $S/pkg/$f $CACHE/ && bsdtar -xpf $CACHE/$f -C $R --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || ok=1
     else
-      $B fetch --unverified $S/btr/$n.btrpkg $CACHE/$n.pkg.btr 2>/dev/null && $B install $CACHE/$n.pkg.btr $R 2>/dev/null || ok=1
+      $B fetch --unverified --no-fsync $S/btr/$n.btrpkg $CACHE/$n.pkg.btr 2>/dev/null && $B install $CACHE/$n.pkg.btr $R 2>/dev/null || ok=1
     fi
   done <$D/set.txt
   sync; b=$(now); w1=$(written); u1=$(used)
@@ -42,6 +42,7 @@ run() {
 }
 printf 'scenario\tround\tfailed\tseconds\twritten\tspace_cache_root\tspace_root\n' | tee $OUT/results.tsv
 for r in $(seq 1 $ROUNDS); do
-  if (( r % 2 )); then run pacman $r; run btrpkg $r; else run btrpkg $r; run pacman $r; fi
+  order=$SCEN; (( r % 2 )) || order=$(echo $SCEN | tr ' ' '\n' | tac | xargs)
+  for s in $order; do run $s $r; done
 done
 echo "load at end: $(cut -d' ' -f1-3 /proc/loadavg)"

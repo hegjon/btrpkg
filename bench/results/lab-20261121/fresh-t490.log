@@ -1,0 +1,16 @@
+/tmp/lab-fresh.sh: line 23: /root/btrpkg-verify-in/set.txt: No such file or directory
+host t490 part sda2, staged 0 + 0 bytes
+scenario	round	failed	seconds	written	space_cache_root	space_root
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+pacman	1	0	0.01	401408	0	0
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+btrpkg	1	0	0.01	401408	0	0
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+btrpkg	2	0	0.01	368640	0	0
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+pacman	2	0	0.01	401408	0	0
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+pacman	3	0	0.01	401408	0	0
+/tmp/lab-fresh.sh: line 25: /root/btrpkg-verify-in/set.txt: No such file or directory
+btrpkg	3	0	0.01	401408	0	0
+load at end: 0.11 0.05 0.11
