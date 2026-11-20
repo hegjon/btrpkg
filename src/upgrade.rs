@@ -212,7 +212,7 @@ struct Target { name: String, repo: usize, old: DbEntry, new: DbEntry, file: Str
 #[derive(Default, Debug)]
 pub(crate) struct UpgradeStats { pub targets: u64, pub left_to_pacman: u64, pub fetched_bytes: u64, pub index_bytes: u64, pub reused_chunks: u64, pub installed_chunks: u64, pub fetched_chunks: u64, pub removed_files: u64, pub snapshot: Option<u32> }
 
-pub(crate) struct UpgradeOpts { pub conf: PathBuf, pub root: PathBuf, pub keys: Vec<PathBuf>, pub snapshot: bool, pub h2c: bool, pub parallel: Option<usize>, pub dry_run: bool, pub fail_after: Option<usize>, pub use_encoded: bool }
+pub(crate) struct UpgradeOpts { pub conf: PathBuf, pub root: PathBuf, pub keys: Vec<PathBuf>, pub snapshot: bool, pub h2c: bool, pub parallel: Option<usize>, pub dry_run: bool, pub list_only: bool, pub fail_after: Option<usize>, pub use_encoded: bool }
 
 fn log(s: &str) { eprintln!(":: {s}"); }
 
@@ -280,6 +280,10 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
     }
     if targets.is_empty() { log("nothing to upgrade through btrpkg"); return Ok(st); }
     st.targets = targets.len() as u64;
+    if o.list_only {
+        for t in &targets { println!("{}", t.name); }
+        return Ok(st);
+    }
     log(&format!("upgrading through btrpkg: {}", targets.iter().map(|t| format!("{} {} -> {}", t.name, t.old.version, t.new.version)).collect::<Vec<_>>().join(", ")));
 
     // 4. metadata packages and pacman's dependency/conflict check (nothing changes yet)

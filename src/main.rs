@@ -670,7 +670,7 @@ const USAGE: &str = "usage:
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
   btrpkg pull [TRUST] [--no-encoded] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
-  btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--h2c] [PKG...]
+  btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
@@ -744,7 +744,8 @@ fn main() -> Result<()> {
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
-            s if s.starts_with("--") => flags.push(s),
+            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" => flags.push(a.as_str()),
+            s if s.starts_with('-') && s.len() > 1 => bail!("unknown option {s}\n{USAGE}"),
             s => pos.push(s),
         }
     }
@@ -802,7 +803,7 @@ fn main() -> Result<()> {
         }
         ["upgrade", pkgs @ ..] => {
             let o = upgrade::UpgradeOpts { conf, root, keys: trust.keys.clone(), snapshot: !flags.contains(&"--no-snapshot"), h2c: flags.contains(&"--h2c"),
-                parallel, dry_run: flags.contains(&"--dry-run"), use_encoded: !flags.contains(&"--no-encoded"),
+                parallel, dry_run: flags.contains(&"--dry-run"), list_only: flags.contains(&"--list"), use_encoded: !flags.contains(&"--no-encoded"),
                 fail_after: std::env::var("BTRPKG_FAIL_AFTER").ok().and_then(|v| v.parse().ok()) };
             let t0 = std::time::Instant::now();
             let st = upgrade::upgrade(&pkgs.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &o)?;
