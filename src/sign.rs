@@ -167,6 +167,8 @@ pub enum Trust {
     Id(crate::format::Hash),
     /// A signature by a key in the keyring.
     Signed(Keyring, String),
+    /// Every one of these.
+    All(Vec<Trust>),
 }
 
 impl Trust {
@@ -178,6 +180,7 @@ impl Trust {
                 Ok(())
             }
             Trust::Signed(k, sig) => k.verify(header, sig).map(|_| ()).context("index signature"),
+            Trust::All(v) => v.iter().try_for_each(|t| t.check(header)),
         }
     }
 }

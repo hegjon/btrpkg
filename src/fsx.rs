@@ -144,7 +144,8 @@ impl Root {
 /// setuid bits and capabilities).
 pub fn set_attrs_fd(fd: RawFd, uid: u32, gid: u32, mode: u32, xattrs: &[(Vec<u8>, Vec<u8>)], mtime: i64, path: &[u8]) -> Result<()> {
     unsafe {
-        check(libc::fchown(fd, uid, gid), "chown", path)?;
+        // as tar does: owners are restored only when running as root
+        if libc::geteuid() == 0 { check(libc::fchown(fd, uid, gid), "chown", path)?; }
         check(libc::fchmod(fd, mode & 0o7777), "chmod", path)?;
         for (k, v) in xattrs {
             let kc = cstr(k)?;
@@ -159,7 +160,7 @@ pub fn set_attrs_fd(fd: RawFd, uid: u32, gid: u32, mode: u32, xattrs: &[(Vec<u8>
 /// The same for a symlink, by parent fd and name (no mode: symlinks have none).
 pub fn set_attrs_link(pfd: RawFd, name: &CString, uid: u32, gid: u32, xattrs: &[(Vec<u8>, Vec<u8>)], mtime: i64, path: &[u8]) -> Result<()> {
     unsafe {
-        check(libc::fchownat(pfd, name.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW), "chown", path)?;
+        if libc::geteuid() == 0 { check(libc::fchownat(pfd, name.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW), "chown", path)?; }
         if !xattrs.is_empty() {
             // no fd-based call for a symlink's xattrs: go through the parent's /proc fd link
             let p = cstr(format!("/proc/self/fd/{pfd}/{}", name.to_string_lossy()).as_bytes())?;

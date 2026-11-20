@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod format;
 mod fsx;
+mod net;
 mod repo;
 mod sign;
 mod store;
@@ -667,7 +668,7 @@ const USAGE: &str = "usage:
   btrpkg keygen NAME                      (writes NAME.sec and NAME.pub)
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
-  btrpkg pull [TRUST] [--no-encoded] STORE NAME CACHE
+  btrpkg pull [TRUST] [--no-encoded] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
@@ -710,6 +711,8 @@ fn main() -> Result<()> {
     let mut key: Option<PathBuf> = None;
     let mut gpg_keyring: Option<PathBuf> = Some("/etc/pacman.d/gnupg/pubring.gpg".into());
     let mut jobs = 4usize;
+    let mut parallel: Option<usize> = None;
+    let mut installed: Option<PathBuf> = None;
     let mut trust = TrustArgs { id: None, sig: None, keys: vec![], unverified: false };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -729,6 +732,8 @@ fn main() -> Result<()> {
             "--gpg-keyring" => gpg_keyring = Some(val("--gpg-keyring")?.into()),
             "--no-gpg" => gpg_keyring = None,
             "--jobs" => jobs = val("--jobs")?.parse()?,
+            "--parallel" => parallel = Some(val("--parallel")?.parse()?),
+            "--installed" => installed = Some(val("--installed")?.into()),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
             s if s.starts_with("--") => flags.push(s),
             s => pos.push(s),
@@ -767,10 +772,14 @@ fn main() -> Result<()> {
             })
         }
         ["pull", s, n, c] => {
-            let t = trust.resolve(store::read_sig(Path::new(s), n))?;
-            store::pull(Path::new(s), n, Path::new(c), !flags.contains(&"--no-encoded"), &t).map(|st| {
+            let src = net::Source::parse(s, flags.contains(&"--h2c"), parallel);
+            let mut ns = net::NetStats::default();
+            let (ib, sig) = store::fetch_index(&src, n, &mut ns)?;
+            let t = trust.resolve(sig)?;
+            let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3) };
+            store::pull_index(&src, n, &ib, Path::new(c), &t, &o, ns).map(|st| {
                 eprintln!("pull: {st:?}");
-                println!("download\t{n}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes);
+                println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
             })
         }
         ["repo-update", d, r] => {
@@ -792,6 +801,10 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::sync::atomic::{AtomicU32, Ordering};
     const U: sign::Trust = sign::Trust::Unverified;
+
+    fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3 })
+    }
 
     pub(crate) struct TempDir(pub PathBuf);
     impl TempDir {
@@ -1084,17 +1097,17 @@ mod tests {
         let sig = store::read_sig(&store, "s-1-1").unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        store::pull(&store, "s-1-1", &cdir.join("a.pkg.btr"), true, &trust(sig.clone())).unwrap();
+        pull_dir(&store, "s-1-1", &cdir.join("a.pkg.btr"), &trust(sig.clone())).unwrap();
         // signed by a key the keyring doesn't have
         let other = sign::SecretKey::load(&t.0.join("other.sec")).unwrap();
         let ib = fs::read(store.join("index/s-1-1.btridx")).unwrap();
-        assert!(store::pull(&store, "s-1-1", &cdir.join("b.pkg.btr"), true, &trust(other.sign(&ib[..HDR], "other"))).is_err());
+        assert!(pull_dir(&store, "s-1-1", &cdir.join("b.pkg.btr"), &trust(other.sign(&ib[..HDR], "other"))).is_err());
         // a tampered index (re-hashed, so only the signature can tell)
         let idx = parse_index(&ib).unwrap();
         let mut ch = idx.chunks.clone();
         ch[0].raw[1] ^= 1;
         fs::write(store.join("index/s-1-1.btridx"), idx.with_chunks(&ch)).unwrap();
-        assert!(store::pull(&store, "s-1-1", &cdir.join("c.pkg.btr"), true, &trust(sig)).is_err());
+        assert!(pull_dir(&store, "s-1-1", &cdir.join("c.pkg.btr"), &trust(sig)).is_err());
         // nothing but the first cache file
         assert_eq!(fs::read_dir(&cdir).unwrap().count(), 1);
         // a transport file with a detached signature (btrpkg sign)
@@ -1155,13 +1168,55 @@ mod tests {
         // the ID from the database is enough to pull, and the signature is there too
         let c = t.0.join("cache");
         fs::create_dir_all(&c).unwrap();
-        store::pull(&d, "q-2-1-x86_64", &c.join("q.pkg.btr"), true, &sign::Trust::Id(store::unhex(id).unwrap())).unwrap();
+        pull_dir(&d, "q-2-1-x86_64", &c.join("q.pkg.btr"), &sign::Trust::Id(store::unhex(id).unwrap())).unwrap();
         assert!(store::read_sig(&d, "q-2-1-x86_64").is_some());
         // the original packages stay
         assert!(d.join("q-2-1-x86_64.pkg.tar.zst").exists());
         // a second run converts nothing
         let st = repo::repo_update(&d, "t", &o).unwrap();
         assert_eq!((st.converted, st.unchanged), (0, 2), "{st:?}");
+    }
+
+
+    #[test]
+    fn pull_reuses_installed_files() {
+        let t = TempDir::new("installed");
+        let store = t.0.join("store");
+        let (s1, s2) = (spec(3), spec(4)); // same big file, other library
+        for (n, s) in [("q-1-1-x86_64", &s1), ("q-2-1-x86_64", &s2)] {
+            let src = make_pkg(&t.0, n, s);
+            convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, None).unwrap();
+        }
+        // version 1 installed some other way (here: from a cache elsewhere, then that cache is gone)
+        let root = t.0.join("root");
+        let other = t.0.join("other");
+        fs::create_dir_all(&other).unwrap();
+        pull_dir(&store, "q-1-1-x86_64", &other.join("q-1-1-x86_64.pkg.btr"), &U).unwrap();
+        install(&other.join("q-1-1-x86_64.pkg.btr"), &root, false).unwrap();
+        fs::remove_dir_all(&other).unwrap();
+        let cdir = t.0.join("cache");
+        fs::create_dir_all(&cdir).unwrap();
+        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3 };
+        let src = net::Source::Dir(store.clone());
+        let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
+        // tool (300 kB, 3 chunks) is unchanged and comes from the installed file
+        assert_eq!((p.installed_chunks, p.fetched_chunks, p.reused_chunks), (3, 2, 0), "{p:?}");
+        let r2 = t.0.join("root2");
+        install(&cdir.join("q-2-1-x86_64.pkg.btr"), &r2, false).unwrap();
+        check_tree(&r2, &s2);
+        // a changed installed file is not used
+        let f = OpenOptions::new().write(true).open(root.join("usr/bin/tool")).unwrap();
+        f.write_all_at(b"changed", 1000).unwrap();
+        drop(f);
+        fs::remove_file(cdir.join("q-2-1-x86_64.pkg.btr")).unwrap();
+        let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
+        assert_eq!((p.installed_chunks, p.fetched_chunks), (2, 3), "{p:?}");
+        let r3 = t.0.join("root3");
+        install(&cdir.join("q-2-1-x86_64.pkg.btr"), &r3, false).unwrap();
+        check_tree(&r3, &s2);
+        assert_eq!(store::pkgname("q-2-1-x86_64"), "q");
+        assert_eq!(store::pkgname("omarchy-dev-4.0.0.r8083.gb20d787-1-x86_64"), "omarchy-dev");
     }
 
     #[test]
@@ -1176,9 +1231,9 @@ mod tests {
         }
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let p1 = store::pull(&store, "q-1-1", &cdir.join("q-1-1.pkg.btr"), true, &U).unwrap();
+        let p1 = pull_dir(&store, "q-1-1", &cdir.join("q-1-1.pkg.btr"), &U).unwrap();
         assert_eq!(p1.reused_chunks, 0);
-        let p2 = store::pull(&store, "q-2-1", &cdir.join("q-2-1.pkg.btr"), true, &U).unwrap();
+        let p2 = pull_dir(&store, "q-2-1", &cdir.join("q-2-1.pkg.btr"), &U).unwrap();
         // tool (300 kB) is unchanged: its 3 chunks come from the first cache file
         assert_eq!(p2.reused_chunks, 3, "{p2:?}");
         assert_eq!(p2.fetched_chunks, 2, "{p2:?}");
@@ -1195,7 +1250,7 @@ mod tests {
         f1.write_all_at(b"garbage", i1.hdr.image_base() + tool.data_off + 10).unwrap();
         drop(f1);
         fs::remove_file(cdir.join("q-2-1.pkg.btr")).unwrap();
-        let p3 = store::pull(&store, "q-2-1", &cdir.join("q-2-1.pkg.btr"), true, &U).unwrap();
+        let p3 = pull_dir(&store, "q-2-1", &cdir.join("q-2-1.pkg.btr"), &U).unwrap();
         assert_eq!((p3.bad_local, p3.reused_chunks, p3.fetched_chunks), (1, 2, 3), "{p3:?}");
         let root = t.0.join("root-again");
         install(&cdir.join("q-2-1.pkg.btr"), &root, false).unwrap();
@@ -1204,10 +1259,10 @@ mod tests {
         // the header ID from the repo database: a wrong one is refused before anything is written
         let ib = fs::read(store.join("index/q-2-1.btridx")).unwrap();
         let c3 = cdir.join("again.pkg.btr");
-        assert!(store::pull(&store, "q-2-1", &c3, true, &sign::Trust::Id([0; 32])).is_err());
+        assert!(pull_dir(&store, "q-2-1", &c3, &sign::Trust::Id([0; 32])).is_err());
         assert!(!c3.exists() && !part_path(&c3).exists());
         let id = Header::decode(&ib).unwrap().id();
-        store::pull(&store, "q-2-1", &c3, true, &sign::Trust::Id(id)).unwrap();
+        pull_dir(&store, "q-2-1", &c3, &sign::Trust::Id(id)).unwrap();
 
         // a damaged chunk in the store: refused, nothing left behind
         let idx = parse_index(&ib).unwrap();
@@ -1218,13 +1273,13 @@ mod tests {
         fs::write(&cp, &d).unwrap();
         let fresh = t.0.join("fresh");
         fs::create_dir_all(&fresh).unwrap();
-        assert!(store::pull(&store, "q-2-1", &fresh.join("q.pkg.btr"), true, &U).is_err());
+        assert!(pull_dir(&store, "q-2-1", &fresh.join("q.pkg.btr"), &U).is_err());
         assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
         // a damaged index: refused
         let mut ib2 = ib.clone();
         ib2[HDR + 7] ^= 1;
         fs::write(store.join("index/bad.btridx"), &ib2).unwrap();
-        assert!(store::pull(&store, "bad", &fresh.join("bad.pkg.btr"), true, &U).is_err());
+        assert!(pull_dir(&store, "bad", &fresh.join("bad.pkg.btr"), &U).is_err());
         assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
     }
 
@@ -1248,7 +1303,7 @@ mod tests {
         assert_eq!(i1.chunks, i2.chunks);
         let c = t.0.join("c");
         fs::create_dir_all(&c).unwrap();
-        store::pull(&store, "r-1-2", &c.join("r.pkg.btr"), true, &U).unwrap();
+        pull_dir(&store, "r-1-2", &c.join("r.pkg.btr"), &U).unwrap();
         install(&c.join("r.pkg.btr"), &t.0.join("root"), false).unwrap();
         check_tree(&t.0.join("root"), &s);
 

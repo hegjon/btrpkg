@@ -58,7 +58,13 @@ frontend, filesystems other than btrfs, Arch's packages.
    `%DATA%` fields. Publish order: chunks, indexes, database last. Keep the `.pkg.tar.zst` files.
    Done when: plain pacman installs from the resulting repo exactly as before.
 
-4. **Client over HTTP.**
+4. **Client over HTTP.** Done 2026-11-20 (`src/net.rs`, `btrpkg pull DIR|URL`): libcurl multi,
+   64 requests in flight over HTTP/2 (h2c with `--h2c`), 8 connections over HTTP/1.1, 3 attempts per
+   object. Chunks come from an older cache file of the same package, then from installed files
+   (`--installed ROOT`, checked against the unencoded hash, compressed here), then the server.
+   The 9 Hyprland-set upgrades through caddy (h2c) download 7.74 MB (0.24 MB indexes) in both
+   cases, against 55.9 MB of `.pkg.tar.zst`; hyprland itself 144 chunks, 5.50 MB. The installed
+   result matches bsdtar of the new packages (785 files, 0 differences).
    `pull` from an HTTP(S) store: HTTP/2 with many requests in flight, retries, chunk reuse from the
    cache (exists), and reuse from installed files through the uncompressed hash, so a package
    installed from `.pkg.tar.zst` doesn't need a full download.

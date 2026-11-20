@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+curl = "0.4.51"
 ed25519-dalek = "2"
 flate2 = "1.1.11"
 libc = "0.2"
