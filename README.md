@@ -636,6 +636,28 @@ it: libalpm needs it for the local database (`--dbonly` builds the file list fro
 Making it from the entries on the client instead would need a per-file SHA-256 in the entries
 (32 B per file) and would save about 1 MB (0.2%), so not worth a format change.
 
+The whole index as one zstd-compressed CBOR document (`uv run --with cbor2 python
+bench/cbor_index.py bench/out-v1`; canonical CBOR of `{v, chunks, entries, blob}`, then zstd -19):
+
+| index (315 set) | size | read all 315 (Python) |
+|---|---:|---:|
+| version 1 | 23.71 MB | 125 ms |
+| CBOR, arrays, zstd -19 | 22.82 MB (−3.8%) | 92 ms (cbor2) |
+| CBOR, entries as text-keyed maps | 22.88 MB (−3.5%) | |
+| CBOR, arrays, no image offsets | 22.71 MB (−4.2%) | |
+
+The gain is the chunk table getting compressed, not CBOR: version 1 stores the table raw, and zstd
+-19 of the tables alone saves 0.86 MB (3.6%). The hashes (64 of the 88 B per chunk) don't compress.
+So size doesn't decide it. What CBOR would bring: fields can be added without a format version,
+deterministic encoding is specified (RFC 8949 §4.2), there are decoders for Rust (serde) and C
+(tinycbor, libcbor, QCBOR), and COSE_Sign1 (RFC 9052, EdDSA = -8) is a standard signature container.
+What it costs: the table can't be used before the whole document has arrived and been decompressed
+(estimated earlier at about 2 RTT, ~36 ms, on a cold connection; an average index is 75 KB),
+and the decompressed size must be capped before decompressing (review finding). A small fixed
+binary prefix (magic, version, compressed and raw length, SHA-256 of the compressed document,
+signed) keeps the index at the front of `.pkg.btr` and the cache file, and means the CBOR parser
+only ever sees authenticated bytes.
+
 ## pacman integration (design; step 1 tested by hand)
 
 Step 1, no pacman change: btrpkg places the files, then hands pacman a metadata-only package.
