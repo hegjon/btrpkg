@@ -146,6 +146,7 @@ pub(crate) fn pkgname(name: &str) -> &str {
 }
 
 /// The signature published next to an index in a directory store, if any.
+#[allow(dead_code)]
 pub(crate) fn read_sig(store: &Path, name: &str) -> Option<String> {
     fs::read_to_string(store.join("index").join(format!("{name}.btridx.sig"))).ok()
 }
@@ -202,6 +203,7 @@ pub(crate) struct PullOpts<'a> {
 /// after reading the range back and checking its hash), an installed file of the same path
 /// (read, checked against the unencoded hash, compressed here), or the source (checked and
 /// written as an encoded extent).
+#[allow(dead_code)]
 pub(crate) fn pull(src: &net::Source, name: &str, cache: &Path, trust: &sign::Trust, o: &PullOpts) -> Result<PullStats> {
     let mut ns = net::NetStats::default();
     let (ib, _) = fetch_index(src, name, &mut ns)?;
@@ -212,6 +214,11 @@ pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path,
     let idx = read_index_checked(&mut &ib[..], &|h| trust.check(h))?;
     ensure!(ib.len() as u64 == idx.hdr.index_len(), "trailing data after the index");
     let mut st = PullStats { index_bytes: ib.len() as u64, chunks: idx.chunks.len() as u64, ..Default::default() };
+    // Already in the cache (cache files are checked when they are made).
+    if open_cache(cache).is_ok_and(|(c, _)| c.bytes == ib) {
+        st.reused_chunks = st.chunks;
+        return Ok(st);
+    }
 
     // Older cache files of the same package: (unencoded hash, length) -> (cache file, offset).
     // Keyed on the unencoded data, so a chunk framed locally (from a .pkg.btr.zst) is reused too.

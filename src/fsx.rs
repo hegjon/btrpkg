@@ -6,7 +6,7 @@
 //! (libarchive's ARCHIVE_EXTRACT_SECURE_SYMLINKS).
 //! Files are written under a temporary name in their directory and renamed into place; a failed
 //! entry removes its temporary file.
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -54,6 +54,12 @@ impl Root {
         let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) };
         if fd < 0 { return Err(io::Error::last_os_error()).with_context(|| format!("open {}", p.display())); }
         Ok(Root { fd: unsafe { OwnedFd::from_raw_fd(fd) }, n: std::cell::Cell::new(0) })
+    }
+
+    /// Like `open`, for a directory that must exist already (nothing is created).
+    pub fn open_existing(p: &Path) -> Result<Root> {
+        ensure!(p.is_dir(), "{} is not a directory", p.display());
+        Root::open(p)
     }
 
     /// A directory below the root (empty = the root), made when missing and `create` is set.

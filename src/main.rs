@@ -24,6 +24,7 @@ mod net;
 mod repo;
 mod sign;
 mod store;
+mod upgrade;
 
 use format::*;
 
@@ -669,6 +670,8 @@ const USAGE: &str = "usage:
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
   btrpkg pull [TRUST] [--no-encoded] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
+  btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--h2c] [PKG...]
+      (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
@@ -699,7 +702,11 @@ fn sec_key(p: Option<&PathBuf>) -> Result<Option<(sign::SecretKey, String)>> {
 }
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `pacbtr ARGS` is `btrpkg upgrade ARGS`
+    if std::env::args().next().is_some_and(|a| a.rsplit('/').next() == Some("pacbtr")) { args.insert(0, "upgrade".into()); }
+    let mut conf: PathBuf = "/etc/pacman.conf".into();
+    let mut root: PathBuf = "/".into();
     let mut flags: Vec<&str> = vec![];
     let mut pos: Vec<&str> = vec![];
     let mut level: Option<i32> = None;
@@ -734,6 +741,8 @@ fn main() -> Result<()> {
             "--jobs" => jobs = val("--jobs")?.parse()?,
             "--parallel" => parallel = Some(val("--parallel")?.parse()?),
             "--installed" => installed = Some(val("--installed")?.into()),
+            "--config" => conf = val("--config")?.into(),
+            "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
             s if s.starts_with("--") => flags.push(s),
             s => pos.push(s),
@@ -789,6 +798,15 @@ fn main() -> Result<()> {
             let st = repo::repo_update(Path::new(d), r, &o)?;
             eprintln!("repo-update: {st:?}");
             ensure!(st.failed == 0, "{} packages failed (left to pacman)", st.failed);
+            Ok(())
+        }
+        ["upgrade", pkgs @ ..] => {
+            let o = upgrade::UpgradeOpts { conf, root, keys: trust.keys.clone(), snapshot: !flags.contains(&"--no-snapshot"), h2c: flags.contains(&"--h2c"),
+                parallel, dry_run: flags.contains(&"--dry-run"), use_encoded: !flags.contains(&"--no-encoded"),
+                fail_after: std::env::var("BTRPKG_FAIL_AFTER").ok().and_then(|v| v.parse().ok()) };
+            let t0 = std::time::Instant::now();
+            let st = upgrade::upgrade(&pkgs.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &o)?;
+            eprintln!("upgrade: {st:?} in {:.2} s", t0.elapsed().as_secs_f64());
             Ok(())
         }
         _ => bail!("{USAGE}"),

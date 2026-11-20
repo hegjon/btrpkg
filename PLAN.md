@@ -71,7 +71,16 @@ frontend, filesystems other than btrfs, Arch's packages.
    Done when: the hyprland 0.57.1 → 0.57.2 upgrade downloads about 5.7 MB from a cache made by
    btrpkg and from a `.pkg.tar.zst` install alike.
 
-5. **Upgrade through pacman (step 1).**
+5. **Upgrade through pacman (step 1).** Done 2026-11-20 (`src/upgrade.rs`, `btrpkg upgrade`, or
+   `pacbtr` as a hardlink). Dependencies and conflicts: `pacman -U --print` of the metadata packages
+   (`--print` can't be combined with `--dbonly`). Rollback: `snapper undochange N..0`, then the
+   snapshot's modification times put back on every touched path (undochange restores contents,
+   owners and modes but stamps the current time, which `pacman -Qkk` reports). On p14s through the
+   test repo: a failure injected after 3 of 5 packages leaves `snapper status 3..0` empty and
+   `-Qkk` clean; the real upgrade of the same 5 (mise-bin, omarchy-dev, omarchy-local-ai,
+   omarchy-themes-intros, owe) leaves `-Qkk` clean, `pacman -Dk` clean and nothing pending.
+   Packages left to pacman: no btrpkg data, an `.INSTALL`, or backup files (old or new version).
+   Known: the database records `%VALIDATION% none` (an unsigned local metadata package).
    `btrpkg upgrade PKG...`: snapshot, verify, pull, check file conflicts against the local
    database, place files (temporary name, then rename), remove files the old version had and the
    new one doesn't, then `pacman -U --dbonly` with the metadata package (hooks run there).
