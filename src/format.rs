@@ -471,7 +471,10 @@ pub fn read_n(r: &mut impl Read, n: u64, what: &str) -> Result<Vec<u8>> {
     Ok(v)
 }
 
+/// One zstd frame (nothing after it, so every reader agrees on what a valid index is) that
+/// decodes to exactly `raw_len` bytes.
 fn decompress_exact(z: &[u8], raw_len: u64, what: &str) -> Result<Vec<u8>> {
+    ensure!(zstd::zstd_safe::find_frame_compressed_size(z).is_ok_and(|n| n == z.len()), "{what}: not exactly one zstd frame");
     let mut d = zstd::stream::read::Decoder::new(z)?.single_frame();
     let mut out = Vec::new();
     (&mut d).take(raw_len + 1).read_to_end(&mut out).with_context(|| format!("decompressing {what}"))?;

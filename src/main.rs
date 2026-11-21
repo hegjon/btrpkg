@@ -674,6 +674,7 @@ const USAGE: &str = "usage:
   btrpkg fetch [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [-l N] [--sha256 HEX] IN|- CACHE
   btrpkg install [--copy] CACHE ROOT
   btrpkg info FILE
+  btrpkg dump FILE                        (the parsed index as text, to compare with other readers)
   btrpkg keygen NAME                      (writes NAME.sec and NAME.pub)
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
@@ -683,6 +684,28 @@ const USAGE: &str = "usage:
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
+
+/// The parsed and checked index of FILE (an index, transport or cache file) as text: one line per
+/// chunk and entry, numbers in decimal, byte strings in hex. libalpm's reader prints the same.
+fn dump(p: &Path) -> Result<()> {
+    let idx = read_index(&mut io::BufReader::new(File::open(p).with_context(|| format!("open {}", p.display()))?))?;
+    let h = &idx.hdr;
+    let mut o = String::new();
+    use std::fmt::Write as _;
+    writeln!(o, "id {}", hex(&h.id()))?;
+    writeln!(o, "header {} {} {} {} {} {} index {} base {}", h.nchunks, h.image_len, h.entries_len, h.entries_raw_len, h.blob_len, h.blob_raw_len, h.index_len(), h.image_base())?;
+    for c in &idx.chunks {
+        writeln!(o, "c {} {} {} {} {} {}", c.image_off, c.unencoded_len, c.encoded_len, c.compression, hex(&c.stored), hex(&c.raw))?;
+    }
+    for e in &idx.entries {
+        write!(o, "e {} {} {} {} {} {} {} {} {} {} {}", e.kind, e.mode, e.uid, e.gid, e.mtime, e.size, e.data_off, e.small as u8, hex(&e.path), hex(&e.target), e.xattrs.len())?;
+        for (k, v) in &e.xattrs { write!(o, " {}={}", hex(k), hex(v))?; }
+        o.push('\n');
+    }
+    writeln!(o, "small {} {}", idx.small.len(), hex(&sha256(&idx.small)))?;
+    io::stdout().write_all(o.as_bytes())?;
+    Ok(())
+}
 
 /// How the index of a package is checked, from the command line.
 struct TrustArgs { id: Option<String>, sig: Option<PathBuf>, keys: Vec<PathBuf>, unverified: bool }
@@ -771,6 +794,7 @@ fn main() -> Result<()> {
         }
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")).map(|st| eprintln!("install: {st:?}")),
         ["info", p] => info(Path::new(p)),
+        ["dump", p] => dump(Path::new(p)),
         ["keygen", n] => sign::keygen(Path::new(n)).map(|k| println!("key {} -> {n}.sec, {n}.pub", sign::hex8(&k))),
         ["sign", f] => {
             let (k, name) = sec_key(key.as_ref())?.context("sign needs --key NAME.sec")?;

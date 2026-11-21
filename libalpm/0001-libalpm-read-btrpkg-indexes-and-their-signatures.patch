@@ -1,0 +1,4020 @@
+From 223f54a0af93fd12865fa6bc2e16bbc7b1e47a6e Mon Sep 17 00:00:00 2001
+From: Jonny Heggheim <hegjon@gmail.com>
+Date: Sat, 21 Nov 2026 07:20:02 +0200
+Subject: [PATCH] libalpm: read btrpkg indexes and their signatures
+
+btrpkg (https://github.com/hegjon/btrpkg) stores a package as an index (header,
+chunk table, entries, small-file blob) plus chunks that btrfs can take as
+compressed extents. btrpkg.c parses and checks a format version 1 index the
+way btrpkg's own reader does (same checks, same verdict on crafted input) and
+verifies its signify-format Ed25519 signature over the 256-byte header with
+OpenSSL, against *.pub keys minus a 'revoked' list.
+
+Built when the crypto provider is OpenSSL and libzstd is found (HAVE_BTRPKG).
+Nothing calls it yet. test/btrpkg: btrdump prints the parsed index in the same
+text form as 'btrpkg dump'; run.sh checks a real index and signature, every bit
+flip and cut, and crafted indexes with valid hashes and bad contents.
+---
+ lib/libalpm/btrpkg.c                          | 894 ++++++++++++++++++
+ lib/libalpm/btrpkg.h                          | 118 +++
+ lib/libalpm/meson.build                       |   4 +
+ meson.build                                   |  12 +
+ test/btrpkg/btrdump.c                         | 223 +++++
+ .../fixtures/crafted/blob_raw_len_long.btridx | Bin 0 -> 1483 bytes
+ test/btrpkg/fixtures/crafted/cases.txt        |  63 ++
+ .../fixtures/crafted/chunk_comp1.btridx       | Bin 0 -> 1483 bytes
+ test/btrpkg/fixtures/crafted/chunk_gap.btridx | Bin 0 -> 1483 bytes
+ .../btrpkg/fixtures/crafted/chunk_len0.btridx | Bin 0 -> 1483 bytes
+ .../crafted/chunk_len_unaligned.btridx        | Bin 0 -> 1483 bytes
+ .../crafted/chunk_raw_hash_differs.btridx     | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/chunk_reserved.btridx    | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/chunk_too_long.btridx    | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/chunk_zstd_enc0.btridx   | Bin 0 -> 1483 bytes
+ .../crafted/chunk_zstd_not_smaller.btridx     | Bin 0 -> 1483 bytes
+ .../crafted/chunks_short_of_image.btridx      | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/dir_over_file.btridx     | Bin 0 -> 1488 bytes
+ .../crafted/entries_count_high.btridx         | Bin 0 -> 1483 bytes
+ .../crafted/entries_count_huge.btridx         | Bin 0 -> 1482 bytes
+ .../crafted/entries_extra_frame.btridx        | Bin 0 -> 1492 bytes
+ .../crafted/entries_raw_len_long.btridx       | Bin 0 -> 1483 bytes
+ .../crafted/entries_raw_len_short.btridx      | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/entries_trailing.btridx  | Bin 0 -> 1484 bytes
+ .../crafted/entries_trailing_garbage.btridx   | Bin 0 -> 1487 bytes
+ .../crafted/entries_two_frames.btridx         | Bin 0 -> 1712 bytes
+ .../fixtures/crafted/hardlink_forward.btridx  | Bin 0 -> 1501 bytes
+ .../fixtures/crafted/hardlink_missing.btridx  | Bin 0 -> 1510 bytes
+ .../fixtures/crafted/hardlink_ok.btridx       | Bin 0 -> 1499 bytes
+ .../fixtures/crafted/hardlink_to_dir.btridx   | Bin 0 -> 1499 bytes
+ .../fixtures/crafted/hardlink_unsafe.btridx   | Bin 0 -> 1506 bytes
+ test/btrpkg/fixtures/crafted/hdr_alg2.btridx  | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/hdr_blob_raw_cap.btridx  | Bin 0 -> 1483 bytes
+ .../crafted/hdr_entries_len_huge.btridx       | Bin 0 -> 1483 bytes
+ .../crafted/hdr_entries_raw_cap.btridx        | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/hdr_image_long.btridx    | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/hdr_nchunks_huge.btridx  | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/hdr_reserved.btridx      | Bin 0 -> 1483 bytes
+ test/btrpkg/fixtures/crafted/hdr_tail.btridx  | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/hdr_version2.btridx      | Bin 0 -> 1483 bytes
+ test/btrpkg/fixtures/crafted/identity.btridx  | Bin 0 -> 1483 bytes
+ test/btrpkg/fixtures/crafted/kind_4.btridx    | Bin 0 -> 1477 bytes
+ .../crafted/large_off_overflow.btridx         | Bin 0 -> 1497 bytes
+ .../fixtures/crafted/large_past_image.btridx  | Bin 0 -> 1494 bytes
+ .../fixtures/crafted/large_size0.btridx       | Bin 0 -> 1476 bytes
+ .../fixtures/crafted/large_size_huge.btridx   | Bin 0 -> 1486 bytes
+ .../fixtures/crafted/large_unaligned.btridx   | Bin 0 -> 1489 bytes
+ test/btrpkg/fixtures/crafted/path_2e2e.btridx | Bin 0 -> 1494 bytes
+ .../fixtures/crafted/path_2e2f78.btridx       | Bin 0 -> 1495 bytes
+ .../path_2f6574632f706173737764.btridx        | Bin 0 -> 1501 bytes
+ test/btrpkg/fixtures/crafted/path_612f.btridx | Bin 0 -> 1496 bytes
+ .../fixtures/crafted/path_612f2e.btridx       | Bin 0 -> 1497 bytes
+ .../crafted/path_612f2e2e2f2e2e2f78.btridx    | Bin 0 -> 1501 bytes
+ .../fixtures/crafted/path_612f2f62.btridx     | Bin 0 -> 1497 bytes
+ .../fixtures/crafted/path_780079.btridx       | Bin 0 -> 1497 bytes
+ .../btrpkg/fixtures/crafted/path_empty.btridx | Bin 0 -> 1489 bytes
+ test/btrpkg/fixtures/crafted/reencoded.btridx | Bin 0 -> 1483 bytes
+ .../fixtures/crafted/small_end_exact.btridx   | Bin 0 -> 1487 bytes
+ .../fixtures/crafted/small_flag_2.btridx      | Bin 0 -> 1485 bytes
+ .../fixtures/crafted/small_overflow.btridx    | Bin 0 -> 1490 bytes
+ .../fixtures/crafted/small_past_blob.btridx   | Bin 0 -> 1484 bytes
+ .../fixtures/crafted/symlink_abs_ok.btridx    | Bin 0 -> 1514 bytes
+ .../fixtures/crafted/symlink_no_target.btridx | Bin 0 -> 1498 bytes
+ .../fixtures/crafted/symlink_nul.btridx       | Bin 0 -> 1508 bytes
+ .../fixtures/crafted/through_file.btridx      | Bin 0 -> 1494 bytes
+ .../fixtures/crafted/through_symlink.btridx   | Bin 0 -> 1521 bytes
+ .../fixtures/crafted/xattr_empty_name.btridx  | Bin 0 -> 1484 bytes
+ .../fixtures/crafted/xattr_nul_name.btridx    | Bin 0 -> 1498 bytes
+ test/btrpkg/fixtures/crafted/xattr_ok.btridx  | Bin 0 -> 1497 bytes
+ test/btrpkg/fixtures/keys/btrpkg-test.pub     |   2 +
+ test/btrpkg/fixtures/owe-lockfeed.btridx      | Bin 0 -> 1403 bytes
+ test/btrpkg/fixtures/owe-lockfeed.btridx.sig  |   2 +
+ test/btrpkg/fixtures/owe-lockfeed.dump        |  16 +
+ test/btrpkg/meson.build                       |  13 +
+ test/btrpkg/run.sh                            |  43 +
+ 75 files changed, 1390 insertions(+)
+ create mode 100644 lib/libalpm/btrpkg.c
+ create mode 100644 lib/libalpm/btrpkg.h
+ create mode 100644 test/btrpkg/btrdump.c
+ create mode 100644 test/btrpkg/fixtures/crafted/blob_raw_len_long.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/cases.txt
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_comp1.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_gap.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_len0.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_len_unaligned.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_raw_hash_differs.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_reserved.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_too_long.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_zstd_enc0.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunk_zstd_not_smaller.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/chunks_short_of_image.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/dir_over_file.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_count_high.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_count_huge.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_extra_frame.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_raw_len_long.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_raw_len_short.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_trailing.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_trailing_garbage.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/entries_two_frames.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hardlink_forward.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hardlink_missing.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hardlink_ok.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hardlink_to_dir.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hardlink_unsafe.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_alg2.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_blob_raw_cap.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_entries_len_huge.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_entries_raw_cap.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_image_long.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_nchunks_huge.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_reserved.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_tail.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/hdr_version2.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/identity.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/kind_4.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/large_off_overflow.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/large_past_image.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/large_size0.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/large_size_huge.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/large_unaligned.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_2e2e.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_2e2f78.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_2f6574632f706173737764.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_612f.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_612f2e.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_612f2e2e2f2e2e2f78.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_612f2f62.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_780079.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/path_empty.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/reencoded.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/small_end_exact.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/small_flag_2.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/small_overflow.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/small_past_blob.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/symlink_abs_ok.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/symlink_no_target.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/symlink_nul.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/through_file.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/through_symlink.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/xattr_empty_name.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/xattr_nul_name.btridx
+ create mode 100644 test/btrpkg/fixtures/crafted/xattr_ok.btridx
+ create mode 100644 test/btrpkg/fixtures/keys/btrpkg-test.pub
+ create mode 100644 test/btrpkg/fixtures/owe-lockfeed.btridx
+ create mode 100644 test/btrpkg/fixtures/owe-lockfeed.btridx.sig
+ create mode 100644 test/btrpkg/fixtures/owe-lockfeed.dump
+ create mode 100644 test/btrpkg/meson.build
+ create mode 100755 test/btrpkg/run.sh
+
+diff --git a/lib/libalpm/btrpkg.c b/lib/libalpm/btrpkg.c
+new file mode 100644
+index 00000000..993598be
+--- /dev/null
++++ b/lib/libalpm/btrpkg.c
+@@ -0,0 +1,894 @@
++/*
++ *  btrpkg.c
++ *
++ *  Reader for btrpkg format version 1 indexes and their signify-format Ed25519 signatures. The
++ *  format and every check here follow btrpkg's src/format.rs and src/sign.rs; `btrpkg dump` and
++ *  test/btrpkg/btrdump print the same text for the same index.
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <openssl/evp.h>
++#include <zstd.h>
++
++#include "base64.h"
++#include "btrpkg.h"
++
++static const unsigned char MAGIC[8] = { 'B', 'T', 'R', 'P', 'K', 'G', 0, 0 };
++
++/* Caps on lengths a header may announce, checked before anything is allocated (format.rs). */
++#define MAX_SECTION ((uint64_t)1 << 32)
++#define MAX_ENTRIES_RAW ((uint64_t)256 << 20)
++#define MAX_BLOB_RAW ((uint64_t)1 << 30)
++/* smallest possible encoded entry: kind, mode, uid, gid, mtime, size, data_off, small, three
++ * u32 lengths */
++#define MIN_ENTRY 50
++
++static int fail(char *err, const char *fmt, ...)
++{
++	if(err) {
++		va_list ap;
++		va_start(ap, fmt);
++		vsnprintf(err, BTR_ERRLEN, fmt, ap);
++		va_end(ap);
++	}
++	return -1;
++}
++
++static uint32_t u32_at(const unsigned char *b)
++{
++	return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
++}
++
++static uint64_t u64_at(const unsigned char *b)
++{
++	return (uint64_t)u32_at(b) | (uint64_t)u32_at(b + 4) << 32;
++}
++
++static int all_zero(const unsigned char *b, size_t n)
++{
++	for(size_t i = 0; i < n; i++) {
++		if(b[i]) {
++			return 0;
++		}
++	}
++	return 1;
++}
++
++void btr_sha256(const unsigned char *d, size_t len, unsigned char out[32])
++{
++	unsigned int n = 32;
++	if(EVP_Digest(d, len, out, &n, EVP_sha256(), NULL) != 1 || n != 32) {
++		/* only on allocation failure inside OpenSSL; make every comparison fail */
++		memset(out, 0, 32);
++		out[0] = 1;
++		out[31] = 0xff;
++	}
++}
++
++void btr_hex(const unsigned char *b, size_t len, char *out)
++{
++	static const char x[] = "0123456789abcdef";
++	for(size_t i = 0; i < len; i++) {
++		out[2 * i] = x[b[i] >> 4];
++		out[2 * i + 1] = x[b[i] & 15];
++	}
++	out[2 * len] = '\0';
++}
++
++static int checked_align(uint64_t x, uint64_t *out)
++{
++	if(x > UINT64_MAX - (BTR_BLOCK - 1)) {
++		return 0;
++	}
++	*out = (x + BTR_BLOCK - 1) & ~(uint64_t)(BTR_BLOCK - 1);
++	return 1;
++}
++
++uint64_t btr_index_len(const btr_header_t *h)
++{
++	/* no overflow: the caps in btr_header_decode keep this below 2^34 */
++	return BTR_HDR + h->nchunks * BTR_ENT + h->entries_len + h->blob_len;
++}
++
++uint64_t btr_image_base(const btr_header_t *h)
++{
++	uint64_t a = 0;
++	checked_align(btr_index_len(h), &a);
++	return a;
++}
++
++uint64_t btr_cache_len(const btr_header_t *h)
++{
++	return btr_image_base(h) + h->image_len;
++}
++
++int btr_header_decode(const unsigned char *b, size_t len, btr_header_t *h, char *err)
++{
++	unsigned char sum[32];
++	if(len < BTR_HDR) {
++		return fail(err, "truncated header");
++	}
++	if(memcmp(b, MAGIC, 8) != 0) {
++		return fail(err, "not a btrpkg file");
++	}
++	if(u32_at(b + 8) != 1) {
++		return fail(err, "btrpkg format version %u, this reader reads version 1", u32_at(b + 8));
++	}
++	if(b[12] != 1) {
++		return fail(err, "unknown hash algorithm %u", b[12]);
++	}
++	btr_sha256(b, 224, sum);
++	if(memcmp(sum, b + 224, 32) != 0) {
++		return fail(err, "header checksum mismatch: corrupt or tampered header");
++	}
++	if(!all_zero(b + 13, 3) || !all_zero(b + 160, 64)) {
++		return fail(err, "reserved header bytes are set");
++	}
++	h->nchunks = u64_at(b + 16);
++	h->image_len = u64_at(b + 24);
++	h->entries_len = u64_at(b + 32);
++	h->entries_raw_len = u64_at(b + 40);
++	h->blob_len = u64_at(b + 48);
++	h->blob_raw_len = u64_at(b + 56);
++	memcpy(h->table_hash, b + 64, 32);
++	memcpy(h->entries_hash, b + 96, 32);
++	memcpy(h->blob_hash, b + 128, 32);
++	memcpy(h->id, b + 224, 32);
++	if(h->nchunks > MAX_SECTION / BTR_ENT) {
++		return fail(err, "too many chunks");
++	}
++	if(h->image_len > h->nchunks * BTR_MAX_EXTENT) {
++		return fail(err, "image longer than its chunks");
++	}
++	if(h->entries_len >= MAX_SECTION || h->blob_len >= MAX_SECTION) {
++		return fail(err, "section too large");
++	}
++	if(h->entries_raw_len > MAX_ENTRIES_RAW || h->blob_raw_len > MAX_BLOB_RAW) {
++		return fail(err, "section too large");
++	}
++	return 0;
++}
++
++static int decode_table(const unsigned char *b, const btr_header_t *h, btr_chunk_t *out, char *err)
++{
++	uint64_t next = 0;
++	for(uint64_t i = 0; i < h->nchunks; i++) {
++		const unsigned char *e = b + i * BTR_ENT;
++		btr_chunk_t *c = &out[i];
++		c->image_off = u64_at(e);
++		c->unencoded_len = u32_at(e + 8);
++		c->encoded_len = u32_at(e + 12);
++		c->compression = e[16];
++		memcpy(c->stored, e + 24, 32);
++		memcpy(c->raw, e + 56, 32);
++		if(!all_zero(e + 17, 7)) {
++			return fail(err, "chunk %llu: reserved bytes are set", (unsigned long long)i);
++		}
++		if(c->image_off != next) {
++			return fail(err, "chunk %llu: not where the previous chunk ends", (unsigned long long)i);
++		}
++		if(c->unencoded_len == 0 || c->unencoded_len > BTR_MAX_EXTENT || c->unencoded_len % BTR_BLOCK) {
++			return fail(err, "chunk %llu: bad length", (unsigned long long)i);
++		}
++		switch(c->compression) {
++			case BTR_COMP_NONE:
++				if(c->encoded_len != c->unencoded_len || memcmp(c->stored, c->raw, 32) != 0) {
++					return fail(err, "chunk %llu: bad raw chunk", (unsigned long long)i);
++				}
++				break;
++			case BTR_COMP_ZSTD:
++				/* btrfs only takes a compressed extent that is smaller than its data */
++				if(c->encoded_len == 0 || c->encoded_len >= c->unencoded_len) {
++					return fail(err, "chunk %llu: bad zstd chunk", (unsigned long long)i);
++				}
++				break;
++			default:
++				return fail(err, "chunk %llu: unknown compression %u", (unsigned long long)i, c->compression);
++		}
++		next += c->unencoded_len;
++	}
++	if(next != h->image_len) {
++		return fail(err, "chunks don't cover the image");
++	}
++	return 0;
++}
++
++/* One zstd frame that decodes to exactly raw_len bytes. */
++static unsigned char *decompress_exact(const unsigned char *z, size_t zlen, uint64_t raw_len,
++		const char *what, char *err)
++{
++	size_t fs = ZSTD_findFrameCompressedSize(z, zlen);
++	if(ZSTD_isError(fs) || fs != zlen) {
++		fail(err, "%s: not exactly one zstd frame", what);
++		return NULL;
++	}
++	unsigned char *out = malloc(raw_len ? raw_len : 1);
++	if(!out) {
++		fail(err, "%s: out of memory", what);
++		return NULL;
++	}
++	ZSTD_DCtx *d = ZSTD_createDCtx();
++	if(!d) {
++		free(out);
++		fail(err, "%s: out of memory", what);
++		return NULL;
++	}
++	size_t n = ZSTD_decompressDCtx(d, out, raw_len, z, zlen);
++	ZSTD_freeDCtx(d);
++	if(ZSTD_isError(n) || n != raw_len) {
++		free(out);
++		fail(err, "%s decompressed to the wrong length", what);
++		return NULL;
++	}
++	return out;
++}
++
++typedef struct {
++	const unsigned char *b;
++	size_t len, pos;
++} reader_t;
++
++static int take(reader_t *r, size_t n, const unsigned char **out)
++{
++	if(n > r->len - r->pos) {
++		return -1;
++	}
++	*out = r->b + r->pos;
++	r->pos += n;
++	return 0;
++}
++
++static int rd_u8(reader_t *r, uint8_t *v)
++{
++	const unsigned char *p;
++	if(take(r, 1, &p)) {
++		return -1;
++	}
++	*v = p[0];
++	return 0;
++}
++
++static int rd_u32(reader_t *r, uint32_t *v)
++{
++	const unsigned char *p;
++	if(take(r, 4, &p)) {
++		return -1;
++	}
++	*v = u32_at(p);
++	return 0;
++}
++
++static int rd_u64(reader_t *r, uint64_t *v)
++{
++	const unsigned char *p;
++	if(take(r, 8, &p)) {
++		return -1;
++	}
++	*v = u64_at(p);
++	return 0;
++}
++
++/* length-prefixed bytes, copied with a NUL after them */
++static int rd_bytes(reader_t *r, unsigned char **out, size_t *len)
++{
++	uint32_t n;
++	const unsigned char *p;
++	if(rd_u32(r, &n) || take(r, n, &p)) {
++		return -1;
++	}
++	unsigned char *s = malloc((size_t)n + 1);
++	if(!s) {
++		return -1;
++	}
++	memcpy(s, p, n);
++	s[n] = '\0';
++	*out = s;
++	*len = n;
++	return 0;
++}
++
++static void free_entries(btr_entry_t *e, size_t n)
++{
++	if(!e) {
++		return;
++	}
++	for(size_t i = 0; i < n; i++) {
++		free(e[i].path);
++		free(e[i].target);
++		for(uint32_t k = 0; e[i].xattrs && k < e[i].nxattrs; k++) {
++			free(e[i].xattrs[k].name);
++			free(e[i].xattrs[k].value);
++		}
++		free(e[i].xattrs);
++	}
++	free(e);
++}
++
++static int decode_entries(const unsigned char *b, size_t len, btr_entry_t **out, size_t *count, char *err)
++{
++	reader_t r = { b, len, 0 };
++	uint32_t n;
++	if(rd_u32(&r, &n)) {
++		return fail(err, "truncated entries");
++	}
++	/* a bogus count can't make us allocate much: every entry takes at least MIN_ENTRY bytes */
++	if(n > (len - 4) / MIN_ENTRY) {
++		return fail(err, "truncated entries");
++	}
++	btr_entry_t *v = calloc(n ? n : 1, sizeof(*v));
++	if(!v) {
++		return fail(err, "out of memory");
++	}
++	size_t done = 0;
++	for(; done < n; done++) {
++		btr_entry_t *e = &v[done];
++		uint64_t mtime;
++		if(rd_u8(&r, &e->kind) || rd_u32(&r, &e->mode) || rd_u32(&r, &e->uid) || rd_u32(&r, &e->gid)
++				|| rd_u64(&r, &mtime) || rd_u64(&r, &e->size) || rd_u64(&r, &e->data_off)
++				|| rd_u8(&r, &e->small)) {
++			goto truncated;
++		}
++		e->mtime = (int64_t)mtime;
++		if(e->small > 1) {
++			unsigned bad = e->small;
++			free_entries(v, done + 1);
++			return fail(err, "bad small flag %u", bad);
++		}
++		if(rd_bytes(&r, (unsigned char **)&e->path, &e->path_len)
++				|| rd_bytes(&r, (unsigned char **)&e->target, &e->target_len)
++				|| rd_u32(&r, &e->nxattrs)) {
++			goto truncated;
++		}
++		if(e->nxattrs > (r.len - r.pos) / 8) {
++			e->nxattrs = 0;
++			goto truncated;
++		}
++		if(e->nxattrs) {
++			e->xattrs = calloc(e->nxattrs, sizeof(*e->xattrs));
++			if(!e->xattrs) {
++				e->nxattrs = 0;
++				goto truncated;
++			}
++			for(uint32_t k = 0; k < e->nxattrs; k++) {
++				if(rd_bytes(&r, &e->xattrs[k].name, &e->xattrs[k].name_len)
++						|| rd_bytes(&r, &e->xattrs[k].value, &e->xattrs[k].value_len)) {
++					goto truncated;
++				}
++			}
++		}
++	}
++	if(r.pos != len) {
++		free_entries(v, n);
++		return fail(err, "trailing bytes after the entries");
++	}
++	*out = v;
++	*count = n;
++	return 0;
++truncated:
++	free_entries(v, done + 1);
++	return fail(err, "truncated entries");
++}
++
++/* A set of byte strings (pointers into the entries, which outlive it). */
++typedef struct {
++	const char **key;
++	size_t *klen;
++	size_t mask;
++} strset_t;
++
++static int set_init(strset_t *s, size_t n)
++{
++	size_t cap = 16;
++	while(cap < 2 * n + 2) {
++		cap <<= 1;
++	}
++	s->key = calloc(cap, sizeof(*s->key));
++	s->klen = calloc(cap, sizeof(*s->klen));
++	s->mask = cap - 1;
++	return s->key && s->klen ? 0 : -1;
++}
++
++static void set_free(strset_t *s)
++{
++	free(s->key);
++	free(s->klen);
++}
++
++static size_t hash_bytes(const char *p, size_t n)
++{
++	uint64_t h = 1469598103934665603ULL;
++	for(size_t i = 0; i < n; i++) {
++		h = (h ^ (unsigned char)p[i]) * 1099511628211ULL;
++	}
++	return (size_t)h;
++}
++
++static int set_has(const strset_t *s, const char *p, size_t n)
++{
++	for(size_t i = hash_bytes(p, n) & s->mask; s->key[i]; i = (i + 1) & s->mask) {
++		if(s->klen[i] == n && memcmp(s->key[i], p, n) == 0) {
++			return 1;
++		}
++	}
++	return 0;
++}
++
++static void set_add(strset_t *s, const char *p, size_t n)
++{
++	size_t i = hash_bytes(p, n) & s->mask;
++	for(; s->key[i]; i = (i + 1) & s->mask) {
++		if(s->klen[i] == n && memcmp(s->key[i], p, n) == 0) {
++			return;
++		}
++	}
++	s->key[i] = p;
++	s->klen[i] = n;
++}
++
++static int safe_path(const char *p, size_t n)
++{
++	if(n == 0 || p[0] == '/' || memchr(p, 0, n)) {
++		return 0;
++	}
++	size_t start = 0;
++	for(size_t i = 0; i <= n; i++) {
++		if(i == n || p[i] == '/') {
++			size_t len = i - start;
++			if(len == 0 || (len == 1 && p[start] == '.') || (len == 2 && p[start] == '.' && p[start + 1] == '.')) {
++				return 0;
++			}
++			start = i + 1;
++		}
++	}
++	return 1;
++}
++
++/* Everything an installer relies on: safe paths, known kinds, data inside the image or blob, no
++ * path that leads through a symlink or file of the same package, and hardlinks only to files the
++ * package placed before. */
++static int check_entries(const btr_entry_t *v, size_t n, uint64_t image_len, uint64_t blob_len, char *err)
++{
++	strset_t files = { 0 }, not_dirs = { 0 };
++	int ret = -1;
++	if(set_init(&files, n) || set_init(&not_dirs, n)) {
++		fail(err, "out of memory");
++		goto out;
++	}
++	for(size_t i = 0; i < n; i++) {
++		const btr_entry_t *e = &v[i];
++		const char *name = e->path;
++		if(!safe_path(e->path, e->path_len)) {
++			fail(err, "unsafe path \"%.200s\"", name);
++			goto out;
++		}
++		for(size_t k = 0; k < e->path_len; k++) {
++			if(e->path[k] == '/' && set_has(&not_dirs, e->path, k)) {
++				fail(err, "%.200s: leads through a symlink or file of the package", name);
++				goto out;
++			}
++		}
++		if(memchr(e->target, 0, e->target_len)) {
++			fail(err, "%.200s: NUL in link target", name);
++			goto out;
++		}
++		for(uint32_t k = 0; k < e->nxattrs; k++) {
++			if(e->xattrs[k].name_len == 0 || memchr(e->xattrs[k].name, 0, e->xattrs[k].name_len)) {
++				fail(err, "%.200s: bad xattr name", name);
++				goto out;
++			}
++		}
++		uint64_t a, end;
++		switch(e->kind) {
++			case BTR_K_DIR:
++				break;
++			case BTR_K_SYMLINK:
++				if(e->target_len == 0) {
++					fail(err, "%.200s: symlink without target", name);
++					goto out;
++				}
++				break;
++			case BTR_K_HARDLINK:
++				if(!safe_path(e->target, e->target_len) || !set_has(&files, e->target, e->target_len)) {
++					fail(err, "%.200s: hardlink to something other than an earlier file of the package", name);
++					goto out;
++				}
++				break;
++			case BTR_K_FILE:
++				if(e->small) {
++					if(e->data_off > UINT64_MAX - e->size || e->data_off + e->size > blob_len) {
++						fail(err, "%.200s: small file outside the blob", name);
++						goto out;
++					}
++				} else if(e->size == 0 || e->data_off % BTR_BLOCK || !checked_align(e->size, &a)
++						|| e->data_off > UINT64_MAX - a || (end = e->data_off + a) > image_len) {
++					fail(err, "%.200s: file outside the image", name);
++					goto out;
++				}
++				break;
++			default:
++				fail(err, "%.200s: unknown entry kind %u", name, e->kind);
++				goto out;
++		}
++		switch(e->kind) {
++			case BTR_K_FILE:
++				set_add(&files, e->path, e->path_len);
++				set_add(&not_dirs, e->path, e->path_len);
++				break;
++			case BTR_K_SYMLINK:
++			case BTR_K_HARDLINK:
++				set_add(&not_dirs, e->path, e->path_len);
++				break;
++			default:
++				if(set_has(&not_dirs, e->path, e->path_len)) {
++					fail(err, "%.200s: a directory where the package has a file or symlink", name);
++					goto out;
++				}
++		}
++	}
++	ret = 0;
++out:
++	set_free(&files);
++	set_free(&not_dirs);
++	return ret;
++}
++
++void btr_index_free(btr_index_t *idx)
++{
++	if(!idx) {
++		return;
++	}
++	free(idx->chunks);
++	free_entries(idx->entries, idx->nentries);
++	free(idx->small);
++	free(idx);
++}
++
++int btr_index_parse(const unsigned char *buf, size_t len, const unsigned char *expected_id,
++		btr_index_t **out, char *err)
++{
++	unsigned char sum[32];
++	btr_index_t *idx = calloc(1, sizeof(*idx));
++	unsigned char *raw = NULL;
++	if(!idx) {
++		return fail(err, "out of memory");
++	}
++	btr_header_t *h = &idx->hdr;
++	if(btr_header_decode(buf, len, h, err)) {
++		goto bad;
++	}
++	if(expected_id && memcmp(h->id, expected_id, 32) != 0) {
++		char a[65], b[65];
++		btr_hex(h->id, 32, a);
++		btr_hex(expected_id, 32, b);
++		fail(err, "index %s is not the expected %s", a, b);
++		goto bad;
++	}
++	if(btr_index_len(h) > len) {
++		fail(err, "truncated index");
++		goto bad;
++	}
++	const unsigned char *table = buf + BTR_HDR;
++	const unsigned char *ez = table + h->nchunks * BTR_ENT;
++	const unsigned char *bz = ez + h->entries_len;
++
++	btr_sha256(table, h->nchunks * BTR_ENT, sum);
++	if(memcmp(sum, h->table_hash, 32) != 0) {
++		fail(err, "chunk table checksum mismatch");
++		goto bad;
++	}
++	idx->chunks = calloc(h->nchunks ? h->nchunks : 1, sizeof(*idx->chunks));
++	if(!idx->chunks) {
++		fail(err, "out of memory");
++		goto bad;
++	}
++	if(decode_table(table, h, idx->chunks, err)) {
++		goto bad;
++	}
++
++	btr_sha256(ez, h->entries_len, sum);
++	if(memcmp(sum, h->entries_hash, 32) != 0) {
++		fail(err, "entries checksum mismatch");
++		goto bad;
++	}
++	if(!(raw = decompress_exact(ez, h->entries_len, h->entries_raw_len, "entries", err))) {
++		goto bad;
++	}
++	if(decode_entries(raw, h->entries_raw_len, &idx->entries, &idx->nentries, err)) {
++		goto bad;
++	}
++	free(raw);
++	raw = NULL;
++
++	btr_sha256(bz, h->blob_len, sum);
++	if(memcmp(sum, h->blob_hash, 32) != 0) {
++		fail(err, "small-file blob checksum mismatch");
++		goto bad;
++	}
++	if(!(idx->small = decompress_exact(bz, h->blob_len, h->blob_raw_len, "small-file blob", err))) {
++		goto bad;
++	}
++	idx->small_len = h->blob_raw_len;
++	if(check_entries(idx->entries, idx->nentries, h->image_len, idx->small_len, err)) {
++		goto bad;
++	}
++	*out = idx;
++	return 0;
++bad:
++	free(raw);
++	btr_index_free(idx);
++	return -1;
++}
++
++int btr_check_chunk(size_t i, const btr_chunk_t *c, const unsigned char *d, size_t len, char *err)
++{
++	unsigned char sum[32];
++	if(len != c->encoded_len) {
++		return fail(err, "chunk %zu is corrupt", i);
++	}
++	btr_sha256(d, len, sum);
++	if(memcmp(sum, c->stored, 32) != 0) {
++		return fail(err, "chunk %zu is corrupt", i);
++	}
++	switch(c->compression) {
++		case BTR_COMP_ZSTD: {
++			static const unsigned char zmagic[4] = { 0x28, 0xb5, 0x2f, 0xfd };
++			if(len < 5 || memcmp(d, zmagic, 4) != 0 || (d[4] & 0x07)) {
++				return fail(err, "chunk %zu: not a plain zstd frame", i);
++			}
++			size_t fs = ZSTD_findFrameCompressedSize(d, len);
++			if(ZSTD_isError(fs) || fs != len) {
++				return fail(err, "chunk %zu: not exactly one zstd frame", i);
++			}
++			unsigned long long cs = ZSTD_getFrameContentSize(d, len);
++			if(cs == ZSTD_CONTENTSIZE_UNKNOWN || cs == ZSTD_CONTENTSIZE_ERROR || cs != c->unencoded_len) {
++				return fail(err, "chunk %zu: wrong content size", i);
++			}
++			return 0;
++		}
++		case BTR_COMP_NONE:
++			if(memcmp(c->stored, c->raw, 32) != 0 || len != c->unencoded_len) {
++				return fail(err, "chunk %zu: its data doesn't match the unencoded hash", i);
++			}
++			return 0;
++		default:
++			return fail(err, "chunk %zu: unknown compression %u", i, c->compression);
++	}
++}
++
++/* ---- signatures (sign.rs) ---- */
++
++/* At most this much of a .pub, .sig or revoked file is read. */
++#define MAX_TEXT 65536
++
++/* The decoded payload of a signify file: the base64 line after "untrusted comment: ...". */
++static int read_blob(const char *text, size_t len, const char *what, unsigned char *out, size_t *outlen, char *err)
++{
++	static const char prefix[] = "untrusted comment: ";
++	const char *nl = memchr(text, '\n', len);
++	if(len < sizeof(prefix) - 1 || memcmp(text, prefix, sizeof(prefix) - 1) != 0 || !nl) {
++		return fail(err, "%s: no comment line", what);
++	}
++	const char *line = nl + 1;
++	const char *end = memchr(line, '\n', len - (size_t)(line - text));
++	if(!end) {
++		end = text + len;
++	}
++	/* trim like Rust's str::trim (ASCII whitespace is all that can occur in base64 text) */
++	while(line < end && (*line == ' ' || *line == '\t' || *line == '\r')) {
++		line++;
++	}
++	while(end > line && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) {
++		end--;
++	}
++	if(line == end) {
++		return fail(err, "%s: no key line", what);
++	}
++	size_t dl = *outlen;
++	if(base64_decode(out, &dl, (const unsigned char *)line, (size_t)(end - line)) != 0) {
++		return fail(err, "%s: bad base64", what);
++	}
++	if(dl < 2 || out[0] != 'E' || out[1] != 'd') {
++		return fail(err, "%s: not an Ed25519 signify file", what);
++	}
++	*outlen = dl;
++	return 0;
++}
++
++static ssize_t read_text(const char *path, char *buf, size_t cap)
++{
++	int fd = open(path, O_RDONLY | O_CLOEXEC);
++	if(fd < 0) {
++		return -1;
++	}
++	size_t n = 0;
++	while(n < cap) {
++		ssize_t r = read(fd, buf + n, cap - n);
++		if(r < 0 && errno == EINTR) {
++			continue;
++		}
++		if(r <= 0) {
++			break;
++		}
++		n += (size_t)r;
++	}
++	close(fd);
++	return (ssize_t)n;
++}
++
++static int unhex8(const char *s, size_t n, unsigned char out[8])
++{
++	if(n != 16) {
++		return -1;
++	}
++	for(size_t i = 0; i < 16; i++) {
++		char c = s[i];
++		int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
++			: c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
++		if(v < 0) {
++			return -1;
++		}
++		if(i % 2 == 0) {
++			out[i / 2] = (unsigned char)(v << 4);
++		} else {
++			out[i / 2] |= (unsigned char)v;
++		}
++	}
++	return 0;
++}
++
++static int cmp_names(const struct dirent **a, const struct dirent **b)
++{
++	return strcmp((*a)->d_name, (*b)->d_name);
++}
++
++static int ed25519_verify(const unsigned char pk[32], const unsigned char *msg, size_t len, const unsigned char sig[64])
++{
++	int ok = 0;
++	EVP_PKEY *key = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, pk, 32);
++	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
++	if(key && ctx && EVP_DigestVerifyInit(ctx, NULL, NULL, NULL, key) == 1) {
++		ok = EVP_DigestVerify(ctx, sig, 64, msg, len) == 1;
++	}
++	EVP_MD_CTX_free(ctx);
++	EVP_PKEY_free(key);
++	return ok;
++}
++
++int btr_sig_verify(const unsigned char *hdr, const char *sigtext, size_t siglen,
++		const char *const *keydirs, char *keypath, char *err)
++{
++	unsigned char sig[128];
++	size_t sl = sizeof(sig);
++	char *text = NULL;
++	int ret = -1, found = 0, revoked = 0;
++	unsigned char pk[32];
++	char path[PATH_MAX];
++	char kn[17];
++
++	if(read_blob(sigtext, siglen, "signature", sig, &sl, err)) {
++		return -1;
++	}
++	if(sl != 74) {
++		return fail(err, "not a signify signature");
++	}
++	btr_hex(sig + 2, 8, kn);
++	if(!(text = malloc(MAX_TEXT))) {
++		return fail(err, "out of memory");
++	}
++	/* The keyring: every *.pub (first one wins per key number, directories in order, names
++	 * sorted bytewise within one) minus the key numbers in any "revoked" file. A malformed key
++	 * or revoked file is an error, as in sign.rs. */
++	for(const char *const *d = keydirs; d && *d; d++) {
++		struct dirent **names = NULL;
++		int n = scandir(*d, &names, NULL, cmp_names);
++		if(n < 0) {
++			continue;
++		}
++		for(int i = 0; i < n; i++) {
++			const char *nm = names[i]->d_name;
++			size_t nl = strlen(nm);
++			int is_rev = strcmp(nm, "revoked") == 0;
++			int is_pub = nl > 4 && strcmp(nm + nl - 4, ".pub") == 0;
++			if((!is_rev && !is_pub) || ret == -2) {
++				continue;
++			}
++			snprintf(path, sizeof(path), "%s/%s", *d, nm);
++			ssize_t tl = read_text(path, text, MAX_TEXT);
++			if(tl < 0) {
++				fail(err, "%s: %s", path, strerror(errno));
++				ret = -2;
++				continue;
++			}
++			if(is_rev) {
++				for(ssize_t p = 0; p < tl;) {
++					const char *ln = text + p;
++					const char *e = memchr(ln, '\n', (size_t)(tl - p));
++					size_t ll = e ? (size_t)(e - ln) : (size_t)(tl - p);
++					p += (ssize_t)ll + 1;
++					const char *hash = memchr(ln, '#', ll);
++					if(hash) {
++						ll = (size_t)(hash - ln);
++					}
++					while(ll && (*ln == ' ' || *ln == '\t' || *ln == '\r')) {
++						ln++;
++						ll--;
++					}
++					while(ll && (ln[ll - 1] == ' ' || ln[ll - 1] == '\t' || ln[ll - 1] == '\r')) {
++						ll--;
++					}
++					if(!ll) {
++						continue;
++					}
++					unsigned char k[8];
++					if(unhex8(ln, ll, k)) {
++						fail(err, "%s: bad key number \"%.*s\"", path, (int)(ll > 40 ? 40 : ll), ln);
++						ret = -2;
++						break;
++					}
++					if(memcmp(k, sig + 2, 8) == 0) {
++						revoked = 1;
++					}
++				}
++			} else {
++				unsigned char kd[128];
++				size_t kl = sizeof(kd);
++				if(read_blob(text, (size_t)tl, path, kd, &kl, err)) {
++					ret = -2;
++					continue;
++				}
++				if(kl != 42) {
++					fail(err, "%s: not a signify public key", path);
++					ret = -2;
++					continue;
++				}
++				if(!found && memcmp(kd + 2, sig + 2, 8) == 0) {
++					memcpy(pk, kd + 10, 32);
++					if(keypath) {
++						snprintf(keypath, PATH_MAX, "%s", path);
++					}
++					found = 1;
++				}
++			}
++		}
++		for(int i = 0; i < n; i++) {
++			free(names[i]);
++		}
++		free(names);
++	}
++	free(text);
++	if(ret == -2) {
++		return -1;
++	}
++	if(revoked) {
++		return fail(err, "signed with revoked key %s", kn);
++	}
++	if(!found) {
++		return fail(err, "signed with unknown key %s", kn);
++	}
++	if(!ed25519_verify(pk, hdr, BTR_HDR, sig + 10)) {
++		return fail(err, "bad signature (key %s)", kn);
++	}
++	return 0;
++}
+diff --git a/lib/libalpm/btrpkg.h b/lib/libalpm/btrpkg.h
+new file mode 100644
+index 00000000..745a8802
+--- /dev/null
++++ b/lib/libalpm/btrpkg.h
+@@ -0,0 +1,118 @@
++/*
++ *  btrpkg.h
++ *
++ *  Reader for btrpkg format version 1 indexes (https://github.com/hegjon/btrpkg) and their
++ *  signify-format Ed25519 signatures.
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++#ifndef ALPM_BTRPKG_H
++#define ALPM_BTRPKG_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++/* Self-contained (libcrypto, libzstd and base64.c only), so it can be tested without a handle.
++ * Every function that can fail returns 0 on success and -1 on failure, with a message in err
++ * (BTR_ERRLEN bytes). */
++
++#define BTR_HDR 256
++#define BTR_ENT 88
++#define BTR_BLOCK 4096
++#define BTR_MAX_EXTENT (128 * 1024)
++#define BTR_ERRLEN 256
++
++#define BTR_COMP_NONE 0
++#define BTR_COMP_ZSTD 2
++
++#define BTR_K_FILE 0
++#define BTR_K_DIR 1
++#define BTR_K_SYMLINK 2
++#define BTR_K_HARDLINK 3
++
++typedef struct {
++	uint64_t nchunks, image_len;
++	uint64_t entries_len, entries_raw_len;
++	uint64_t blob_len, blob_raw_len;
++	unsigned char table_hash[32], entries_hash[32], blob_hash[32];
++	/* the header hash (bytes 224..256): what identifies the package and what is signed */
++	unsigned char id[32];
++} btr_header_t;
++
++typedef struct {
++	uint64_t image_off;
++	uint32_t unencoded_len, encoded_len;
++	uint8_t compression;
++	unsigned char stored[32]; /* SHA-256 of the bytes as stored */
++	unsigned char raw[32];    /* SHA-256 of the unencoded bytes */
++} btr_chunk_t;
++
++typedef struct {
++	unsigned char *name, *value; /* name NUL-terminated; value binary */
++	size_t name_len, value_len;
++} btr_xattr_t;
++
++typedef struct {
++	uint8_t kind;
++	uint32_t mode, uid, gid;
++	int64_t mtime;
++	uint64_t size;
++	uint64_t data_off; /* image offset (large file) or offset into the small-file blob */
++	uint8_t small;
++	char *path;   /* NUL-terminated (checked to contain no NUL) */
++	size_t path_len;
++	char *target; /* symlink target or hardlink path, NUL-terminated */
++	size_t target_len;
++	uint32_t nxattrs;
++	btr_xattr_t *xattrs;
++} btr_entry_t;
++
++typedef struct {
++	btr_header_t hdr;
++	btr_chunk_t *chunks;
++	btr_entry_t *entries;
++	size_t nentries;
++	unsigned char *small;
++	size_t small_len;
++} btr_index_t;
++
++uint64_t btr_index_len(const btr_header_t *h);
++uint64_t btr_image_base(const btr_header_t *h);
++uint64_t btr_cache_len(const btr_header_t *h);
++
++/* Decode and check a 256-byte header (magic, version, checksum, reserved bytes, size caps). */
++int btr_header_decode(const unsigned char *b, size_t len, btr_header_t *h, char *err);
++
++/* Parse and check a whole index from the start of buf (an index, transport or cache file; bytes
++ * after the index are ignored). If expected_id is not NULL the header hash must equal it, checked
++ * before anything after the header is looked at. */
++int btr_index_parse(const unsigned char *buf, size_t len, const unsigned char *expected_id,
++		btr_index_t **out, char *err);
++void btr_index_free(btr_index_t *idx);
++
++/* Check a signify signature (the text of a .sig file) over the 256-byte header, against every
++ * *.pub in keydirs (NULL-terminated; missing directories are skipped) minus the key numbers in
++ * any "revoked" file there. On success, the key's path goes to keypath (PATH_MAX) if not NULL. */
++int btr_sig_verify(const unsigned char *hdr, const char *sigtext, size_t siglen,
++		const char *const *keydirs, char *keypath, char *err);
++
++/* Check a chunk's stored bytes before writing them: length, stored hash, and for zstd the frame
++ * header btrfs relies on (one frame, no dictionary ID or checksum, content size = unencoded
++ * length). The unencoded hash is not checked (see btrpkg's format.rs, check_chunk). */
++int btr_check_chunk(size_t i, const btr_chunk_t *c, const unsigned char *d, size_t len, char *err);
++
++void btr_sha256(const unsigned char *d, size_t len, unsigned char out[32]);
++void btr_hex(const unsigned char *b, size_t len, char *out); /* out: 2*len+1 */
++
++#endif /* ALPM_BTRPKG_H */
+diff --git a/lib/libalpm/meson.build b/lib/libalpm/meson.build
+index c2c605f9..f6acf058 100644
+--- a/lib/libalpm/meson.build
++++ b/lib/libalpm/meson.build
+@@ -33,3 +33,7 @@ libalpm_sources = files('''
+   util.h util.c
+   version.c
+ '''.split())
++
++if have_btrpkg
++  libalpm_sources += files('btrpkg.h', 'btrpkg.c')
++endif
+diff --git a/meson.build b/meson.build
+index 5ec5ba51..4c69c308 100644
+--- a/meson.build
++++ b/meson.build
+@@ -122,6 +122,11 @@ else
+   error('unhandled crypto value @0@'.format(want_crypto))
+ endif
+ 
++# btrpkg packages (lib/libalpm/btrpkg.c): Ed25519 through OpenSSL, zstd for the index sections
++libzstd = dependency('libzstd', static : get_option('buildstatic'), required : false)
++have_btrpkg = want_crypto == 'openssl' and libzstd.found()
++conf.set('HAVE_BTRPKG', have_btrpkg)
++
+ libseccomp = dependency('libseccomp',
+                         static : get_option('buildstatic'),
+                         required : false)
+@@ -333,6 +338,9 @@ libcommon = static_library(
+   install : false)
+ 
+ alpm_deps = [crypto_provider, libarchive, libcurl, libintl, libseccomp, gpgme]
++if have_btrpkg
++  alpm_deps += [libzstd]
++endif
+ 
+ libalpm_a = static_library(
+   'alpm_objlib',
+@@ -466,6 +474,9 @@ TEST_ENV.set('PMTEST_SCRIPT_DIR', join_paths(meson.project_build_root(), 'script
+ subdir('test/pacman')
+ subdir('test/scripts')
+ subdir('test/util')
++if have_btrpkg
++  subdir('test/btrpkg')
++endif
+ 
+ message('\n    '.join([
+   '@0@ @1@'.format(meson.project_name(), meson.project_version()),
+@@ -498,6 +509,7 @@ message('\n    '.join([
+   '  Build docs               : @0@'.format(build_doc),
+   '  debug build              : @0@'.format(get_option('buildtype') == 'debug'),
+   '  Use libcurl              : @0@'.format(conf.get('HAVE_LIBCURL')),
++  '  btrpkg packages          : @0@'.format(have_btrpkg),
+   '  Use GPGME                : @0@'.format(conf.get('HAVE_LIBGPGME')),
+   '  Use OpenSSL              : @0@'.format(conf.has('HAVE_LIBSSL') and
+                                             conf.get('HAVE_LIBSSL') == 1),
+diff --git a/test/btrpkg/btrdump.c b/test/btrpkg/btrdump.c
+new file mode 100644
+index 00000000..a3bd8f79
+--- /dev/null
++++ b/test/btrpkg/btrdump.c
+@@ -0,0 +1,223 @@
++/*
++ * btrdump: test driver for lib/libalpm/btrpkg.c.
++ *
++ *   btrdump FILE                     the parsed index as text (same output as `btrpkg dump FILE`)
++ *   btrdump --id HEX FILE            the same, requiring the header ID
++ *   btrdump --verify SIG DIR FILE    check SIG (signify) over FILE's header with the keys in DIR
++ *   btrdump --mutate FILE            flip every bit of the index and cut it at every length;
++ *                                    every variant must be rejected (exit 1 otherwise)
++ *   btrdump --chunks TRANSPORT       check every chunk of a transport file (.pkg.btr)
++ */
++#include <inttypes.h>
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "btrpkg.h"
++
++static unsigned char *slurp(const char *path, size_t *len)
++{
++	FILE *f = fopen(path, "rb");
++	if(!f) {
++		perror(path);
++		exit(2);
++	}
++	size_t cap = 1 << 20, n = 0;
++	unsigned char *b = malloc(cap);
++	size_t r;
++	while(b && (r = fread(b + n, 1, cap - n, f)) > 0) {
++		n += r;
++		if(n == cap) {
++			cap *= 2;
++			b = realloc(b, cap);
++		}
++	}
++	fclose(f);
++	if(!b) {
++		fprintf(stderr, "out of memory\n");
++		exit(2);
++	}
++	*len = n;
++	return b;
++}
++
++static void hexout(FILE *o, const unsigned char *b, size_t n)
++{
++	for(size_t i = 0; i < n; i++) {
++		fprintf(o, "%02x", b[i]);
++	}
++}
++
++static void dump(const btr_index_t *x)
++{
++	const btr_header_t *h = &x->hdr;
++	FILE *o = stdout;
++	fputs("id ", o);
++	hexout(o, h->id, 32);
++	fprintf(o, "\nheader %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " index %" PRIu64 " base %" PRIu64 "\n",
++			h->nchunks, h->image_len, h->entries_len, h->entries_raw_len, h->blob_len, h->blob_raw_len,
++			btr_index_len(h), btr_image_base(h));
++	for(uint64_t i = 0; i < h->nchunks; i++) {
++		const btr_chunk_t *c = &x->chunks[i];
++		fprintf(o, "c %" PRIu64 " %u %u %u ", c->image_off, c->unencoded_len, c->encoded_len, c->compression);
++		hexout(o, c->stored, 32);
++		fputc(' ', o);
++		hexout(o, c->raw, 32);
++		fputc('\n', o);
++	}
++	for(size_t i = 0; i < x->nentries; i++) {
++		const btr_entry_t *e = &x->entries[i];
++		fprintf(o, "e %u %u %u %u %" PRId64 " %" PRIu64 " %" PRIu64 " %u ", e->kind, e->mode, e->uid, e->gid,
++				e->mtime, e->size, e->data_off, e->small);
++		hexout(o, (const unsigned char *)e->path, e->path_len);
++		fputc(' ', o);
++		hexout(o, (const unsigned char *)e->target, e->target_len);
++		fprintf(o, " %u", e->nxattrs);
++		for(uint32_t k = 0; k < e->nxattrs; k++) {
++			fputc(' ', o);
++			hexout(o, e->xattrs[k].name, e->xattrs[k].name_len);
++			fputc('=', o);
++			hexout(o, e->xattrs[k].value, e->xattrs[k].value_len);
++		}
++		fputc('\n', o);
++	}
++	unsigned char s[32];
++	btr_sha256(x->small, x->small_len, s);
++	fprintf(o, "small %zu ", x->small_len);
++	hexout(o, s, 32);
++	fputc('\n', o);
++}
++
++static unsigned char *bufs[4];
++static int nbufs;
++
++static unsigned char *load(const char *path, size_t *len)
++{
++	return bufs[nbufs++] = slurp(path, len);
++}
++
++static int finish(int code)
++{
++	while(nbufs) {
++		free(bufs[--nbufs]);
++	}
++	return code;
++}
++
++static int run(int argc, char **argv);
++
++int main(int argc, char **argv)
++{
++	return finish(run(argc, argv));
++}
++
++static int run(int argc, char **argv)
++{
++	char err[BTR_ERRLEN];
++	btr_index_t *x = NULL;
++	size_t len;
++
++	if(argc == 2) {
++		unsigned char *b = load(argv[1], &len);
++		if(btr_index_parse(b, len, NULL, &x, err)) {
++			fprintf(stderr, "%s: %s\n", argv[1], err);
++			return 1;
++		}
++		dump(x);
++		btr_index_free(x);
++		return 0;
++	}
++	if(argc == 4 && strcmp(argv[1], "--id") == 0) {
++		unsigned char id[32];
++		if(strlen(argv[2]) != 64) {
++			fprintf(stderr, "--id wants 64 hex digits\n");
++			return 2;
++		}
++		for(int i = 0; i < 32; i++) {
++			unsigned v;
++			if(sscanf(argv[2] + 2 * i, "%2x", &v) != 1) {
++				return 2;
++			}
++			id[i] = (unsigned char)v;
++		}
++		unsigned char *b = load(argv[3], &len);
++		if(btr_index_parse(b, len, id, &x, err)) {
++			fprintf(stderr, "%s: %s\n", argv[3], err);
++			return 1;
++		}
++		dump(x);
++		btr_index_free(x);
++		return 0;
++	}
++	if(argc == 5 && strcmp(argv[1], "--verify") == 0) {
++		size_t sl;
++		unsigned char *sig = load(argv[2], &sl);
++		unsigned char *b = load(argv[4], &len);
++		const char *dirs[] = { argv[3], NULL };
++		char key[PATH_MAX];
++		if(len < BTR_HDR || btr_sig_verify(b, (const char *)sig, sl, dirs, key, err)) {
++			fprintf(stderr, "%s: %s\n", argv[2], len < BTR_HDR ? "file too short" : err);
++			return 1;
++		}
++		printf("good signature, key %s\n", key);
++		return 0;
++	}
++	if(argc == 3 && strcmp(argv[1], "--mutate") == 0) {
++		unsigned char *b = load(argv[2], &len);
++		if(btr_index_parse(b, len, NULL, &x, err)) {
++			fprintf(stderr, "%s: %s\n", argv[2], err);
++			return 1;
++		}
++		size_t il = (size_t)btr_index_len(&x->hdr);
++		btr_index_free(x);
++		unsigned char *m = bufs[nbufs++] = malloc(il);
++		memcpy(m, b, il);
++		size_t accepted = 0, tried = 0;
++		for(size_t i = 0; i < il * 8; i++) {
++			m[i / 8] ^= (unsigned char)(1 << (i % 8));
++			if(btr_index_parse(m, il, NULL, &x, err) == 0) {
++				accepted++;
++				fprintf(stderr, "accepted with bit %zu flipped\n", i);
++				btr_index_free(x);
++			}
++			m[i / 8] ^= (unsigned char)(1 << (i % 8));
++			tried++;
++		}
++		for(size_t n = 0; n < il; n++) {
++			unsigned char *t = malloc(n ? n : 1);
++			memcpy(t, m, n);
++			if(btr_index_parse(t, n, NULL, &x, err) == 0) {
++				accepted++;
++				fprintf(stderr, "accepted cut at %zu\n", n);
++				btr_index_free(x);
++			}
++			free(t);
++			tried++;
++		}
++		printf("%s: %zu variants, %zu accepted\n", argv[2], tried, accepted);
++		return accepted ? 1 : 0;
++	}
++	if(argc == 3 && strcmp(argv[1], "--chunks") == 0) {
++		unsigned char *b = load(argv[2], &len);
++		if(btr_index_parse(b, len, NULL, &x, err)) {
++			fprintf(stderr, "%s: %s\n", argv[2], err);
++			return 1;
++		}
++		uint64_t off = btr_index_len(&x->hdr);
++		for(uint64_t i = 0; i < x->hdr.nchunks; i++) {
++			const btr_chunk_t *c = &x->chunks[i];
++			if(off + c->encoded_len > len || btr_check_chunk(i, c, b + off, c->encoded_len, err)) {
++				fprintf(stderr, "%s: %s\n", argv[2], off + c->encoded_len > len ? "truncated" : err);
++				btr_index_free(x);
++				return 1;
++			}
++			off += c->encoded_len;
++		}
++		printf("%s: %" PRIu64 " chunks ok\n", argv[2], x->hdr.nchunks);
++		btr_index_free(x);
++		return 0;
++	}
++	fprintf(stderr, "usage: btrdump [--id HEX] FILE | --verify SIG DIR FILE | --mutate FILE | --chunks TRANSPORT\n");
++	return 2;
++}
+diff --git a/test/btrpkg/fixtures/crafted/blob_raw_len_long.btridx b/test/btrpkg/fixtures/crafted/blob_raw_len_long.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9bcc1fb99831077f0a04541a384de2a7387ab991
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$OkpHBkDkko{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)TlIP3fo8C`q3%@P-mZK*9
+z<6Gw(CH3{|1m#x0OXb#FxAG<2WCI3<O`Hr2P;W9!eY?GF$%fy%TCLM{reqo=BtCh*
+z;Od1k<@r8+++J$SECXHn&(BzDyJ#YN=WZ?i34L+Re_!koc+;D)aNG2%|3WGZ22hg?
+z7#XG}Ak1C9ilOL-W%<uJ;ij%f<R7Wo=bV0WC}0Y^@|6Q?4|7Va)cEMT>zT@iqC?>g
+zvmei~>0WzJ&v@ybDLV_CChKe77HrVis{c3PIpbY61`~E}kQGZ98SeWsWZzchVqjp<
+za|-qJaq;wX^Jl1IWMuOV337E^$;c7l?aufX6k(;sMeO=HnMvIGg(YVE`h~eU!utN@
+zsWSRL`N`RCsi`Rp3EGSX`uXLl@j3a)*=eb%DSE~EAq?uwjLL<%IVqV&3Ifa%6)&?f
+z2W1EyGtgspi()=(H2Lld(ai#^tqkAKzIo8rwd}p?&J+ENGA<kkPMAM%ZeUc5XK0z0
+zxBJg=2ByRvGvZHpMWlUTx&EN=@S}#7&9{9Hhn+p7^4P!m16RT7KilIYwPV1ZtY%7;
+zWGMT1z_UQAh)?~S;m?&-$?W?CczM~5`82U7IXNEO*u6xz;Kq$GRrUD2-`3{zd%0P8
+z>S*c26&{xA+I33&*Y|u`UEYqu_1~_@OZdo3E;z|>grSeY$%eNifhnWqz$>q~nH!6i
+zc)05wzc965aM83G2B|I?S@(iE6fNH#$ZB%BzTn3PM^V+)4vtOH50o5*1iWM|^cS><
+zlo-6>`pwwz_D>X_=G5P9O^Tf=np^p+xZm=aI=;C1sHK--hTy@w%UEV`7nvPi!@(VM
+z(@*L<Z|>3Lz_YpgdBVKS{M!z6JY-$fGJA<AcjTpOC&YH}=1%PFZCw};7~^!RqiHE;
+zJJ%77?d#+EJ60S&(%)+urM8bvrXoB0;bN96c2^%<I{2_rP~?8r;&9&BzmdoP*G)D)
+zaPZ>BM~qiaGe+(6mOr>wanhQlVomHmwrL6Wsf-iiLIgie=DPVXahsY?R}#~b(?M+-
+z>`4t7_a^N1&Ahv2$Hu2$uN+Ewbae5PlF*QUO&?Cw<v9r*t2x3`@KEW+o(D!z*K|&H
+zo!aQ=)_z7n*F?+fQisK4m7-RzW17`_G#`0gOna&G=3u1cm+tk4r<>`iw<W~etu|23
+z$+4cc;$&u)pG%Xq=E;qQj+qusH4#sitXm`Qqi(06SrW*RS7Y)&_4;?)x`@N;R!=<l
+z#PLP^9NT*?_1{<IEnfZK<^K9j!T<gpU->3?m!ZY0m49B{I`r(^i;VJ5esdSg{l9YS
+z(6d{IUK|eneCtr(u6bL%Qdj*yVs>}kMdj^_|80_6r<;Sscl*0eH|LX|LQC=U_i0am
+zEU&p|{Vz<owl?zT3m%`lJFOe{Z7WEdz3DjbXSV64HbEMvZ}~2bE3@5I&}w#9;+#9z
+z-@A)<1%F<CBl7qy-+0qsXH{fMzt;W;6@GQ-@^8)8v-Zxv^1kC#p#HLrX4N(i_+PB3
+z=L|Dz&far=RgzTp<9Q0}b#)G|?#f)#>*Q|xFLe9LHs1vQ<JPx+PH3=p|C_#cm0q>X
+zto}QekNvh5KJT%%Z9o3#%(|U1lX%V-Ukv2uV-T2pAY`}i{Sz@x3nOl^#cXYwl@&KT
+T$xxCxH2U_e!#W9DRT^{vMPPSQ
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/cases.txt b/test/btrpkg/fixtures/crafted/cases.txt
+new file mode 100644
+index 00000000..27adcda4
+--- /dev/null
++++ b/test/btrpkg/fixtures/crafted/cases.txt
+@@ -0,0 +1,63 @@
++identity accept
++reencoded accept
++path_empty reject
++path_2f6574632f706173737764 reject
++path_612f2e2e2f2e2e2f78 reject
++path_2e2f78 reject
++path_612f2f62 reject
++path_612f reject
++path_780079 reject
++path_2e2e reject
++path_612f2e reject
++symlink_no_target reject
++symlink_abs_ok accept
++symlink_nul reject
++through_symlink reject
++through_file reject
++dir_over_file reject
++hardlink_ok accept
++hardlink_missing reject
++hardlink_to_dir reject
++hardlink_unsafe reject
++hardlink_forward reject
++kind_4 reject
++small_flag_2 reject
++xattr_empty_name reject
++xattr_nul_name reject
++xattr_ok accept
++large_unaligned reject
++large_past_image reject
++large_size0 reject
++large_size_huge reject
++large_off_overflow reject
++small_past_blob reject
++small_overflow reject
++small_end_exact accept
++entries_trailing reject
++entries_count_high reject
++entries_count_huge reject
++entries_two_frames reject
++entries_extra_frame reject
++entries_trailing_garbage reject
++entries_raw_len_short reject
++entries_raw_len_long reject
++blob_raw_len_long reject
++hdr_version2 reject
++hdr_alg2 reject
++hdr_reserved reject
++hdr_tail reject
++hdr_nchunks_huge reject
++hdr_entries_raw_cap reject
++hdr_blob_raw_cap reject
++hdr_entries_len_huge reject
++hdr_image_long reject
++chunk_gap reject
++chunk_len0 reject
++chunk_len_unaligned reject
++chunk_comp1 reject
++chunk_zstd_not_smaller reject
++chunk_zstd_enc0 reject
++chunk_raw_hash_differs reject
++chunk_too_long reject
++chunks_short_of_image reject
++chunk_reserved reject
+diff --git a/test/btrpkg/fixtures/crafted/chunk_comp1.btridx b/test/btrpkg/fixtures/crafted/chunk_comp1.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..302da1cd2989a528781ab0d3f3fe50ca58db062c
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)liz#yyr~Kl&1^#geCF!te!hj
+z#;5$srmF2Wp?B<-=1-^;cRwFJ|L)@6X<zLhUzxGw)>pgYyHorRYchPAC9)>L=;_mP
+zE#=CL%&64|YK|<HEGlb|%q%cCx0?I?@c^guA}T$`5ZlNneWyoh|2MD7IJnpC)b`%W
+z^{rcGY}{d7x#7a8-9>XhNI`wYz`$U@z_5uE5(XgKroP?Ywq(QaU9HyXI#V)@5)z+0
+zUvTw8neu#}K5j3yWtM@i{O4yZwOurky>qvg{)E1`=D#oY2)yadSh#I^)qf!ska-|;
+z7z`L0rY0~jz${w6ilOL-W%<uJ;ij%f<R7Wo=bV0WC}0Y^@|6Q?4|7Va)cEMT>zT@i
+zqC?>gvmei~>0WzJ&v@ybDLV_CChKe77HrVis{c3PIpbY61`~E}kOfN^8SeWsWZzch
+zVqjp<a|-qJaq;wX^Jl1IWMuOV337E^$;c7l?aufX6k(;sMeO=HnMvIGg(YVE`h~eU
+z!utN@sWSRL`N`RCsi`Rp3EGSX`uXLl@j3a)*=eb%DSE~EAq?uwjLL<%IVqV&3Ifa%
+z6)&?f2W1EyGtgspi()=(H2Lld(ai#^tqkAKzIo8rwd}p?&J+ENGA<kkPMAM%ZeUc5
+zXK0z0xBJg=2ByRvGvZHpMWlUTx&EN=@S}#7&9{9Hhn+p7^4P!m16RT7KilIYwPV1Z
+ztY%7;WGMT1z_UQAh)?~S;m?&-$?W?CczM~5`82U7IXNEO*u6xz;Kq$GRrUD2-`3{z
+zd%0P8>S*c26&{xA+I33&*Y|u`UEYqu_1~_@OZdo3E;z|>grSeY$%eNifhnWqz$>q~
+znH!6ic)05wzc965aM83G2B|I?S@(iE6fNH#$ZB%BzTn3PM^V+)4vtOH50o5*1iWM|
+z^cS><lo-6>`pwwz_D>X_=G5P9O^Tf=np^p+xZm=aI=;C1sHK--hTy@w%UEV`7nvPi
+z!@(VM(@*L<Z|>3Lz_YpgdBVKS{M!z6JY-$fGJA<AcjTpOC&YH}=1%PFZCw};7~^!R
+zqiHE;JJ%77?d#+EJ60S&(%)+urM8bvrXoB0;bN96c2^%<I{2_rP~?8r;&9&BzmdoP
+z*G)D)aPZ>BM~qiaGe+(6mOr>wanhQlVomHmwrL6Wsf-iiLIgie=DPVXahsY?R}#~b
+z(?M+->`4t7_a^N1&Ahv2$Hu2$uN+Ewbae5PlF*QUO&?Cw<v9r*t2x3`@KEW+o(D!z
+z*K|&Ho!aQ=)_z7n*F?+fQisK4m7-RzW17`_G#`0gOna&G=3u1cm+tk4r<>`iw<W~e
+ztu|23$+4cc;$&u)pG%Xq=E;qQj+qusH4#sitXm`Qqi(06SrW*RS7Y)&_4;?)x`@N;
+zR!=<l#PLP^9NT*?_1{<IEnfZK<^K9j!T<gpU->3?m!ZY0m49B{I`r(^i;VJ5esdSg
+z{l9YS(6d{IUK|eneCtr(u6bL%Qdj*yVs>}kMdj^_|80_6r<;Sscl*0eH|LX|LQC=U
+z_i0amEU&p|{Vz<owl?zT3m%`lJFOe{Z7WEdz3DjbXSV64HbEMvZ}~2bE3@5I&}w#9
+z;+#9z-@A)<1%F<CBl7qy-+0qsXH{fMzt;W;6@GQ-@^8)8v-Zxv^1kC#p#HLrX4N(i
+z_+PB3=L|Dz&far=RgzTp<9Q0}b#)G|?#f)#>*Q|xFLe9LHs1vQ<JPx+PH3=p|C_#c
+zm0q>Xto}QekNvh5KJT%%Z9o3#%(|U1lX%V-Ukv2uV-T2pAY`}i{Sz@x3nOl^#cXYw
+Xl@&KT$xxCxH2U_e!#W9DRT^{v)Ms?J
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_gap.btridx b/test/btrpkg/fixtures/crafted/chunk_gap.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..32d0b054e00e3180ca875851ffe24de055adabf3
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lj;A*S`5@_FikAn6TTt(CVst
+z-|DIw$>a-hzh<x5qSxPV>3%+X{@umB)4tk2zA|IUt*>^)cc=It)@1lJOJq%g(bK2p
+zTFR9fnNh0`)ErqXSya{_nOR_PZZ-G&;{i_RMO1o>A-0iEZfENFb(P7u!mZ?^Rhe&c
+z_-=KbZEMc`So~DvOmi^X$0oSR1`G_FI2jnA-ej2ic6-~B4ZnA_TBqww$uvqxeDZw3
+z)eB|H^L_fbz0{Uj2D<W}pRv?-(M0yn-CFt+`r?}ZzStx1rZ;2Zw&_*>g;W?Epe7qI
+zGE7ZCn7e!xL(vb*@}G0UO<j-3KT@;LIsN2Nz!Y}nD+ksd=9E~e@zHnJGnEZRhr%0X
+zKb~XLz4o4-@zOg}b{05I*4Ml(*r2gh|8K%`#=C3`ChXiGE0!=a-1lY3zOBl|z`&sA
+z6zb{Y;_2t+&rrw6$mSao<m$STkt4v{o$)Ow!b*#a*!6QVleqN@OU(H73v+XX_5I6J
+zW%PaWle67YQ&Sicv>6Tb^UG7?bMlk3(^6AY^osLC7}S{=l?!uoQZkJc1ehl(US?ws
+z$`CqcpvUYM#eCRk^4%4pn*~@~8NQ!=^PsJ3*?ZTWC;Ay>TsRJ#Fn{3Oz^E9{&@wG=
+z_n+eoOo=;Y#GmkrNc+HY{Xya3M-45TZ~Gh$J9|jwv48Uiu7cHnw#P?m$ACRq&6Fz1
+zQ1<bFXMt1^pZYh$pDU}9+4l+X^0FQCX<|=uay+=Pdx>trjT>RA>hXKOt<CB8a<lT(
+z(b9=4JS^3<>y-Gf@A<O2yd8z>zg>}+@R65XaFXE&Lmz{a4R1*TQ%1{yS6*>5Hx@1N
+zaMwG2VQRnNqG>Y>Qe85#?ge!yTE0Dy)#P-2!H*A)qN=MM9GjvaC^-rVc*$DmFK7`d
+zF?hrEo3Y{TpC~@fslVHr6gyQkxAIqUzvVG?d~x$pOE1F=!Gm{~vCQBuGCRD6gFEJ?
+zpVW8W+@r~XXLI-Sgn66!w;kws$hxX!_7YL<$V=Bwi0$Cbo!Hsix-cLx#_3c?(^AfM
+zt|J=T*T?mDtT=w8zt=QMZ6BLVMRxYX#Vl9su0FVQ@L{8%$o;Iv;k>bbBai>Dn{0gG
+z;KhxP7_XdWjN0cde{ikhq%}*$n%I48(-Q1c87IVr2!5K(b@O53HZ`BFB&H>&gW5FM
+zlNvJaP1x(3d3Vi@jZeQ`Ih69~=;9|Op&|d8KAfn_a}qjMbA+ehq0);z4~(L&>7493
+zwb9Y7{fvOFiI&%;4vWbuMXg-NG^_V$KJvPl_EP7~!AQw3-RloeH`7yZONh5yZJ?Z!
+zV?Axf$;>Q2mnLh?lN${kGcB5GBAzT+w?^DY-A+TZB#<Mo#^itM_3yTI5r@~Uo_Oww
+z<BRw?w)b4>zpuz!y!yY({q>uI|NT3@@=fk8LyK1{|Gc_&=-Ig!8Reh+<}Q}|f92Mp
+zXSWW$I2`)<)}g*#^R{}WuKIt(?C!dY%G($J+a$M6HwTID_II6b&L=;Gmg48{)1LlV
+zUUSd-Uzl)hZRF1vJU(}KS~u?7R**J(({bL<Y|~9`f;3Lw@?9ENX1lAP)$FdsId`tV
+zcNgyp{=ED~<ndd+@ut7ds>qant^E-y{OZu<-<q#y?VW$+eaERl{bd`?s%;+dzgSVv
+z8D`d;z32R@B&qDj^Ay(W>Kt6%mAR(Z$=&u}==POuz6t)vt#AFD&|vNUH+}6Yy=s|R
+z{dX)M`)w_J-eYase*Dpybvt7w@tiNd7|74ZATaqr$Zp^JCt{oyM%-eH+1fNKD{gj@
+Tp(Jx?^zB)PbrQC!H0S^Tl23I#
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_len0.btridx b/test/btrpkg/fixtures/crafted/chunk_len0.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9a9df2c2231d4256669612e31a18c625a130995
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lfRic<(VztqGHAz1c)hKU`lc
+zReAE0*4l>}Z)fFjN^ZWh!~J~p{JV>Lr+u}5d}YRxTVL&p?@sYQtjX|cmdKg}qo+^H
+zwUjF}GNV=>s5!D&vZ$;<GPA(o+-mOk#{-<si>UM%Lu@0TESl=~;jY|rBb^CzU0fxv
+zUVEYOXS2MdOa9?CUDnrg*&LBg-o(kk0QDxr)VJH)mTdUFtJOMPXG*3~LgJI>3$9)$
+zQ=aeB$L*!I%relG|NM-lwu>gRckb5GpU@ZA{P)Ekfj7Mw3%5<L`Y)uyU;s7QfRSNp
+z0>a$os~C!YSeE~s6K?8yME;SQea`78hXSUsD_=RV_AsZ!N{x@cyPm0RC^{70F#GWw
+zo9?yu^o*C@nX<FMX|lfNZNUbOt@?ixo-^KMV=!Uo23fI$k>S2CL-uV|E(Qh$J*QAl
+z9~VzQH-CmYMn*Q@kRVsrm5dw#-tLTVK@nD3T*R)QlbOV=Usz(suV0v(BdqUVo+_j7
+zlb@XJmYSNvkf6<Ipr2o!8lRJ&oSl}Mnxa>nAHtx{%&1(Lo0F1hq#(dNQSmYxb5MrR
+zF#|njw<zYrMw9QZ5Zx@m+RE_#?3)K|UCZ9P?mW@YDC5F$;Dq@D=LSZ_c!ri~dAt7{
+zXJAU)F(dwjS47$emg^4+4?k*X*?imQaM;;HDv$k}KX4VS{<A$kQac9h$!exlNrtkI
+z2RsX;iulyO8U9>ZmCU|RfR~r;m`@XXl9S`XjonLh3vS#9Q&o@O`)zGbzn7bpr;e6R
+zT;XA<u3e|Ze|^uF)#dFdT>tHgyo8Uu<bsn7M;Q7ToNRbY5|}bt4!rV;o4K)QiHE!1
+z@e5P?1s6@5VUX&Qk##SqL(%f>fvhH{>kEE-a1>Qt?cmrH{Xof4NWe?hLVrPvNQuE4
+zuHTFeZ~sK`X-@s!)}+{}qPdm7iu)~(spE^Ak6L;eW(Xd<yNqQ9cahoQH5}YAH~pl(
+z^X48+4m_K?pC`=Q%)jkG$3xatEwh)1az|dec0z0iZ|=m--qwWyfiX^}I+~VpwsRfP
+z*uFllzhlMmBmKRmQEL0xWGb?=A1-FOVt4hyrGpO}1x4;>Ee_|6{Tq4wf8Au`0|zf|
+ze8hO=G-K30Z~2336(_A(D%QmAW1E&>pUOBPE=2ItWUiYJ6St}PbR{t@IUUrd!JgER
+zac{z2-^{yfc5Hn5^~#}?M@JVwDG3ev*Yx2;U7nNBv6>@11rL>8?0H}mbxr4F*Qt$;
+zZtZ6TbWOCpE_GN;Rw-)bI;L5@NAr=_#k7|?Zw^LEe(7F+c)FRMdRs!g-D(5noE+<E
+zD^6x+`MES%Yo6R_=$L8IR1@)J$+|V-KI(QFnk9i8c{L{gQ?Gxwt&2FkZuP`-PaI#w
+z&#}GdQvZEL-s08&UGA^n6#Vbs@s)3KcNto|TKVVItwYbwy~rs4<TrP*-2W@L4n4bd
+z=*8jC&$kZs?V7jMD|OZXBW8EkT~yw__}?bEb-Fo7e7C>rbaOuWDYO(nf1mdB$MTwc
+z*8jqUYilEazTok>yVJUH-?oCZ*_)2@erB6)Y7?Y!`j+p~xH8*a1+8XxCC<5X{k^+*
+zSMcZMHzJSU@{KqBbyh{D^lR;pP~lgHF8|hiJ!|j$EAKl_1?n%`XjX0Wfd9pcdd@Jj
+z=IlM^S0zbhKc1(sURUSf>aNT+y-x17|3bH~Z1YX<KW=^N=Y$4p_rK|DSLs#D%<8{m
+z`Pgr3;qxAA+xFv+&aB%RGl}PX@x?%XJ_dow2SRrH-airJv@qfpTg=v`Sy^$jlME%9
+QL!)ocI;@khRi!}(0Ev5YUH||9
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_len_unaligned.btridx b/test/btrpkg/fixtures/crafted/chunk_len_unaligned.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd103e9c49d85dbc3e5fda9fbc4fe82500bd25fa
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lgdX@jHnVM?>rn@=Z)O`5mtM
+z;PtCT6P|2fe9yXa(?3IXCinBv^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)TQs#%#s%XtU*R?V~viYY*
+znMS2a`p=FyaU;R%X}jf(eJU`M|LZd_Y~o~KfO?Z*>f7yYOE&!8)oPutGbPg~A@Rxc
+z1y?VWDbM%m<MvWpW*O+pe}2YN+eH)EJ9lg8Pw0zl{`+E&z?<HTh1;fA{TEVUFo2qD
+zz{oH)0b%a)RSZQxEX#k+2{&~;BL7IuKIin4LjhCRm9HFFdze#VrN&3!UC&fD6dek0
+znEiN;P50V+dd5rdOxaoBG+AHswqS$CR{g&T&l&HsF_^G(gREG>$Z+46A^Wx}7Xt%>
+zo>Qo&kBg_Dn?FMxBO{w{NRX@RN=A+VZ+FJGpa?51E@Icu$xPzbFDx<R*DuV?5!UxF
+zPnFU4$xqI9OHEB-NYG|9(9bVVjnBzX&Q42BP0=gP4`EPeW>hZB%}L2LQV?LCsCb!;
+zIVeNun1LR%TNLwQqsezyh;9~OZDsg=_RWK~u4V6Ccb@2HlyTuWaKik7a|5GdJVVR0
+zyxo6}GcYCYm=S-%D<bU!%k>9^haWYxY`*PtIPB~pmB;?gAGiuu|JfcNsT~9MWHnQ&
+zBtzN91D*v^MSSYt41cbyN@m|Dz{|^a%%_Px$;t8H#_lD$1vhSlsjA2C{kArz-^<O)
+zQ%6fDuJEu_*RE6IzrN?o>hg9JuK#vLUcyISa=}T4BMf~EPBy$H2}~I+2VQx_&D>bD
+z#KT?h_=Tzcf{UijFi3UD$hsHQp=kN`Kvt8}^#wmZIEt#Sc5rNpexT$iB;X}$p}(L-
+zq{QG2*Kfv#w|}DeG^hS<Yf|h~(cH>k#r>AY)bYj5M=iY!GXxLbUB)tlyU6VD8V>H5
+zn|@N?d2^2@2cFH{&lBct=HGUp<00#+mf1^0xg#%KJ0Z4%H+N!ZZ|lN<z!;}f9ZgF)
+z+qsTtY+oPO-?8HOk^WxOD7AfTG8Ng`4;QmsvAg=<(!qy~f+F{`7Kii3{*65TzizVe
+zfrA$}K4QFbnlWmhxBS7iij&qX6>DPmu}w>`Pi34C7b5s+GS|(AiQCkCx{{cdoDOQ!
+zU{7kuxHn<1Z|2=KJ2pQ3dgV~cqoa$Tl!S)-Yx;1aF3(BmSj`chf`>{k_B=3(x~6lo
+z>(oX^xArpvx+Yp)mpUvas}!|z9n-Adqxs0|V%kfcHwPmnzjUuZJl#xBy)7Z$Znc4O
+zPLB1o6(=*Z{9Kx>HBW9dbj-A9s)=~AWZfEZA9Xto&5}Tlyc(1Lsn@^T)<qm%w|e5a
+zCyp=T=h)tJssFwrZ}IB?F89}O3jX)+_{ulAy9_N}t^D)q)}d$TUSyPi@|(L@?*Elr
+zho0R!^x|;n=Ua#RcFo)BmAdNx5wpANE-G(d{BM)oI^7&3zT4k*x;dZx6k3X(zfXJm
+zV|mRz>wjUwwY8ByU-0<c-D%ypZ(Bjy>`ljcKeJ6YwF%NVeam-gT$$~zf>yJ;66f5x
+z{@z`@EBN#B8<EFv`No_6I;$d6`nC2)sPL;pmw#)%p0#)WmG>Q|0`-?|G^@6G!2e=J
+zJ!hC%bM~I|tCFO$AJ0=*ud8!#bywz^UMF|kf1%q~w)rObAGf~sb3%i)```4ntMsa6
+zX7%5(eC)Ti@Oh85ZTs;@XV&eEnZ$Fx_+lVGAA`W;10lP8@1KZqS{QMQEoN)etgN`%
+UNrsZlq0zTz9o9+Ms?wkX01EDO0RR91
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_raw_hash_differs.btridx b/test/btrpkg/fixtures/crafted/chunk_raw_hash_differs.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9cc6dc67cc245a903f20eb51d7cc52757ae6b085
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lmAU<L|$w)~1uKcS+CwYBnd+
+zz@*FjM5&|8awm?W%*^&w_w&*7?=J40_SOFJl^IKJeYGpTJH`L7Cc~#$B5M+io<1$t
+zQm)L%j9Pu5=E!2nqOu0b%mRaRtGVAF4{$m!qS9jwv5kE4!?~V|D^sPmvbb%1W)O4P
+z_<rX<z9@y&`f9r;g{@!T(gZizfPsMlgrNdc-)?VPvf=lxR_k<~DVatIiBFy{xO$;X
+zdA?5{x0l*7%RpED^D~y(E}F>Rxm!zrLSJ0--xqrX-t=ZH+%~=HzmN*tECWV{sR;}W
+z(BNZOzKWsfhh_QCIpL<RN8}%=+2@>oawuR5yYiI-YY%futkn4EyX%?ChN45^4YME5
+zvFToWPtSPiohdsDoF?mQ-WF`o*sA|G;W^`7HU<-RZjf7-Ff!ctWyrp*%EiFIpyw3o
+z>Eq(*=jP8)$H>U$8xrK|x{{G2z}ubiEhxfDi;LLxb25{-^$SbP`1K2ObA<K%%Ts0a
+zee#pD-BMFi7!tG@4fONNQ{!{;le5!OQ&aSc^FtWanHiM}b8}KMjT8i!Cn{cMV-Cs?
+zI%c59>=wm**l6<I6{4F3SX&vspMCS7t!vqP*PSQ&8D(5J4xBK5;M~Bd7|+l$EpPXq
+z;|xrRJ7&b6@QO(Lz;gXT;o(OOEt_xq91c5sNaeAA^9Qbi)ql3fM{37_Jz33^D#=jx
+z@qlN6R1u&0H^ZMRtCHFG3Gni=9rI~oPjYfRxUqYQZo!QkVXEr!d%vyC>GyK8^3>7N
+zi7PxT)wS!C_^<Ezvbww-h3mgvk(cn1mt1g?;Rr(?gOd$!Ndi+w%Yj#3aWgj-E%9*I
+zJAPqmzu=;2GYnE)GP3RkbtqcCJ&@JpbbY~(500X$s~sGhq8}(Z3JG}0TIerm5h*cv
+z!}Xi7;q9L&KFz7W+nN+RRW!HqS8>1PF?D=#^HEDL!wkWLcbBou;4U&dyoQ52=BA(2
+zci!Bi$$@8c_w$5#oB6jL=y=Gws%7>PQSQh~*G`D-;LV-b+1t7>ATY-1R7cZN&UUUN
+z8r#>$^>?f|ex$$GG)iqBn@mM^_QS<2SM07nxODJgqoBzBti|EHv410v|F4^DeBj{4
+zjgJ_woMw#L=PiG5t>UCLOU0VleQeVb>{A&h#Dxfcn#^_cVd6G5pROdPC8vYhG}x0G
+zGVV>->zjFZ&5n&vzg{_%^62Q|CncdF|C&CWsLOK_I#zRpr{JN|i#-pFqOR$j>^im4
+z(XIWAfUb#_*QE}N$tp#yT*ox4_h>%yx|sG-=gq-L$uHgO4^KDKQ*TR%w_9zXoRecc
+zZN<sVEI*efYt54z4IMKrnrb4RELpck+(+F`L$f51Bd^Bff9mz`wsjGQ*R7s-?up}z
+z_&K)sT<X8C$XmSnzsvpgn}YxSJHGNw?k+=%S1bR#x^?K;xfdDbpZw-7mivF@)}d#&
+z4!t-W`uWzOzFqUSdZn)Vf5hzWx{J!&7ysKNw@x<)iSPDzoo>!2KZTa!=kL>={#agf
+z&-!1OaBXem&lfyCcXwJh?%P(7Hha@?-p_2)O>KfSPT%rf8dqk!tDx2FuEaTauD^E|
+z?+X6B{6^&QTfXt8zs{=2lzy%K5i0!Z(B<EnuV?L@f8~A0sX+Z@8_lY19`L_dQO_A>
+z)||cP{Hi3W?8oyI*6ZpVT-}wqrq{{c_Fw4sm2JKW{>QCv{hZKX?fy4??JB)$nOXgJ
+zEFb%AEqvZ%ZQFkQ(V2BSV<z#OFTNPa&&MDz`9R2S-}@(GoEAphVvE_@G%G7^c9Nka
+Rb7=JKS%-BJwyHGf005J?apV91
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_reserved.btridx b/test/btrpkg/fixtures/crafted/chunk_reserved.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..be761b879a488d37467e7aa54f713eb4e436fda0
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)li!E&gs@u|F1Yi{+760l>B>d
+zIlFyO(ux}g7*{V#o-`%M*!_I;{JV>Lr+u}5d}YRxTVL&p?@sYQtjX|cmdKg}qo+^H
+zwUjF}GNV=>s5!D&vZ$;<GPA(o+-mOk#{-<si>UM%Lu@0ToK;>TW&E}Gc4R;S=VaCO
+ze|OI=wqnpI4B_FsH+%p2ZBB5L4Hy_UaWXJ4LA=c{_3ieyB^!S4YPC++nUZOgkoe^J
+zf~yzGl;`{OaeJvPvkY|QKR;us?V^e7ox8R4C-lWN|9!DX;7xDF!fn&5{tKxv7(h)n
+zU}Tt@z`y_vK8EG17>a&amj9d+Zt8kO{*jt}&gmzI0;aGlUpcV$FsH;yjgP*&o~djo
+zIuzb8`|%u`?zQ*yjF;Y-va`TxvcBeR!3K@3`hOFiGu~xmFk$BgS+RtX;l3|J_H9)z
+z1_lN_r%+EH7f(Moe}+0nMmFD&AXnFwj2r>p?u>6i5ms7U#IB!{nZ&JMSYpPnUznRC
+ztnXi*Dx>d{pPcQMnwr9ppv`EYpI@FDpOc@QotB!KqF0<B!l2H~s9czvlagtqAiz9P
+z@iH58P=?Sk13hN9DCWaPlkct&-7LV`%JBW{n+I)O%ig>0Jkif6<HB*^g!u#K21dnr
+zhL&l0yZ;<#U`pIEBmRU}MA`?I>kkSKKWb>%eB0-6*x5rWkNulJa22fnvpqgiI|l5@
+zYNk|4hO&<bJPV|X_|(4{{#;p=%)U>6mzV9BPZN8RljFgS-Ai-}Zrlh{Rgd5MZEa4!
+zmz$NRj+Rbb;bEz+U8lr<eb1NG<?Se3|Luyrgpa)Bf|CqK82T8TY<No&m@--pyz+{h
+zxv^-8hr8bK3sd_A7fqXCkm{0=buXwx(emwqtR|=H3x0fX6jfdA;Mf%XK*>=^z)RLb
+ze?f~#iNPDL-;51!|3vX=PW|21q}ZvVxs|_)`z?>D<BOY*T6!5~2p+t<jAaIQk=fxj
+z9NaNC{iMG0<{nKBJe#|pC(PT-zwJQBL)KL-vzLf+M_#&iLTm?b?!?aC)`bCqF;1sC
+znwE05a~;vxzCNzMW5w|!{k^79YWvt^DzdX5E@ru6clE)ggAW@8Meb)U4(E;i8+rVH
+z-DKkf2QO}X#CYX2W7Ixx`Gac}C#_j3*2L~(o0edo$~Yk|MDWvOuA2`Nx2gGbB{3~I
+z9n_}5p45<WZ^B;R%)4uLY<&9l%Au4;M;AXS2@Uzz^x;HZo|DkAnj<^~50zf*d0-TE
+zP3L6Ssf~_q?PmmZO|-l&by!SRDQe|9rdhp5^O4uZw3j+>4n|6T>0W<$x|yDOTSC0u
+zY6In*9P4Q-PG)BLxind8p4@2Ym}${e6Y*rpx;5fH>UJ8MC4n4yH75U4uYb3#i#WV)
+z^~7^e9ACuGvAyR~|9wT?;?@6M?yuhz{O{lKm2Yx)8Ctwr`RCQGL(k5=$SD8hH+Qkz
+z|0}l+J-c=2#o^G;w+{8~nzz*}b=ChPW_Q<JRNlV$-zK?rx;aREx4-Ljb3XYgv=l#o
+zpZ4^}@|t_r|H6c8Ya@TY;PJV;)4Flrwt}?Tn~w8-W}9wm6QptamhaNIGTU7Rt!8&6
+z&bf2_y}Ni<@aN?>B9GtljW_*uRz;@tYweFv;a7()|JHmxYw!Fk?>kNf>Mz@9R&Dcu
+z|HX=W&M>p)>^<jKB}rvJo~N*0SLfjBuFN&PPVTn<LbtDM^G)zSZhh<Lga&K(zv*jN
+z=~c_j>c3<8*l%m$^B!y4_T!JvtlJqgiRXOr#Xx>O27$>3LU#M!KM~`!Fya<l%+{t^
+XS#h(I3?-REqi@eTtdp=+r9lS(JeG4_
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_too_long.btridx b/test/btrpkg/fixtures/crafted/chunk_too_long.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e3155bc4bff182804d6eccda4c824e857423766
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)liyQ=6Q0B#Ol7bACoRlD_9le
+zD)c_LCM@=T*VH467j#a`cRwFJ|L)@6X<zLhUzxGw)>pgYyHorRYchPAC9)>L=;_mP
+zE#=CL%&64|YK|<HEGlb|%q%cCx0?I?@c^guA}T$`5ZlNnIj^pBE?=0yZF@s}O7^5}
+z3j34qm~GX*qqY3d7l~w%r$68(3otQk;$&cedXr)5+wE;jHvHbzYMrh#CDSM&@yYWA
+zS1*()&-dx$_EKAB8R*J?e#TPUMHAUOcWdcS=!<Lq`(ls4o8F9t+oo6j7gAv`fSPQ;
+z$S^elVeax(3`IXI%YV)ZH+4NC|47X~=k$|90aMtOuN+u=m{Ve<#z)^>&r~)P9SU!l
+z{dkT|_u6}U#!K%^*;(K;Szq(EV1ve1{l5v%8Sk<&n6Pt$tXRUxaNn09`?e|<0|SGe
+zQ>dqpi>IHPKSLcOBb#qXkgMxTMvee)cgDA%2rDfvV%N{fOybrrEHUHPFU-vm*7q+@
+zmC^UfPtJBrO-*4)&}KBy&o57n&&f~DPD@Qq(JRgmVNhpgR4&ZTNy#))5MZ9Dc$tkk
+zC`0I&fgZD46!T%D$#++XZWdr|W%z#f&4aeCW$#^gp6F+kap5>{!u)}A1EXR*L(8<h
+z-G7cVFeUDo5r4ufBJBgq^#_HAA2qaWzU^~3?Cc?x$NtS9xC&PP*&ZLM9Rv1cHB+i2
+zL)pgzo&{1xeCpo}f3B=bX5S~k%gc7mr-?nu$?@RE?j^bfH*SQfs>kpBwl=5V%gxGD
+zM@uKJ@UT?Zu2bT_zURy8@^%!i|8_-Q!be_m!AXWA41EkvHoPSXOc^Z)UU|jM+*q{4
+z!(H$Ag{l35i>A#mNOj4`x);=;X!-U)R+H291wTGGimI-5aBPZxpyVhd;3aFJzo12=
+z#NZ9rZ^nkVf1>y_r~YnhQtVXG+{$0Y{g%hn@x{$YEximg1P|U_#xjGu$n5YM4(^zn
+zep26gbB`tmp3U9Q6XtE^-*%wmA?vD^*-J#ZBQIS$A-01zcVcI6>%xG*7^hPmO-ni3
+zxsGUTUmw@svEulV{$A54wS8<d71`Mj7qeWkyZYeL!H124BKNZvhx5k%jXeIpZnE)#
+zgBLeGV!U#iF>0T;{K2(~lh!O1Yhw4YO-ry(Wt<QfBKT=C*Ug8C+thrzl9-m94r<e2
+zPin}xH({@D=G`?rHa`7&<xt9_ql=%EgogZU`f#Ey&q?T5%@Ll0he|K@JTQv7rgO6E
+z)J8|Q_A>&yCR$#XIxHru6t!|4)2!a3`N->H+Dn}`2O}lFbgw@=-AqrtEg{}+wSjU@
+zj`g$^Co{ABT$-#kPi{1H%(Q5#iFmSP-5PNpbvq5sl0c5U8k7I2*T37=MI2tYdg8e!
+zjxXZp*xqxg|Gpw`@#_CB_t$R<{`c?r$~U>Y3@u)*{PXJ8p=ak_WR!pMo4Z)<|CL*Z
+zp4~e1;&ABaTZj5~&D-jgy6XQCv%BjqDsNx>Z<E|Q-5eyo+uwD%IiLI#T8f{)PkZ`f
+zdCfiRe__J4wUIwx@c7)_Y2CPQTS40FO~-jZvrRX(3DP)y%Xev9neDEER<pYj=iIse
+z-d(&a`1A4`k;iZO#+&{+t0GhSwf0A-@T)_Ye`~&;wRirN_Z_DK^_OiltG0Q-|6)Zw
+zXP8-Y_MY>rlBBX9&r?{ht8;L5SLT{tCwJR_q1#us`6l=ux4!jrLW8yY-}JSs^r~fM
+z_2034?6<Y>d5^Vi`|(F-*6oa$#B;v*Vjw>sgTUkiA-jF=pNMf<7;%d&W^2=|thm`p
+ThLX&o(YI$E)=Ai^(x3wXS}=3u
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_zstd_enc0.btridx b/test/btrpkg/fixtures/crafted/chunk_zstd_enc0.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..24b0aea2e98d2104fa04ac258577c855a4891dd5
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)li!M5XVoq(6YTtqO5Ws3f_;^
+z=+Wu^d$s9_(~3F%{@0`;-OoqQzq`11+E@F>S7t1^_0_KU?iBySnhc+2iL6O5diu0n
+zOSv*5GivpLnj?!Pi^>`#GYbsPt>%7zJizI^h)Rz!#5VFt>B;#kj@{+ZXA^I^WE#9V
+z=f~$@{$)or*S+8U_=DyQ={C5@1`rn1n+#LmZf{$%;rFgq>vWwdnMMhTPo6KhdZA2t
+zzE2;wm)bJRKv(|rGnU#en#kU{TT6dJUtIIw7kdQW^kyvFHofY<kO~9TJO%?shN%e*
+z3@~$-uVN_rVOjojPPnP-5&1`I_Bp4Y9157iu6*Ud+QXa@D>Xj)?s}%Oq3BR}!|ca%
+zY`WLp(=%RrXUfh3r^))7w*?zCw(9>)c+Pm2jlqPS8|36Aj12dE8M1GyaxpM4=sAUY
+z`nY)dx%o5HF*36Gh6K5~u4Lp0@OEc>3yQGP;v#naoXjL{{lXG6e*MDS9ASO`@>Cgp
+zpZw%(x75@Wh6HU!1O5E+)cBnI<m|N6)D*qq{166pW=7@0+?<q5BLxBGiHeumn1eEe
+zjv44NyG1b{Hky2Qh3IAh)>ek^XWu+%>st2Sb?1qGMj02511HQMI5#jV#xt}`%iI0u
+zI0IASjv4VMydu&*uv~voc=%C6%jVlYhr`YuQhDs({DG@r^`GtWk=ij}PgXOfN-~sv
+zJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7TX5q>n5ugG-fwGj`n}w&Jax2m
+z;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!;AF#FlE9SFa^RI$+{}$dOFZ25
+zj$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYGY6r)r=m$!ULIPg07WxZXL`n?a
+zaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*FhlU*-DNB@xQomVui@a1x#=hM
+zoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1HcylLq_O>nz2#j$$)zP$+vz_aR
+z#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>C@6A2YjHSl?BB@a|LZ0jA2@h%
+z<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`ACUf0<n7B>Nrz?qR$?2dr4fdpl
+zjC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~j@2CDDR`*#V$TDksB1bWyH0I%
+zbZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ@=N#n!_&?5)Y}r`?N%Eo=j2#V
+zTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$$g45=pL+efZC%9Sb*m?yd*b*a
+zeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAwZXJ4d?nOrVC%?Ii<^Er}b?Dix
+zLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx;=BD_r<?Q1Pobsw`TMk|KbF_r
+zv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-)3<z=#+BLbDrhykD{;=9>+jvg
+zyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}UwPkgDo}sfMzd<02mCKq)N_WJ
+zHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;|8eVEKPNO;yZ=pJyGpNGW>)_l
+z%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o_x_0(r-c!>*kZOe&B}_Kon$D<
+Q92$Ll)?uB5ttt&V0E;kkng9R*
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunk_zstd_not_smaller.btridx b/test/btrpkg/fixtures/crafted/chunk_zstd_not_smaller.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f47bc7a78002efb40ed274d96c4a794730ef8254
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lix#O?&?#j<1QPmKzhwR?mBq
+z-@2_xQ~b`}=z1ZG7KXWt+|NhPzq`11+E@F>S7t1^_0_KU?iBySnhc+2iL6O5diu0n
+zOSv*5GivpLnj?!Pi^>`#GYbsPt>%7zJizI^h)Rz!#5VHD&0C|o9@sRVzPQEn!<QND
+zi&jsn-n4BMm+6Af9?MT~%(8`>Y{0<4V8Flt^(MpAx7*v6Z1}ya)jC~gN~Tdl;*;kK
+zu3jipp6}Dg?WMNNGSHR({EVfxizc#n?$*+u&==SI_r)H8H@z7Pw@t75FQfu83v9Ll
+zBg51Lgt^OCF%<o<EdMzt+|>1m{3A8{oYPMZ1x#UAzH(sgVNQva8XtXkJyY3GbSS)G
+z_TxD=-D~gZ885vvWoLoYWPQ!sf(;s5_5UV3XS~bCV8YG~vS0}#!+l?d?Axkb3=9l<
+zPNAMYE}njF{tR`DjBLIkL9VVV894&H-5KA4BCNEyh+RJ?Gl^Tju*8gCzc4pPSl_=q
+zRYu<@KRMeiH8q7HL7UM)KfgRRJ|{mpJ1sReMXxwNgh8E|QMoWTCneKJL4bLp;$=4G
+zpbVj7271hHQOt*pCf{8lx><m=mErr@HxJsnmc4h~d7__D#)ad+3G)Ze4UCHM3@y|0
+zcK<ofz?8USM*In{h_nwZ*B=xfe$>#i`L@sDu(O9$9{V?c;3`=CXM234b`02))l8|9
+z3}qh=cos+%@u`0^{JF9!nSGxCFE86MpC<MsC&z;uyO-z|+_({@svf`h+uEFdFE=Ys
+z9W9->!oyNsyH1J!`kpVV%iB@7{@WFK2_JdM1t%GfF!V7v+3=PmFlDqHc;yv0b7RpG
+z4|l!e7pC?LE}AyOAk`%!>t0ZYqUGBISxrvY7yS6(D5|>J!Lcd&fs&(;fS0U={(=^f
+z5`#BfzZo0e{)yt#ocg=1NwHH!b1Q!p_gfxQ#}_vrwe&K~5IlHy8OsdrBD2G5IJjeO
+z`bmA~%{`hNcs6%GPnfrvf7^kMhpekwW-k%tj=Xg3gxC(=+=-pNtqTJJW1LQPG%e+9
+z=Q^UXeSKVi$BN@e`g={I)b_E-RAgsAT+DLC?&^a}2Ol;Hirmjy9L^j2H}d%Zy2-`|
+z4qn{&i1Es4#;ASX@(0%{PFk~6tcl&nHZ8$Em2pB`h~THmTsI#kZd3E=N@7}aI;c&9
+zJ*gq%-h{ornRnOh*!cA8l|w0yjxK&u5*qTa>BEV-JSU-JHAi>~9xA=q^S~(Tn$F3t
+zQyU%K+Rq5+nrL}l>adusQq;<IOtX5A<|D6*X)kr&9E_Cw(!KuhbTd8mwuE@Q)dtEr
+zIo8uwoXpJfb7`{HJh{=(G1H={CgRDGb!)_Z)a^7hO9DCaYE1s8UjJ@e7jbyq>WSx`
+zIKGIVV|&k~{`-o&#jF3j++V*b_}{<dE8pbqGPHQL^3SVVhn}5#kx~B1Z|-8b|5t7u
+zdUos3i^HLxZyoB}HE*j|>Z<=o%<itcsJwmgzfE%MbaRmSZhzP5=6v!~XeoaFKJDp`
+z<u&)L|Ah(H)<*t(!Q*pxr*-4LZ3StwHy!8w%r@QBCP?G-E#IYaWwyHtTFvfCoO9>;
+zdw21!;Lpo%L>|B88*lpStcpzO*V-SU!mkcp{;m0X*53J7-gle|)L*vItlH)Q|BDs%
+zoMC3o*?Z2fN|MTcJWpZ0uFk>LU72foo!o8zg>GNj=9}Pu-1^qf2@Tfnf792l(yNx4
+z)qltGvESCh=RMZ8?Z+RTS+_H063_YKi-G)n3<8r6gzWace<H?dVZ<%An5|8-vf^eZ
+T8A>vTM&F)wSSMktN`npnVpwzP
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/chunks_short_of_image.btridx b/test/btrpkg/fixtures/crafted/chunks_short_of_image.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f6aa7a2b7855ba4f44d91f00073559e069e97dc4
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC@27lFfcrYa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)TGXKPjllOF-Kd4Q}nY%69
+zw9r5DV{5x0+m|a>ZuVWuQ@;i`*?@sz6DI=$)SC=b-)?VPvf=lxR_k<~DVatIiBFy{
+zxO$;XdA?5{x0l*7%RpED^D~y(E}F>Rxm!zrLSJ0--xqrX-t=ZH+%~=HzmN)p0n}sz
+zMuw>g2y>UOVkr7yS^jfQxT)(A`A2H@Ij5f-3YfyKeC5E}!<-T;H9q?8dZx0W=umjW
+z?8kF#y4T**GhTXU%FY6($@-eN1sgQB>i<o6&UlxN!GxU~WW^FjhWow@*|$}>7#JAz
+zoI*W)Ts-~U{2A&P8QFY8f?Qo!GI9iXyEDE8MObNZ5xag)W)io4VTl>PeqnBou)cqJ
+zs*Ju*esZ>3YHA8Yf;OXpetvmsd`^CHc3Ns`ie7Pk2!lE^qjF(xPD-Ycf&lYG#mj8W
+zK^a2F4D^`YqL>dGO}@KAbh7|!E5rA*ZyvODEqm{}^F%+Rj0?ws6Xp+`8yFSi8Cs_0
+z?f!F|fhlpvjQA5?5osS-u0JR|{HUR2^KGBQVP_AiJoaz?z*VsN&-VC8?HI5ptC><I
+z8OlB$@GOuj;#2=-_;Y1dGW$LOUS76iK27XNPL2mRb}!K_xN##)RXu+1x3xL_UT#*N
+zI$An$g@>iOcAXOc^*vu!m$##E{kJRf5<c>h3r;c|Vd!IUvf(XBV9IDY@X9N0=EkBW
+z9`1U_FHG$hTr_QlL8?ne*1ez(Ma#DbvYMQ(FZl7nQB-xcgJV<l10_cx0WVn#{RJ%|
+zB?fP}els?_{S(EfIrVp2lVYce=2reH?zcRqjxTOLYUyQ|A$aiaGL{+KMP`TBaB#=m
+z^ppC|n|m}l@NDjWo-l7S|F#1i4_Q~W%w8hO9eL^639%i#xf45kTNefd#yFkoXj;nI
+z&UHj%`}(;4jupp`^!J)ZsqJHvsmRWLxR~XN-PH$|4nAxY6uF<ZIGi{3Z{+d+b(4(`
+z9K5*k5#yE9j8Xf%<qxh^oU~@CSQERCZCZkTD&vH>5W!EAxo$p8+@|K!mBh5<bWocH
+zds0Kjy$O4LGw-h1vGM8GD~D1Z9bNpSBsAn-(}xpvc}_ydYL4&}JXCtI=YdhwHJy`P
+zr#3pewVx5tHPQ0A)L}7MrKpwbm}d1J%|~7r(_ZSlIT$JVrF;G1>1KNBZ3*#qs|}QM
+za;&GVIGLH{=h9@Yd2*wnW2Qw@O~jKW>(+?-sM~31mIQL-)tLNGz5d;{F5>XI)f3M>
+zaeNU!$M&8}{r44li&y`5xxao>@V|e@SH8*JWoYqg<)2r#4m~^fBBT71-`vG=|F7IS
+z^z7E57l%VX-#XN{Yu;9`)K&kFnB84>QF;5~f1Bji>E<Bu-TtoA&H3b~&{F*TecIC>
+z%WLjg{|ghYt&RNog2(6XPV2^f+X~WVZ#vHVnQgkMO_0XvTfR%<%4~NPw3^+OIOopw
+z_wM3d!Jn7kh&+DFH{SHuSrwVmueCoyg<l=I{9E(&tiAKEyze*_sK0EZS+&gr{ue9i
+zIm67Fv-g}|l_Zt@c%H&~U7drgyE51GI=S2a3*El5%{RgSxb>}{6B?}D|E8~9rB^L8
+ztN)JWW52D1&wH$G+mAmwvu<b1B%brd7X$hE7z8FC2-)p>|3r+_!iZaJF<YBvWyQ@-
+TGL&QvjlMnWuuj5Ol?ELE(G_>t
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/dir_over_file.btridx b/test/btrpkg/fixtures/crafted/dir_over_file.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5875df8ce893986a49245d1c7195953e4e17fcda
+GIT binary patch
+literal 1488
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD=a+R4O3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`*UGpQnbA?Ak-b%aI^(rR-Zv*kM{*u#^ph%NKI!$jS-)IM
+zxiTX&YW0DdBa0=A${Hjy3k=S!=6-)X!0Eh*N{=zbR`N-SDi50=wwC(+WqF-Xu16W(
+zwThf<85JkQCB5ZOu|e@KxXA_#44XI^7-0UN`gVKUk`2FiwOXg^OvyA#NPO~q!PN_8
+z%JY5txV_YtSq8fDpP#YRcF{!k&fQx26Z+zs|GwBG@TNCo;kM~j|AkZ-44@_(FfvR{
+zK$yFH6+_Vv%krOd!cAR|$UjoE&pG|%P{0&+<tqo)9_Ex-sqxWw*E5w3MTf#0W<Q=|
+z)4ledp7GK<Q+5_OP1e`EE!d#3RsU~-G7~F1g9$qi$ciP54EKE*vTv($F)%RbIfZ)q
+zxOn=x`7_ipGP3!G1i8AdWaJ3&c4vGGim=k+B6j_p%p`98!V)un{leTFVSWGdR2hAr
+z{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRmxx1%~E{ikI1*1vNfk
+zVsp8u(v!G{t!E2cSE}0XK<zX|E-uD5vu7SO6!pEox@e+2vq6VM!{qz}#~GNt_8kz2
+zI90ZjpONiX!Nz?P{36m1uv~vwc>PgB%ck32hgZ#NRetQwT+g~A^xy6EYb5o+KCNa-
+zm1HRUc)+tjs)$eho8ixuRmtr81bBJbj`=jPCpkGD+}OQDx8TN&Fje*Vz2Da6^n1Bk
+zdFp8C#1$Tv>e_Wm{MYw<SzX?a!u8*-$V>RhOD;IcaD<_c!O4cVB!MZT<-jYixS1P^
+zmUy`99ltQOUvSa183w5?8Cmy&IutG69>{8Py1wAY2S-uW)eeqL(GQdyg#^50E%X<(
+zh?E$-;rh+k@b*s>pXSuxZB2@uDw<pQtGM6tm^!|=`KYCrVTRzryUSQ+a2J^!Uc<p1
+zbJI`iJ8$mM<iNAJ`+35=&HURAbUb8T)iQgDD0k$gYbV5Z@a9hJ>}_2b5E$chs-tNs
+zXFJysjqU5>`a4z}Khoc88l|?6O{O9{`{81iD|S~OTsru$QBdT5*5Yv9*uRm-|JO}6
+zK5+2j#z%}-PBTXB^OirjR&mmrrD9F&KDKEI_Nj~$;z9&JP3F4!FmaojPgfGtlG8zL
+z8th388TTga_07DyX2-^-U#}cWd31E~lakPoe@!1w)a5w|9jiIQQ}9sf#hwR7QP*@%
+zcAeVj=+=HlK-Wae>r#isWR;>;u49_jdo&+;T}*qa^X6cr<d^RCho_tAskbG>+pRWG
+z&dIT!w&G-FmY++LwdTo<hK`vQO*IiumaJPN?xSv}p;;2hkym5#KlS=|+q#Iu>sC)Z
+z_r&o<{2beRF7@A6<SkzP-{t=LO~L>E9bfq-cbB2XtCfFV-8%H_+>4CzPkwV3%l*G{
+z>(H}Xhh7{G{e0_C->!LEy;4{GKVo)w-9_c?i~ntsTc?|Y#CQ9<PB-V1pF&IV^Y>{_
+ze=M)LXZ<fsxVAR(=L;U6yF0BL_iZako4x5c?`O8@rZzzur*HW#jVrU=RnTg7SK^#I
+z*WbH~cLjf5ek1buE#G+4UuRWhO25|r2o-*H=<;vP*R%G{zw*B0RG|K{jb_z05BOiK
+zsOJnbYtG(tepQlG_Tza9>veSwuI|cQ)9d7J`!96+$~NBw|KrxTeoknxcK@5cc9mYW
+z%&h)9mXH0m7C!H>wrxND=*+sEF_U=C7heqI=VK6<d>~}E@BI@oP75P$vBhj{nw1qd
+UJIPRzIW+qAtiw79TU8o#0AtT=`2YX_
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_count_high.btridx b/test/btrpkg/fixtures/crafted/entries_count_high.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c149e76c6ec796ccb303bd1cc42adde714c5c551
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`nRcDwl}MpZrJ;(voQN#fZvyipCwM!7@nAK)^uyhlld{_
+zTFR9fnNh0`)ErqXSya{_nOR_PZZ-G&;{i_RMO1o>A-0iEdZrvd;J#JMMmOw&k;#u;
+zE04W0Nt$X|%QFATW~B*F-p_`cY{0;<iIaf=>P?2JZ@0HC+3<T;t9820luV<9#3#=e
+zT)j}HJm05}+e>YkWuPnn`58-X7fodE+^wZQp)aoa?~6SGZ+bHpZkt~9Ur2?)0BW)U
+zBg51Lgt^OCF%<o<EdMzt+|>1m{3A8{oYPMZ1x#UAzH(sgVNQva8XtXkJyY3GbSS)G
+z_TxD=-D~gZ885vvWoLoYWPQ!sf(;s5_5UV3XS~bCV8YG=vSJA%!+l?d?Axkb3=9l<
+zPNAMYE}njF{tR`DjBLIkL9VVV894&H-5KA4BCNEyh+RJ?Gl^Tju*8gCzc4pPSl_=q
+zRYu<@KRMeiH8q7HL7UM)KfgRRJ|{mpJ1sReMXxwNgh8E|QMoWTCneKJL4bLp;$=4G
+zpbVj7271hHQOt*pCf{8lx><m=mErr@HxJsnmc4h~d7__D#)ad+3G)Ze4UCHM3@y|0
+zcK<ofz?8USM*In{h_nwZ*B=xfe$>#i`L@sDu(O9$9{V?c;3`=CXM234b`02))l8|9
+z3}qh=cos+%@u`0^{JF9!nSGxCFE86MpC<MsC&z;uyO-z|+_({@svf`h+uEFdFE=Ys
+z9W9->!oyNsyH1J!`kpVV%iB@7{@WFK2_JdM1t%GfF!V7v+3=PmFlDqHc;yv0b7RpG
+z4|l!e7pC?LE}AyOAk`%!>t0ZYqUGBISxrvY7yS6(D5|>J!Lcd&fs&(;fS0U={(=^f
+z5`#BfzZo0e{)yt#ocg=1NwHH!b1Q!p_gfxQ#}_vrwe&K~5IlHy8OsdrBD2G5IJjeO
+z`bmA~%{`hNcs6%GPnfrvf7^kMhpekwW-k%tj=Xg3gxC(=+=-pNtqTJJW1LQPG%e+9
+z=Q^UXeSKVi$BN@e`g={I)b_E-RAgsAT+DLC?&^a}2Ol;Hirmjy9L^j2H}d%Zy2-`|
+z4qn{&i1Es4#;ASX@(0%{PFk~6tcl&nHZ8$Em2pB`h~THmTsI#kZd3E=N@7}aI;c&9
+zJ*gq%-h{ornRnOh*!cA8l|w0yjxK&u5*qTa>BEV-JSU-JHAi>~9xA=q^S~(Tn$F3t
+zQyU%K+Rq5+nrL}l>adusQq;<IOtX5A<|D6*X)kr&9E_Cw(!KuhbTd8mwuE@Q)dtEr
+zIo8uwoXpJfb7`{HJh{=(G1H={CgRDGb!)_Z)a^7hO9DCaYE1s8UjJ@e7jbyq>WSx`
+zIKGIVV|&k~{`-o&#jF3j++V*b_}{<dE8pbqGPHQL^3SVVhn}5#kx~B1Z|-8b|5t7u
+zdUos3i^HLxZyoB}HE*j|>Z<=o%<itcsJwmgzfE%MbaRmSZhzP5=6v!~XeoaFKJDp`
+z<u&)L|Ah(H)<*t(!Q*pxr*-4LZ3StwHy!8w%r@QBCP?G-E#IYaWwyHtTFvfCoO9>;
+zdw21!;Lpo%L>|B88*lpStcpzO*V-SU!mkcp{;m0X*53J7-gle|)L*vItlH)Q|BDs%
+zoMC3o*?Z2fN|MTcJWpZ0uFk>LU72foo!o8zg>GNj=9}Pu-1^qf2@Tfnf792l(yNx4
+z)qltGvESCh=RMZ8?Z+RTS+_H063_YKi-G)n3<8r6gzWace<H?dVZ<%An5|8-vf^eZ
+T8A>vTM&F)wSSMktN`npn{}y(C
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_count_huge.btridx b/test/btrpkg/fixtures/crafted/entries_count_huge.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..28681e6426b07d0b0eab69962aec99a88f5ab4d7
+GIT binary patch
+literal 1482
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrUa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dYQv-q+%Rqnjcy}xxtL%koBS~o2*W@PnMXvKxgLjFTd}W
+zYbjS|WJaw%P;+FlWKmgzWM+ZExz*h7j|VuN7g6akhS)|vDY;ePfKS`9^pGpft9Q>>
+zuaPgN?!9h><jaHW-qk)V`<e|m*?@sz6DI=$)SC=b-)?VPvf=lxR_k<~DVatIiBFy{
+zxO$;XdA?5{x0l*7%RpED^D~y(E}F>Rxm!zrLSJ0--xqrX-t=ZH+%~=HzmN)p0n}sz
+zMuw>g2y>UOVkr7yS^jfQxT)(A`A2H@Ij5f-3YfyKeC5E}!<-T;H9q?8dZx0W=umjW
+z?8kF#y4T**GhTXU%FY6($@-eN1sgQB>i<o6&UlrLL52PQ|Ns9PmM}8h_hrbwt;)r~
+zz@X<8>gnU+>F4IpP{+u~<{J{^>bjDVBf#68@hvFAN{frw^>Z?lxb+K5%=q;Sb903C
+z{mWBj^nLP^v)xitQy3Do84dLF%TwcX@{_aEQd3j(it|Gl)R~nFb8}KMjT8i!Cn{cM
+zV-C{bG+rmV#(K@P#F;1au5?9qG&wc=PAe;LcD?+4QOuL$417u~2~VUyC?05-pwHms
+zy*>6{GDD+5%o+U@RUPAsrtA+p5(^y;-OOE<xH>Iy(#PeF6|6f#|J`1{MpO^%$7-fj
+zNrtkI2RsX;iulyO8U9>ZmCU|RfR~r;m`@XXl9S`XjonLh3vS#9Q&o@O`)zGbzn7bp
+zr;e6RT;XA<u3e|Ze|^uF)#dFdT>tHgyo8Uu<bsn7M;Q7ToNRbY5|}bt4!rV;o4K)Q
+ziHE!1@e5P?1s6@5VUX&Qk##SqL(%f>fvhH{>kEE-a1>Qt?cmrH{Xof4NWe?hLVrPv
+zNQuE4uHTFeZ~sK`X-@s!)}+{}qPdm7iu)~(spE^Ak6L;eW(Xd<yNqQ9cahoQH5}YA
+zH~pl(^X48+4m_K?pC`=Q%)jkG$3xatEwh)1az|dec0z0iZ|=m--qwWyfiX^}I+~Vp
+zwsRfP*uFllzhlMmBmKRmQEL0xWGb?=A1-FOVt4hyrGpO}1x4;>Ee_|6{Tq4wf8Au`
+z0|zf|e8hO=G-K30Z~2336(_A(D%QmAW1E&>pUOBPE=2ItWUiYJ6St}PbR{t@IUUrd
+z!JgERac{z2-^{yfc5Hn5^~#}?M@JVwDG3ev*Yx2;U7nNBv6>@11rL>8?0H}mbxr4F
+z*Qt$;ZtZ6TbWOCpE_GN;Rw-)bI;L5@NAr=_#k7|?Zw^LEe(7F+c)FRMdRs!g-D(5n
+zoE+<ED^6x+`MES%Yo6R_=$L8IR1@)J$+|V-KI(QFnk9i8c{L{gQ?Gxwt&2FkZuP`-
+zPaI#w&#}GdQvZEL-s08&UGA^n6#Vbs@s)3KcNto|TKVVItwYbwy~rs4<TrP*-2W@L
+z4n4bd=*8jC&$kZs?V7jMD|OZXBW8EkT~yw__}?bEb-Fo7e7C>rbaOuWDYO(nf1mdB
+z$MTwc*8jqUYilEazTok>yVJUH-?oCZ*_)2@erB6)Y7?Y!`j+p~xH8*a1+8XxCC<5X
+z{k^+*SMcZMHzJSU@{KqBbyh{D^lR;pP~lgHF8|hiJ!|j$EAKl_1?n%`XjX0Wfd9pc
+zdd@Jj=IlM^S0zbhKc1(sURUSf>aNT+y-x17|3bH~Z1YX<KW=^N=Y$4p_rK|DSLs#D
+z%<8{m`Pgr3;qxAA+xFv+&aB%RGl}PX@x?%XJ_dow2SRrH-airJv@qfpTg=v`Sy^$j
+UlME%9L!)ocI;@khRi!}(0AM(GkN^Mx
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_extra_frame.btridx b/test/btrpkg/fixtures/crafted/entries_extra_frame.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..b2375d68b974c6f837b526c57ebca558ea4f191d
+GIT binary patch
+literal 1492
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD>a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dV7_|&I>#JXA5aQdUxmgY7Q2yt--B}QciyU+Md5A@UUCC
+zmU3lAX4L8fHAfap7L_$fW)>KnTh0Ccc!1M+5tSZeh;8JPWm*fTXq@8N;juS+$%;2e
+zW-Hd!FMMB67?lyqs#KG)doJ8$0|tgooD2+5Z!%1MyS;76hTpqdt<!a;WEv$TK6$?2
+z>V-1p`96KzUTVuM16}#g&sb`^Xd-*(ZY})@eR0iyU+fWh)0?qy+w`jcLMjXfP?HT9
+z8Kx#6%w4{Uq3DNY`Oi7wrmjciAF0{roPKgBU<$kPl>=)Jb4sk#_~^UqnaYNuL*Wgx
+zAJ4JrUVBf^c<G%fI}4m9>ucT?Y|z-M|2N?|<6Sle6LxNp6-yWy?)x%i-&W;fU|`U5
+z3ib4H@$_@^XQ*RjWb+LPa&=wF$PwV}&iED-VWq`I?D{#GN!<E{C1(8kg}FJx`u^pq
+zGWtIG$=PnHsVNKz+KdMJ`Q@qcIr+)iX{o6xdd2x64C>5`%7wW(DVatJ0?ZQ?FS9WR
+zWe6QJ&|`LsVm@p%`R)qQ%>t~g4ByYbdC=Ci?7i#G6a9=bE*u9=m_KlCU{s7}XqlF`
+z`_FL(ro<gH;!k)*q<vty{-E&iqlT8vw|x$Wojs)T*uVJ$SHbE(+v6j(V?dr%03}Hf
+zBcYlpRg$6X;{neCsUkl0Z-zftRwc9V6X4}#JLc2Gp5)|saAWrp-GUo8!c^7c_kLTO
+z)9>YG<*B2k6IXaxs%zIN@n7HbWp#Nw3fF(TA}`@1FS+0(!x4r)1}7Wdk_4uVmIJT6
+z;%06vTH@iZcl^TCe!)f4W*DTpWMth7>QJ<NdmyXH>H2~n9~?zhS35X1ML$q-6cX@~
+zwa{PCB2r@ThU+(D!`nYme40~#w>2qts%UQIui}2oW9s<g=A)Kgh8cnf?=EAR!Cho_
+zcnt@4%uPS3@4UH3lLOD@?&k^fHuG;g(D9IURm<!pqTG>}uALCu!J9j=v$u6&Kwym1
+zsg9<lob6mkG`6pg>+e``{78SVX_VSNHkpd-?1zh4uGn3DaOvQ~MnRGLS&PGYWB*1T
+z|6e!R_`t!78y_)VIn5Zg&s+ZBTE$6gmWnm8``D%>*rzg1hzk+?G@0w>!^CZBK3z#n
+zOHK#1X|N|XWZavu*EjR-njIUTe!X%i<<Zf_Pf9{V{xy9#QJ3c=bgbqGPr*Z_7keHU
+zMP1W5*>!58qg(qK0bLU<uS*>klU0gZxsGX8@6mkZbusOw&YOdgl3%*lAD(Wer{0zj
+zZ@1b&IVZ<@+KQ8zS$-}})|w|b8aifLG}S~rS+Z`8xR1J>hGt11M_!G||J3W>ZR;Wq
+zuUkFw+!Mza@pEkNxzvAOk+*pDf0z5~HwFLucYNiW++BtiuU7tfb?eZxb1yQ=Kl#mF
+zEcgG)twYal9eQy%^z*GleY@su^-5j!|A^V$br+SlFaEblZk=up65s9bI^CR4ehMwc
+z&)=s#{jt2}p7p;l;o92BpD%cP?(Vd1+_$YDZT6<)yr0>oo7x0voWA9|G_K5cS3#@U
+zU5Rt<Tz~H_-WB|L`Hjfqw|wJGf1Op4Dg9deBUJd+q07HDU(eb*|H}K0Q-S)+Hkwu2
+zJm7z^qMkF%tT}tn`Bh0$*^lQbtk=~!xVkHIO|O%??Z43NE8Bb%{Eu7T`Z=M&+Wl|(
+z+EsehGPC;cSU&dKTKK%j+P3}pqciJv#!TWlUwko;pN~Oc@_~@uzV}bWI4z90#TK)*
+ZX;xO;>?A`;=FsTdvkvPdY*lH{0RZ>db^rhX
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_raw_len_long.btridx b/test/btrpkg/fixtures/crafted/entries_raw_len_long.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6400d37c6a57bd445ec37f779d39940a71f828ae
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa$i6t%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)TvgX%^sVxt}yG5Q{$SF{i
+ze0O}=+{{1uKX2Xmt(?qb;;<BMvH=6bCQb$hs5cp=zTMuoWW(=Wt=8!}Q!<Sb5}!O@
+zaP>l&@_e5@ZZEZEmVvJP=VvUnT{MxsbGMfMgub}uzc2O(yy?wYxNUmXe<2kH1E|Rc
+zj0{r~5aupl#ZdIavi#?qa8uVK@{iQ)b51`w6flKd`O1N{hdCuyYJBwF^-N_$(V_5$
+z*^lSgbg#XqXT0>zl$`}mll3)k3pQwM)&HCDobfIjg9$q~$ciP54EKE*vTv($F)%Rb
+zIfZ)qxOn=x`7_ipGP3!G1i8AdWaJ3&c4vGGim=k+B6j_p%p`98!V)un{leTFVSWGd
+zR2hAr{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRmx>1p(%XikI1#
+zgEEAU8R#*)MKK>XntXSK=w<=dR)+6q-#lpRTK3*`=ZSts85fQNC(Iu>H!v#3Gqg<0
+z+x_P_15@IT8Sy8)BGNvvTz^n__)$a4=G#7p!_FR3dF<c(fvaHkpY8FH+A&~HRx_na
+zGL(Hh;8`G5#Haqv@aM{^WcGamyu573e45ykoE#5s>|UZ<aN|aps(Sq1Z)<b<z1*xk
+zb+mNi3J*(l?K&m?>wCVeE^kNS`fpd{C4A&17o21`!qCUyWW!sMz?9K);FVY0%#B4$
+zJlyq;Uzpl2xM<o8gH)G{tb0Knik5E=WHmWmU-09Dqp0d?2gj!92TG1Y0$#Ef`U_e_
+zN(|m`{bp=<`zMM|bL#K5CdEz_&8_@Z+;4eI9beph)Y8i^L-63;Wh^tei_8wM;oy$B
+z=_mD_H}`0A;Mv^$JYn8u{%r?39<r`#nY~1mJMz-C6Jk4fb0>E8wk`|^jBz^E(X^Da
+zo$H9k_Vsc79V?C>>F+g-QrpKSQ<0tha52jjyQ>c_9emg*C~`k*aX4@6-^k<t>n0l?
+zICyd6BgQMI8Kd@j%O6~;IBCsNu_ksO+q4AxRK^K$A%dSKbKQKHxJ}KcD~V~z>7X_Z
+z_N0c4dlUBhX5L-1W8>4WR}Q5-I=c8tNodHwrVl6T@|=W@)g0j|c&PMZ&jX{VYdR;p
+zPHl8_Yd<5PYog_Ksl#HjN>MA<G0o~dnvc9LroGg8b1+i!OZWQ2)6MkM+Y;jKRvRei
+z<XBHzaWXT@&!x#)^W;WD$4rZ+nusS$)~yluQMc33ED7Yut1<bXdi}d?UBuyat0$g&
+z;`kzdj_o~{`tK|97O(#Aa)14%;D7&)uY8lc%h2N0%0I7e9eQ@|MMn82zqyO${$IIu
+z=-I79FAj%(zICW?*SxJ>sjL1UF}u6&qVo2||2E03)6GHRyZv3KoAb#}p{4lw`?RM&
+zme<^~{ud@(TO0ZF1&`0&oz{)}wiTq!-gKPzGuw1in;?zTw|tkzmD%npXf?Ylan7CV
+z@7=|_f<G_65qbQUZ@lTRvnn#BUu%Da3cosZ`M2ilS$pSSdEap=P=DD*vuc|M{4ZA2
+zbB38UXYV<`DoHB)@jQj~x;h6}cV({Wb#k};7rK3An{R^uaqC+@Cp1{Q|4m=JO0QaG
+zR{tH#$9`K2pZ8eXwjY0VX5G%1Nj&F^F9!1SF$hdP5VG6%{)rf;g%P*dVzxHT%8Hwv
+TWGKlT8hv}#VV#7nDh)aSU@drF
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_raw_len_short.btridx b/test/btrpkg/fixtures/crafted/entries_raw_len_short.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee6e19ae2462c0086ad777b622271e6faa4f616b
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-TsZ%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)T@`k#0=I%|2`woiNPP)I6
+zPl{*5S<h}USHl@QWM&A*ezS&~Y{0;<iIaf=>P?2JZ@0HC+3<T;t9820luV<9#3#=e
+zT)j}HJm05}+e>YkWuPnn`58-X7fodE+^wZQp)aoa?~6SGZ+bHpZkt~9Ur2?)0BW)U
+zBg51Lgt^OCF%<o<EdMzt+|>1m{3A8{oYPMZ1x#UAzH(sgVNQva8XtXkJyY3GbSS)G
+z_TxD=-D~gZ885vvWoLoYWPQ!sf(;s5_5UV3XS~bCV8YG~vSJA%!+l?d?Axkb3=9l<
+zPNAMYE}njF{tR`DjBLIkL9VVV894&H-5KA4BCNEyh+RJ?Gl^Tju*8gCzc4pPSl_=q
+zRYu<@KRMeiH8q7HL7UM)KfgRRJ|{mpJ1sReMXxwNgh8E|QMoWTCneKJL4bLp;$=4G
+zpbVj7271hHQOt*pCf{8lx><m=mErr@HxJsnmc4h~d7__D#)ad+3G)Ze4UCHM3@y|0
+zcK<ofz?8USM*In{h_nwZ*B=xfe$>#i`L@sDu(O9$9{V?c;3`=CXM234b`02))l8|9
+z3}qh=cos+%@u`0^{JF9!nSGxCFE86MpC<MsC&z;uyO-z|+_({@svf`h+uEFdFE=Ys
+z9W9->!oyNsyH1J!`kpVV%iB@7{@WFK2_JdM1t%GfF!V7v+3=PmFlDqHc;yv0b7RpG
+z4|l!e7pC?LE}AyOAk`%!>t0ZYqUGBISxrvY7yS6(D5|>J!Lcd&fs&(;fS0U={(=^f
+z5`#BfzZo0e{)yt#ocg=1NwHH!b1Q!p_gfxQ#}_vrwe&K~5IlHy8OsdrBD2G5IJjeO
+z`bmA~%{`hNcs6%GPnfrvf7^kMhpekwW-k%tj=Xg3gxC(=+=-pNtqTJJW1LQPG%e+9
+z=Q^UXeSKVi$BN@e`g={I)b_E-RAgsAT+DLC?&^a}2Ol;Hirmjy9L^j2H}d%Zy2-`|
+z4qn{&i1Es4#;ASX@(0%{PFk~6tcl&nHZ8$Em2pB`h~THmTsI#kZd3E=N@7}aI;c&9
+zJ*gq%-h{ornRnOh*!cA8l|w0yjxK&u5*qTa>BEV-JSU-JHAi>~9xA=q^S~(Tn$F3t
+zQyU%K+Rq5+nrL}l>adusQq;<IOtX5A<|D6*X)kr&9E_Cw(!KuhbTd8mwuE@Q)dtEr
+zIo8uwoXpJfb7`{HJh{=(G1H={CgRDGb!)_Z)a^7hO9DCaYE1s8UjJ@e7jbyq>WSx`
+zIKGIVV|&k~{`-o&#jF3j++V*b_}{<dE8pbqGPHQL^3SVVhn}5#kx~B1Z|-8b|5t7u
+zdUos3i^HLxZyoB}HE*j|>Z<=o%<itcsJwmgzfE%MbaRmSZhzP5=6v!~XeoaFKJDp`
+z<u&)L|Ah(H)<*t(!Q*pxr*-4LZ3StwHy!8w%r@QBCP?G-E#IYaWwyHtTFvfCoO9>;
+zdw21!;Lpo%L>|B88*lpStcpzO*V-SU!mkcp{;m0X*53J7-gle|)L*vItlH)Q|BDs%
+zoMC3o*?Z2fN|MTcJWpZ0uFk>LU72foo!o8zg>GNj=9}Pu-1^qf2@Tfnf792l(yNx4
+z)qltGvESCh=RMZ8?Z+RTS+_H063_YKi-G)n3<8r6gzWace<H?dVZ<%An5|8-vf^eZ
+T8A>vTM&F)wSSMktN`npn2T*im
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_trailing.btridx b/test/btrpkg/fixtures/crafted/entries_trailing.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..712487e68804d03f115112009e5852effb06f80f
+GIT binary patch
+literal 1484
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrWa$i6t%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`ltCbz5O*5Ew4$IT`js>S$2<CI@@JS@vZO0TTI)e9<!Ef
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW5Saecx6m^tmtO#7Crh4rpI
+z#W>}vc#!in$(c@8wnjI%?u46cz`(GHlYs&1O@^s&x3?|X@OxLQb-K=!OrwOvC(jpL
+zy-=n+-=~k;OKq8Dpez6R8B1*!O=R!ft))MqFRuCTi#-BwdNUSon_l%_NQJ=wYO(<%
+z!_)+Xxyx5E6#cL)|2Zez)b)t`BQ^V+(@zcsOkr2Pa$xOYPKlKoAANT{Q`t~-D7<0z
+z<2g3nYwzh9FTFEmXMxjXea+i~4H{eZ|0cX(e9Fe)!p;q{VhJO|eP4#`+p1g)3=Dcs
+zp`Jc2o_=or40Vi*Y`!5uuC6N?IRd=h8Q+2;thBg@T|Xx?iCe$0#Ef6RFgHh7-@iOn
+zM&BntIomBYHH9HTo6$f&zdSWQCqFqmEj2YouQ)%1L7kaVxiB{;C6mEOL4bLp;$=4G
+zpbVj7271hHQOt*pCf{8lx><m=mErr@HxJsnmc4h~d7__D#)ad+3G)Ze4UCHM3@y|0
+zcK<ofz?8USM*In{h_nwZ*B=xfe$>#i`L@sDu(O9$9{V?c;3`=CXM234b`02;)l8|9
+z3}qh=cos+%@u`0^{JF9!nSGxCFE86MpC<MsC&z;uyO-z|+_({@svf`h+uEFdFE=Ys
+z9W9->!oyNsyH1J!`kpVV%iB@7{@WFK2_JdM1t%GfF!V7v+3=PmFlDqHc;yv0b7RpG
+z4|l!e7pC?LE}AyOAk`%!>t0ZYqUGBISxrvY7yS6(D5|>J!Lcd&fs&(;fS0U={(=^f
+z5`#BfzZo0e{)yt#ocg=1NwHH!b1Q!p_gfxQ#}_vrwe&K~5IlHy8OsdrBD2G5IJjeO
+z`bmA~%{`hNcs6%GPnfrvf7^kMhpekwW-k%tj=Xg3gxC(=+=-pNtqTJJW1LQPG%e+9
+z=Q^UXeSKVi$BN@e`g={I)b_E-RAgsAT+DLC?&^a}2Ol;Hirmjy9L^j2H}d%Zy2-`|
+z4qn{&i1Es4#;ASX@(0%{PFk~6tcl&nHZ8$Em2pB`h~THmTsI#kZd3E=N@7}aI;c&9
+zJ*gq%-h{ornRnOh*!cA8l|w0yjxK&u5*qTa>BEV-JSU-JHAi>~9xA=q^S~(Tn$F3t
+zQyU%K+Rq5+nrL}l>adusQq;<IOtX5A<|D6*X)kr&9E_Cw(!KuhbTd8mwuE@Q)dtEr
+zIo8uwoXpJfb7`{HJh{=(G1H={CgRDGb!)_Z)a^7hO9DCaYE1s8UjJ@e7jbyq>WSx`
+zIKGIVV|&k~{`-o&#jF3j++V*b_}{<dE8pbqGPHQL^3SVVhn}5#kx~B1Z|-8b|5t7u
+zdUos3i^HLxZyoB}HE*j|>Z<=o%<itcsJwmgzfE%MbaRmSZhzP5=6v!~XeoaFKJDp`
+z<u&)L|Ah(H)<*t(!Q*pxr*-4LZ3StwHy!8w%r@QBCP?G-E#IYaWwyHtTFvfCoO9>;
+zdw21!;Lpo%L>|B88*lpStcpzO*V-SU!mkcp{;m0X*53J7-gle|)L*vItlH)Q|BDs%
+zoMC3o*?Z2fN|MTcJWpZ0uFk>LU72foo!o8zg>GNj=9}Pu-1^qf2@Tfnf792l(yNx4
+z)qltGvESCh=RMZ8?Z+RTS+_H063_YKi-G)n3<8r6gzWace<H?dVZ<%An5|8-vf^eZ
+T8A>vTM&F)wSSMktN`npnpT}`W
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_trailing_garbage.btridx b/test/btrpkg/fixtures/crafted/entries_trailing_garbage.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e057cff63fc01c4cc1ed28b3dba5c18037695753
+GIT binary patch
+literal 1487
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD?a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`s=SBYPC6wRNj4i%W!LXUxk<DgBfoeG_)?WU%ljeYnfoV
+zmU3lAX4L8fHAfap7L_$fW)>KnTh0Ccc!1M+5tSZeh;8JPfn6%ceAt`vuR8NAUuLhF
+zQnfW_-^}90o34CFSvcXu1%&wq3=Eq%85p46WSIJPd)tx?zjw7-r|V3~G)hQ(@_fP7
+z3uVglefqe))RtKWy7Hf&vD9|aME1_zTKW_E;+p@y*dy?!H)G+p=~e%QR2U4PZZ=?K
+zn3{kvclj!Yq92y!Kj(y-x*m~#q-LLU`pKbyDeTHu4y--QDX~)HqwlU~DjSLpg*VK8
+zJjbSc?L9r?rFW+6EO45vuX$UrL1U}_--PFkci9+B*ttPgEMa80@5_*VTa}A}fkDqH
+z)YHes)6dPHp^lM}%{L^-)paE!M}W6G<6BUKl@=GV>*r)9aqAbBnDOfu=H>|N`<JK6
+z==<a+XS=1QrZ6OEGaBgUm#4<(<R@pRrKYCn73YUAs53Jv7v|=qWEv?5Fi%vx%*Gs)
+zA#}_@kJ&AX`LNOCyDLOD3$V5_d_Vi<L0i|d_pUon^fSu1a2z;c{=m6`Q8AvOWm?|u
+zKgSuE5_imqKj9UT_JQU4gTlj)8d^5r_BkAO_K?bB|K<-|1*`vTkB`)j$tumu279!c
+zDOHl8?BfB?0;wWC^>2nhS5_sn?-StVWjp56#Gd5jcyMF)65WCuH^Nla<M)1Bo73;*
+zX631)r4v_pSgLE+De+(5^JR5;I||o-yCN^)BQLq&B*PJgJ_aWn-jW2SjFtnhyy9kV
+zEL!5>u6O*x)PBK5(`Fc?x@2VC3+hm`e0w0P$?5unA0He=RaZMWHbp;BaugEqlC{uZ
+z&>~V|@P_L*W5e4&QGA+Hf44O$cB*J@<*(v?%VX;J;^w24UWOTh2k$OpnZaFTc6bd3
+zcg#&csqehGN0S53=I-YS^EUHuJJ9ivbydskC8FGsm#&=<+rgVVv9q^zVL)Jv)2WW8
+zrJU_tM>MvtkL&MPar{VsuW6LpJ~o+(?Cgh&S+3Y!eQ@dE!$v`o`&o;_d1L=Z9{*oA
+z+4#W0iyI#?UOCMewa;7r;9A8=YnF;NvHRGjCD^AjPKXN;{4|;C=EKBoYCc^_OiNA&
+zwP~;?HDuhIu-7;9?wTDNpMJe^DCN=7#ZO8?L;f{=I8m49By_Ci2v5O7r5Af17)4#v
+zIoWk;qoZ5<83A1rEw4)*7L!$qTDgvCR`1b#<aIIarOum!k&<7!*B_p4rl;PP5O25I
+zKshJJdfJMUnOS}=P1c$xHyS!-S~S%}JXx}Cjku4xorY#fAV*$}$^X>r-)-w64zF81
+z@!S)~7x8m!@43`}Uy-+X^?#T9>o*1e`*(cho7`Q77Oz(Rd3Ed1vvV&p%0KzdT`c$i
+z%B@4sZXJ4YIP~+aLw&pEZS_iB_5X<3-E|k0w=e#;Np78P4iew(?>gO_Pkst5#n0cT
+zJ^it~=AQMxFyY$T$e%BGeD3bFZrr!6AZ_-h<Gi2QrkmOXX`H_0yELxMc2_~G*<Fcq
+z?p%NGF5VUVdHIdV<F|a{O@EzLktzLJ`y*8N)uGG3HDAx#JO9f2j#Gj9%Ql)-+dSZZ
+zv7(+c%&a+k&-qnJQrVB^DXiDkIk>tjb4{<4yY0Ww?JL`S6a0@`-}*VB!P@<A`r1``
+z)iSgC?^r(e+gkX%$J)02_@guHcE(KNIbVD+ke`o1VDf>G-M;rv#5gUCxWyK;wP{vX
+W-0UPnN#@Y#+p`YqBy3e_&;bA&gmzT`
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/entries_two_frames.btridx b/test/btrpkg/fixtures/crafted/entries_two_frames.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1f6cfc152d811d2abb885cf6dc53b6f78915403
+GIT binary patch
+literal 1712
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffg2gPz>i-A>wAt5V{&lzZJ4S?Pz;)Zm?F{)V_>4
+zdw%{1uy}jxf#kk9krz|H-dWG}=3uYZo$xf)W?$jJDE&P?;z1S7RSv5(B2&t&7YIKs
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)TlKHJys9(X%h}UZ~Oc!4}
+z;m=u=Y11Wq|G!vN<dX#oON!to8!#|z;$&ce`G4x$?QKgo{NB}Sovt$_(<mYF$@2wQ
+zFO(_I_vz#IQd?#j=*oY7#!}lw6WKd=Yw1tui);S-VvoR^-i(FYrdRzJQeiNFnry(x
+zFf{>T?($U(ML#Udf6fUvbv+{gNX<Uy^pisYQ`nWS99VmpQ(~pYN8eq~R5lbH3U8SG
+zc#ci?+IxD&OYcnCS>QBTU-PzLgT_|<zX{J7@3JwNuycc~Si;C~-<Ki#wkj6`1B0GZ
+zsHcyMr=OcYLmeX{n{P;vtLsWejsS0W#<!pdD=jW!*U!mJ;?^%LG2_=S%*_$j_b*SC
+z(f7$u&UQ;pO<_pTW;D>xFHeon$xqHsOHEDDE6xvLP-kXTF3inI$uv?BV4kRWnT<Ip
+zL+F@+9<y5%^I@aOcUOpR7GP~<_<r`ygSM_^?_GDE=x3C1;W%)@{DE@=qhdTm%e1`R
+ze~vRSCGMCJf5Iyw?E}m82Ze_pHMDHL?Q=Nn>>-uM{>>k_3ReHw9v`V4Gjcpx&6Fz1
+zQ1<bFXMt1^pZYh$pDU}9+4l+X^0FQCX<|=uay+=Pdx>trjT>RA>hXKOt<CB8a<lT(
+z(b9=4JS^3<>y-Gf@A<O2yd8z>zg>}+@R65XaFXE&Lmz{a4R1*TQ%1{yS6*>5Hx@1N
+zaMwG2VQRnNqG>Y>Qe85#?ge!yTE0Dy)#P-2!H*A)qN=MM9GjvaC^-rVc*$DmFK7`d
+zF?hrEo3Y{TpC~@fslVHr6gyQkxAIqUzvVG?d~x$pOE1F=!Gm{~vCQBuGCRD6gFEJ?
+zpVW8W+@r~XXLI-Sgn66!w;kws$hxX!_7YL<$V=Bwi0$Cbo!Hsix-cLx#_3c?(^AfM
+zt|J=T*T?mDtT=w8zt=QMZ6BLVMRxYX#Vl9su0FVQ@L{8%$o;Iv;k>bbBai>Dn{0gG
+z;KhxP7_XdWjN0cde{ikhq%}*$n%I48(-Q1c87IVr2!5K(b@O53HZ`BFB&H>&gW5FM
+zlNvJaP1x(3d3Vi@jZeQ`Ih69~=;9|Op&|d8KAfn_a}qjMbA+ehq0);z4~(L&>7493
+zwb9Y7{fvOFiI&%;4vWbuMXg-NG^_V$KJvPl_EP7~!AQw3-RloeH`7yZONh5yZJ?Z!
+zV?Axf$;>Q2mnLh?lN${kGcB5GBAzT+w?^DY-A+TZB#<Mo#^itM_3yTI5r@~Uo_Oww
+z<BRw?w)b4>zpuz!y!yY({q>uI|NT3@@=fk8LyK1{|Gc_&=-Ig!8Reh+<}Q}|f92Mp
+zXSWW$I2`)<)}g*#^R{}WuKIt(?C!dY%G($J+a$M6HwTID_II6b&L=;Gmg48{)1LlV
+zUUSd-Uzl)hZRF1vJU(}KS~u?7R**J(({bL<Y|~9`f;3Lw@?9ENX1lAP)$FdsId`tV
+zcNgyp{=ED~<ndd+@ut7ds>qant^E-y{OZu<-<q#y?VW$+eaERl{bd`?s%;+dzgSVv
+z8D`d;z32R@B&qDj^Ay(W>Kt6%mAR(Z$=&u}==POuz6t)vt#AFD&|vNUH+}6Yy=s|R
+z{dX)M`)w_J-eYase*Dpybvt7w@tiNd7|74ZATaqr$Zp^JCt{oyM%-eH+1fNKD{gj@
+Tp(Jx?^zB)PbrQC!H0S^TfX2ZN
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hardlink_forward.btridx b/test/btrpkg/fixtures/crafted/hardlink_forward.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b798670152ae283440a6781b6db2648b5a1f763
+GIT binary patch
+literal 1501
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Fa@Cn33^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`ciVpC_8l{$P{pMB7L%f7-$aUwt}9yQIeU2TUBC7~(1~&_
+z<;slAsMQB*jx3feDr=C;EHF5?n*06n0H^aJDm}&!TgfN=<)=w}&dJ=bJUuq`@ovKd
+znX;?So?w0CBKImYeU{_qWVp!&3=Eq%85m&xpZa!t+ma2xcePrl>rBZsN=SV2e8JTV
+zWy<q?`nbK+mRSb6@}Hlv)OOKC_Rif}`V;!%n*YAoBk-m-W8t>xRsV%l7!05$8!$3V
+zO+c8td=*2{56kkObHYtskH|k#v(GvG<WRsAcI7Jv)*j}RSgG;Rch@tO4Mm5-8)iSA
+zW7EC%o}Tg2J5zQRI8D~qye-(Eu~q+Xf;v+!I|B;`4+8@O^Abh|76t}}s;Z0}E(Qh$
+zJ*QAl9~VzQH-Covz6{y7RqGfT*?dESTwPZ(GID^Unt|~xBPjMti;Ec8^>Z?lxb+K5
+z%=q;Sb903C{mWBj^nLP^v)xitQy3Do84dLF%TwcX@{_aEQd3j(it|Gl)R~nFb8}KM
+z%@h=vIa7M1nS(SWjjvl=3k_Sn;Y^CT)6Anv>qHzB57ZhPTP$33vN~MvlX64DgV;yy
+z49r3M4)im!G`;;K&&09i@X@#l8`F>6Vip(BTYIg-@<Brj+a7yf?^5o`J^K&b5MHoR
+zSIQ{Ew7r-S?Col%R7r-ij|V&pq>A{|zZw2qS(VJbPk@(~?U+v!dy<pm!HwNZbPI0W
+z2vb#$-}`NCPQRC%m8XuDPF&$(sjgk8#D9Iym(}I%C|v*TioAr6yySwD3`ZFH7@TZ)
+zOA?qeS`NJOikrEyXo-ir-th}l`vn(Gn_-aZl96>Us6)~6?SZT&r|S!Td~g(1UG3o5
+z6#YQSQAof`)<S<li%5yV8?N7s4R8NM@o7%|-PWYosiL`+zl!@UkE!E}n~z$08D<C`
+zyt|BL26vI!;WZrGF*p6BzVqfDO%6PpyPqe_+swc1K*vMYRV}lZh;m0>x^_Zr2XF4g
+z&feCA0f8}2r#hOJa<+3F(b&E|uD@f&@gx1crcrA9*kmfQvmY*Ixng(q!KH%_8wEw~
+zXDtrrjr|*W{D0kK;{yjTZhXXe<uqf|K5zMhYZWK0St{1V?qi#lV4uo3AudGl(`2rj
+z4->bk`E(^QEjb<3roo=nka2IqUf;~SYj$jW`t{18lt)JwKPd?f`PcN}L|vYf(6O2$
+zJOvMxUhH{b6m?DKWY?*Uj&AK|1awWbye@TEOjaps<vONWy+`wr*TuA#I&Tg}N`C2H
+ze|Wl?o_bqCyxnR8<(wSrX)8`<X8E}^S!<r$Xy}+}(Nq)hWXZZU;y&tj8k!}69C<Y+
+z|5LAjx2=mfyl(Zxb59&!#Luz4=TiTDMc(4o|6T5{-xU1s-|>}ia(5Y8yjuC^)vZI%
+z&b`Pe|KvA!vE2VFw+=nKb?C+6(9gFH_3fIs)hl(?|08C1*IiWJzWCoJxplfZNPM@y
+z>vVHI`6;v%KYyS0^vCj=d)EKLgllUff4<=Hxx3T4ao@IrwAq`E^L}QVZfX;xar&0;
+z(zr6)T?MUXcO}lbbN#)$cvtY}<u@Xa-|~$&{dHDFru1v=k5J)Phc5rtd_8OL{44J}
+zP6g^O+h|s8^ML=wih9m4v*zqQ=T{|3Wj~&$uwGZ^;Oef-HN8&mw*Nx6uWa*8@IP*S
+z>*s_9YxlqDYgg%2%gpM(WBJ%`YvJ=AYuonYkIt;y88eCJeDTFVem(|)$p=Dq``$kh
+h<Fqj17F*2Lrde5Wvy%)ZnM0#*&pND=uvMi&2LJ^6Z&v^S
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hardlink_missing.btridx b/test/btrpkg/fixtures/crafted/hardlink_missing.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..900615a65524c4cae229b46234dc410aa909e397
+GIT binary patch
+literal 1510
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Km{2X7*v=c;$~2~8cM$vvOn!;dvb2DR@>CRj5&LL
+z{s^#md+UMZzB!Q>Q@`F>AHH+hb776eeR-x#?z4IPUocFLnQ0@+yI#15ho>-PgG0HN
+za%Dzl)anB@M;1#Kl{H9a78smc&Hes(fYW&ql^$b=t>lx}I8wiUeE4r_?30%h*vq5m
+zzt2<(U->vF@JF~$xJLZFTDZvu3=Eq%85m&xpZa!t+ma2xcePrl>rBZsN=SV2e8JTV
+zWy<q?`nbK+mRSb6@}Hlv)OOKC_Rif}`V;!%n*YAoBk-m-W8t>xRsV%l7!05$8!$3V
+zO+c8td=*2{56kkObHYtskH|k#v(GvG<WRsAcI7Jv)*j}RSgG;Rch@tO4Mm5-8)iSA
+zW7EC%o}Tg2J5zQRI8D~qye-(Eu~q+Xf(p}Cc7_rT9*`AF7#Z&SGGyOY<zir9&~pm)
+z^l|a@bMt4YV`OCW4GD5}UCGE1;O)-%78GHn#YOD;Ihje^`h_KC{Q8BtIl}t><*73I
+zKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_GI%#6x~xj8AB%q$EH3{_PbIeGc|
+z#ihv^AQzY_2sBTWyv)XJ^gu80hwKEW$p&qOk_MNgB&N-L<F<B2tA+;4j{G!s^AM9-
+z{Zp=WJP#C{7~J+T$}{nB{A5ztQgZvL9h(40d-vB?okK>=>O0u_rN!7)bavaC=v>uZ
+zWAx9YBYaNu(S3JMMLlN%`@fngRg$6X;{neCsUkl0Z-zftRwc9V6X4}#JLc2Gp5)|s
+zaAWrp-GUo8!c^7c_kLTO)9>YG<*B2k6IXaxs%zIN@n7HbWp#Nw3fF(TA}`@1FS+0(
+z!x4r)1}7Wdk_4uVmIJT6;%06vTH@iZcl^TCe!)f4W*DTpWMth7>QJ<NdmyXH>H2~n
+z9~?zhS35X1ML$q-6cX@~wa{PCB2r@ThU+(D!`nYme40~#w>2qts%UQIui}2oW9s<g
+z=A)Kgh8cnf?=EAR!Cho_cnt@4%uPS3@4UH3lLOD@?&k^fHuG;g(D9IURm<!pqTG>}
+zuALCu!J9j=v$u6&Kwym1sg9<lob6mkG`6pg>+e``{78SVX_VSNHkpd-?1zh4uGn3D
+zaOvQ~MnRGLS&PGYWB*1T|6e!R_`t!78y_)VIn5Zg&s+ZBTE$6gmWnm8``D%>*rzg1
+zhzk+?G@0w>!^CZBK3z#nOHK#1X|N|XWZavu*EjR-njIUTe!X%i<<Zf_Pf9{V{xy9#
+zQJ3c=bgbqGPr*Z_7keHUMP1W5*>!58qg(qK0bLU<uS*>klU0gZxsGX8@6mkZbusOw
+z&YOdgl3%*lAD(Wer{0zjZ@1b&IVZ<@+KQ8zS$-}})|w|b8aifLG}S~rS+Z`8xR1J>
+zhGt11M_!G||J3W>ZR;WquUkFw+!Mza@pEkNxzvAOk+*pDf0z5~HwFLucYNiW++Bti
+zuU7tfb?eZxb1yQ=Kl#mFEcgG)twYal9eQy%^z*GleY@su^-5j!|A^V$br+SlFaEbl
+zZk=up65s9bI^CR4ehMwc&)=s#{jt2}p7p;l;o92BpD%cP?(Vd1+_$YDZT6<)yr0>o
+zo7x0voWA9|G_K5cS3#@UU5Rt<Tz~H_-WB|L`Hjfqw|wJGf1Op4Dg9deBUJd+q07HD
+zU(eb*|H}K0Q-S)+Hkwu2Jm7z^qMkF%tT}tn`Bh0$*^lQbtk=~!xVkHIO|O%??Z43N
+zE8Bb%{Eu7T`Z=M&+Wl|(+EsehGPC;cSU&dKTKK%j+P3}pqciJv#!TWlUwko;pN~Oc
+p@_~@uzV}bWI4z90#TK)*X;xO;>?A`;=FsTdvkvPdY*lH{0RXR|ZVdnc
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hardlink_ok.btridx b/test/btrpkg/fixtures/crafted/hardlink_ok.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a44f03a7afb327e94bf3efb3d400178d7308643
+GIT binary patch
+literal 1499
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Da@Cn33^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`mzHfl{?2u4-M0uQk=*QzYih4vYbNorC;8n^O>OsWi!Iku
+zuFS}cT797A$YRN&vIfb_0)um_x!)fTa5^ud(qjy<m3-2|_lBOD;`K8Q*ZjU|bZuOI
+zU3ALg_3Rrq1e!<Z_f2I=g_~@^z_5vvfdS_Ksc*NpE!psUSF3fp&Xi1}gv2M$7hJti
+zraa%LkK0RanPs3W|M?k9Z5K^s@7%4WKcO$K`R|K80&jXV7H*qf^<PMZ!2oKq0VBiI
+z1cbTES1}a*uq^*MC*0Kai2Nfp`<&BH4h2kMSH5y!?O{%dl^P#?cRf?tP;@A~VfN!W
+zHr;FQ=@~D*Gi7Ii(`0?k+ky=mTlN1Ys58Z~GaO;(0a>wxk>S2CL-uV|E(Qh$J*QAl
+z9~VzQH-CmYMn*Q@kRVsrm5dw#-tLTVK@nD3T*R)QlbOV=Usz(suV0v(BdqUVo+_j7
+zlb@XJmYSNvkf6<Ipr2o!8lRJ&oSl}Mnxa>nAHtx{%&1(Lo0F2s%)-FHP*s(YW2zv~
+zJW=v8+q+AT^#Xs$PH>uR&{imEa7jvH+RQg@YiG1-Xt3<aPh&R^F{#x*<yyz{K*5Q@
+zZ6BjN6A#BvCWS2}x1ZXv32?M`e{Iz{WYny_gRNg$j9o=%x2=iJRoyj4|4cf<=R_af
+zclT7(b0)B-tC><I8OlB$@GOuj;#2=-_;Y1dGW$LOUS76iK27XNPL2mRb}!K_xN##)
+zRXu+1x3xL_UT#*NI$An$g@>iOcAXOc^*vu!m$##E{kJRf5<c>h3r;c|Vd!IUvf(XB
+zV9IDY@X9N0=EkBW9`1U_FHG$hTr_QlL8?ne*1ez(Ma#DbvYMQ(FZl7nQB-xcgJV<l
+z10_cx0WVn#{RJ%|B?fP}els?_{S(EfIrVp2lVYce=2reH?zcRqjxTOLYUyQ|A$aia
+zGL{+KMP`TBaB#=m^ppC|n|m}l@NDjWo-l7S|F#1i4_Q~W%w8hO9eL^639%i#xf45k
+zTNefd#yFkoXj;nI&UHj%`}(;4jupp`^!J)ZsqJHvsmRWLxR~XN-PH$|4nAxY6uF<Z
+zIGi{3Z{+d+b(4(`9K5*k5#yE9j8Xf%<qxh^oU~@CSQERCZCZkTD&vH>5W!EAxo$p8
+z+@|K!mBh5<bWocHds0Kjy$O4LGw-h1vGM8GD~D1Z9bNpSBsAn-(}xpvc}_ydYL4&}
+zJXCtI=YdhwHJy`Pr#3pewVx5tHPQ0A)L}7MrKpwbm}d1J%|~7r(_ZSlIT$JVrF;G1
+z>1KNBZ3*#qs|}QMa;&GVIGLH{=h9@Yd2*wnW2Qw@O~jKW>(+?-sM~31mIQL-)tLNG
+zz5d;{F5>XI)f3M>aeNU!$M&8}{r44li&y`5xxao>@V|e@SH8*JWoYqg<)2r#4m~^f
+zBBT71-`vG=|F7IS^z7E57l%VX-#XN{Yu;9`)K&kFnB84>QF;5~f1Bji>E<Bu-TtoA
+z&H3b~&{F*TecIC>%WLjg{|ghYt&RNog2(6XPV2^f+X~WVZ#vHVnQgkMO_0XvTfR%<
+z%4~NPw3^+OIOopw_wM3d!Jn7kh&+DFH{SHuSrwVmueCoyg<l=I{9E(&tiAKEyze*_
+zsK0EZS+&gr{ue9iIm67Fv-g}|l_Zt@c%H&~U7drgyE51GI=S2a3*El5%{RgSxb>}{
+z6B?}D|E8~9rB^L8tN)JWW52D1&wH$G+mAmwvu<b1B%brd7X$hE7z8FC2-)p>|3r+_
+f!iZaJF<YBvWyQ@-GL&QvjlMnWuuj5Ol?ELEN33m$
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hardlink_to_dir.btridx b/test/btrpkg/fixtures/crafted/hardlink_to_dir.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..31fde43677e333586be1a1475c769693f986e96e
+GIT binary patch
+literal 1499
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Daut{%3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`f6Q=X{*Q!xtpO|E-90_oy!*vIZUePjT}FlLF6OJe|7KmT
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVk`NiYNLV8-mAs0=Jwlue!L~j
+zd5c+>e)GXy)z>F!hizxsmkBr7fPrBXCj$e_|5M*?Z(FkA_pVm!be$=gMhS^eo-eq1
+zp-g$cPan6J+A_;PSN`)emf9|w$lkeIOMgONT=U--dj#I}W-Qz`z3RV^3WEXEWCKQq
+zsR;;km#<<d`e9lAb56La>k;`!YW6v&pBxI9!mfPfz}mx{5-T-6`tEwBvZ3fuc*E?+
+zb8NcT-qSN)dS}Yc0;kFPnzscTG`8yhO;BKpWoJ0T&I7Vy2_wUOUxw`4s$2{V40=wX
+zo<1&~es2B@b&QN`z9B)bt}7Wi0=(TB--05nw77^}KPNMZTfeZxj9<SnH%D0CzdTh&
+z-zPsg+buOUg&{$k(Lg`HJT*QiKRG)sH8n-AI6s6zotaU&FgGV9lbMBqfuX7@Bga%h
+zpn0O?Wj2RP5A*_m$WCyYY|vIHX>dtOV%p3%Zfj?>YG|<R$WLQ84>76LKjm7-^FYCg
+z!EGO-JQEMcPbP&eCAXj2u?cXrcYkfwIb_tVzJsk_T8v#qXSc11&Q;wtM*mDY!skRE
+z-FNp?)N>}Vr>mJ#B^k;-9`G!XD&kZBX83buRWkcN0bX9VV?IsnNluOjH+C=4Ex2(b
+zOjSL8@3*x%{a$WXo;q4OafOGax^|rs|MfjzR+qP<aQ(L{@)ADsk_%2U9AW5VaI)bo
+zNnpxoIq=FWZsx|KB_8g2$1hCn7hE)LhC!-JM%KNc4n@ni2eO)+t}poU!BJFowS!|*
+z^aCYFAptL03;hKxA|(cIxPCJ>y!{i!r#ba^Ta#j^isn}SD(<&Drj9ReK5FS@m?3!Z
+z?lP7c+(l-G*Klyh-1L+B&YOEQIq+=mex5LIGyk>&9S>Powai{3${l&>+6l28ytxxQ
+zds`O<1jaa>>S$WZ+0J!DWBdBJ{*D#LkM#GNMyc&%lc~tgez=(Birv)*mkvH`6co9i
+zwK$wN_HX3z|8<j%4;;L>@e$*d(~MF3yyXwBRh+bDsaO-ck8N6leJbOGxDdflleum_
+zOx&jC)0M=u<aAJ*276LN#=Qx9eKYT_*|G8I*DHro9vxl$q$D)tU(<&Zb$L!g$7+u7
+z6g*UVvFCwN)HR)xU8goWy0xDX&^6KWy3}DYS*56z>zHQs9?eHy7t>zqyg3*t`K5dP
+z;pt|2>TL<}cB>7Pb8@VwtvH#P<>%65t$A{zp<|{+Q%%H^CF|CR`>5M#XqE(W<kgt`
+zPrd%#wl3oEy44fUJ#l;yKgaf-Oa1p1d5c&7ce%fQQ}Dlk$5+0|-DPO;YUQ6-w+=l!
+z_adYGli%FMa{sT~I`r(;p%;fkKi@jkw`<;3uhdolkC@$EcTsu!;(wdu*6HRT@!kHe
+z)6Mzhr_fUT{C(QfAIod*S^o<YuC0yy`GUvi?oR8*ecKAsW^X#q`<ZRJsZEf^>07=_
+z<H~Gz6||b&l{n|l_4n@LUBRE1--tYZ%QxQi*I5;r(yz5YLWN%)y8K)7^{l<~ue|R#
+z6{x>#qgl1h1O68)>N&&AnzQ$uUzH@4{dk_jdR?7^tGhDS^g6lQ{tMl{vduTa|G4$7
+zpA#Ca-T$VqU8PqoGpqlO<zv6Ch0lAeZQGAOI<szP%p{)k#TNtl`4|Ky9|+m)d;dg?
+g)53^bY%yD#W@W|APBN5a4voG&>#$D3R+R=F04>FG2mk;8
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hardlink_unsafe.btridx b/test/btrpkg/fixtures/crafted/hardlink_unsafe.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c47ff8f85745176c04a297b073fd71d3d84df697
+GIT binary patch
+literal 1506
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffjaqaut~&3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`m-?;~#**?NIQx&?bcH>uBF}!WVy*kMBS<Z=?|6^h(*@;P
+z%9R<JQL7Ks99b+`RMsGwSzvH(HTV1D0Z!*dRC<gdwvtb(CB41Mdf@6VDVF~)R=%je
+zKYx9dxWnSDhJsT!&oAQNeFko_0RzJ(P6h^;|EIp)-nL}J?_I6d={i#~jS>={JYR72
+zLYeY>pFVCcwPlupuKed`EVW%Uk-c-bmi~mkxaPkv_6WS`%~-f?dewg+6$S&S$p(xJ
+zQxg#8E?>n^^ux0J=bUg;*CX<e)a-LkKRFaIg<bi|fwhM@C01&D^xgGLWkb=S@P^rs
+z=h$?wy{Biq^v;x>1x}OoHE#<xXl&L0o1n-vm7T$bg9l{A5=Msmz6{y7Rk;`#81$S%
+zJ$+m}{oMQ+>KGZ>d_#g<T~{)41bDkMz6C{CX>k#|eokf*w|-%X8NYsEZjP|Ne|f5m
+zzE6H~wp(gy3PXZ6qk(>Yd1`!4esXqNYHEsJaefGcIy0kkVQx-JCNm2I14C6+Mvk7I
+zeg(*SQw4$MiISJuJ~wPW^0?fA%lDAPvD5<|*$EM8o20iUi7i?n@L=Ce**gIjzwFfz
+z|7qCJ%)uz}ldXosK;a2@!-Y$^(|=1iD9Gqt6W_#fnrGevDVw|qnF$--e7mqAWc!9w
+zKQ1f873PWlF4NAQ%MJE>HB+i2L)pgzo&{1xeCpo}f3B=bX5S~k%gc7mr-?nu$?@RE
+z?j^bfH*SQfs>kpBwl=5V%gxGDM@uKJ@UT?Zu2bT_zURy8@^%!i|8_-Q!be_m!AXWA
+z41EkvHoPSXOc^Z)UU|jM+*q{4!(H$Ag{l35i>A#mNOj4`x);=;X!-U)R+H291wTGG
+zimI-5aBPZxpyVhd;3aFJzo12=#NZ9rZ^nkVf1>y_r~YnhQtVXG+{$0Y{g%hn@x{$Y
+zEximg1P|U_#xjGu$n5YM4(^znep26gbB`tmp3U9Q6XtE^-*%wmA?vD^*-J#ZBQIS$
+zA-01zcVcI6>%xG*7^hPmO-ni3xsGUTUmw@svEulV{$A54wS8<d71`Mj7qeWkyZYeL
+z!H124BKNZvhx5k%jXeIpZnE)#gBLeGV!U#iF>0T;{K2(~lh!O1Yhw4YO-ry(Wt<Qf
+zBKT=C*Ug8C+thrzl9-m94r<e2Pin}xH({@D=G`?rHa`7&<xt9_ql=%EgogZU`f#Ey
+z&q?T5%@Ll0he|K@JTQv7rgO6E)J8|Q_A>&yCR$#XIxHru6t!|4)2!a3`N->H+Dn}`
+z2O}lFbgw@=-AqrtEg{}+wSjU@j`g$^Co{ABT$-#kPi{1H%(Q5#iFmSP-5PNpbvq5s
+zl0c5U8k7I2*T37=MI2tYdg8e!jxXZp*xqxg|Gpw`@#_CB_t$R<{`c?r$~U>Y3@u)*
+z{PXJ8p=ak_WR!pMo4Z)<|CL*Zp4~e1;&ABaTZj5~&D-jgy6XQCv%BjqDsNx>Z<E|Q
+z-5eyo+uwD%IiLI#T8f{)PkZ`fdCfiRe__J4wUIwx@c7)_Y2CPQTS40FO~-jZvrRX(
+z3DP)y%Xev9neDEER<pYj=iIse-d(&a`1A4`k;iZO#+&{+t0GhSwf0A-@T)_Ye`~&;
+zwRirN_Z_DK^_OiltG0Q-|6)ZwXP8-Y_MY>rlBBX9&r?{ht8;L5SLT{tCwJR_q1#us
+z`6l=ux4!jrLW8yY-}JSs^r~fM_2034?6<Y>d5^Vi`|(F-*6oa$#B;v*Vjw>sgTUki
+nA-jF=pNMf<7;%d&W^2=|thm`phLX&o(YI$E)=Ai^(x3wXpMZGI
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_alg2.btridx b/test/btrpkg/fixtures/crafted/hdr_alg2.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d9417fc058d4bbf9f8567fe2a80c6ce479b95954
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtU|?W^Vg?XM0EsX#JO!~C7#N;|BpDbO%$Okp)lmAako{>#+mmyH
+zwc4ikWz5<0^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&
+zSt4r^jGjI%*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)Ta+T4ZltmgW
+zGoCVVId+C^amda2ru>|BJ&&$?=y%60o@e1E8!#|z;)H|&NNnoc?QKgo{NB}Sovt$_
+z(<mYF$@2wQFO(_I_vz#IQd?#j=*oY7#!}lw6WKd=Yw1tui);S-VvoR^-i(FYrdRzJ
+zQeiLvnZm%pV8F;QH34Dn@>L8)KP=0C&IvblJtF@|%|7S!lS2Vh*p;swSbLaLVx`7M
+z-(AmCHWVESZ<zgfj!pO4dwRx8?@ZZQ;51oZ^R{4v##a5m3C|htvN4#jbAzl{!pLyn
+zmm&MMDi;F-gPv2Ur;m%LpPN5J9U~)~Z%B}<>q<tB0B?83x1b0sEiPi$&&f>U)-NnE
+z<JT|D%@Nl3FHe=x_sLJrc1ul7VMx$sG|<m4PmRyXPtHzDO-<1&&JSTwXJ%9`%*{#3
+zG*S>?o~U@4jX5Yo=$L^Xvs)DNVWY`+SBP#FU~Ogie)i3SwytIGU3Z@7XOwZ_IB>%J
+zfpY_+Vmw33w7lJajx#VN?wApO!Yd-}1IzUXg@+$Cv~0fZb2#kmA(hAe%^$c5R{z-^
+zAE_M!_GC3vsw6|%#{-@PQbl~~-wc1QtV(9zC&0_gcFd=VJ;}-O;KuGHx&=3GgsG~>
+z@BOwmr{BxX%2P*6C$8|YRM)Ok;=jJ<%j)uW6t4evMP9;3UUI=nh9eAp3{Ez@B?(L!
+zEeBqC#m(GUw8X<*@A!qO{ep|8%`ixH$;i4F)S+nk_CQvX)Aa>EJ~)c1u6A&2ihiKv
+zC?wz|YoWiOMWn>w4cBkRhPQvB_%x^fZfjEPRMFhZU&Z~F$JFt~%||W03^N1|-d)Br
+zgS*J=@EQ*8n45l5-+6P7CI_C)-Om%|ZRX#0pyMIys+QSHM7bj`T{|JRgEx0#XK(Am
+zfWR21Qyoo9Ior98Xl!2}*Wa<?_>ulz(<rrlY%&$u*$)@9T(P_Q;L^c|je;WgvlfT*
+z#{P{w{=aUr@qvREH$Gy#a+)z}pSS$MwThG0EEQ{F_pwb&uuo;25Eml&X)@Q%hl$(N
+ze7cgDmYfc1(_l|($hbFQuW#nvH9Iyw{d(n4%A=!;pOl1#{A>DfqAt%#=vd7Wo`Q!;
+zFZMhzin^wAvg_1FN4NGf0=gzzUY9y7CaV;+avjsG-lO@*>tfnVoi_&~CBJm9KRn$`
+zPrWT6-fp#la!!u*v=t{av;16|tTj(=G<3|gXsU^LvSi&FaUXR%4b753j=UO^|Ebr%
+z+tx)KUblMUxhIY<;^)}jbE*HnB5(2P|1S5}ZwmhR@A%3$xw{N4UakD|>eiuW=U!x#
+zfAX8VSnmIoTZf+AI`raj=;vF9`gYCR>Xo|c{}Hph>n<v9U;J;A+&bMHB);3<b-Fp9
+z{1jS>pTAFg`eS*`J?npA!nL)LKVR_p+}&y2xNloQ+U!loc|WsFH?;}UIDN}^X<V7@
+zu7XyxyAtQzx&Gc=yes(g@*9!IZ~4ZX{yM87Q~I^`N2u_tLzjPRzMi#r{+0I~rvmkt
+zZ8WR4dBFc-MLlPjS#$QD^Q)4ivLDY=Sg)&daCKManqDV&+kc_kSGM^k_#d~v^>adl
+zwfo=nwX5{1WoGr?v3%^eweWe5wQc+HM`zaUjG4r9zW8DwKOcj@<O3nQeea)$aatI0
+di!Ekr)2ytx*-3_y%%Rb@XC2l_*s9W?0|2WmbL#*A
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_blob_raw_cap.btridx b/test/btrpkg/fixtures/crafted/hdr_blob_raw_cap.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6400d4b0401e0eadc4cae87c4eeea09c0b3095b1
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okpj0_A8Al6$U`_qoLC+7xhwN35I
+zn6u~Sj{u9ew;o9Dn-h64_3NGW?&qWD-(B20?W_IcD>Ihd`f68vcZ&aEO@>diMAjr2
+zJ$+iPrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VWCta9Ud)dx9zOrNzFicW
+zFD@*brl;AMF=0|Z-}%?cCJXo<?Sq?bz`(GHlYs&1O@^s&x3?|X@OxLQb-K=!OrwOv
+zC(jpLy-=n+-=~k;OKq8Dpez6R8B1*!O=R!ft))MqFRuCTi#-BwdNUSon_l%_NQJ=w
+zYO(<%!_)+Xxyx5E6#cL)|2Zez)b)t`BQ^V+(@zcsOkr2Pa$xOYPKlKoAANT{Q`t~-
+zD7<0z<2g3nYwzh9FTFEmXMxjXea+i~4H{eZ|0X<VyvxR5!p;q{VhJO|eP4#`+p1g)
+z3=Dcsp`Jc2o_=or40Vi*Y`!5uuC6N?IRd=h8Q+2;uC%y_T|Xx?iCe$0#Ef6RFgHh7
+z-@iOnM&BntIomBYHH9HTo6$f&zdSWQCqFqmEj2YouQ)%1L7kaVxiB{;CDTYjfO(?g
+zWj5xZ454ENddzN7%!iF8-(4ZPS%9^b;rrP)58Aqxy?5PtqMuR5h2y{p^9RlijEeCL
+zEz|OL|2fXUl(=I?{0Xm!v=1!T9~2&b)X=i|w$I_Pvxih3`!|2!Dp>tzdwisJ4A_&^
+zOsSF#WgicC7DyHGsed#4xw0ymeV+g?FWWJnCiWyJ$AcTYm*^JUxDlqR9>4e7+MIqb
+zH!DvaEuFZ+!%|(lPKp2eo-eD*+flgw+ZA~UA9=|ICmD_~^f5Tu@RlSnWwac4<rOz`
+zW6=^1cfI2mruGXinl{5A)g>eAUQmak<=X>UO-|Pr{P^G~s=C_2u_^k2lB1A-m#l^U
+zf)<eygEw5i85`dIiQ?0o`n#=3u~S8JD}NRDTOL!#7dIcZ^fJs4Ja~5*%M9)!v%_mR
+zxMObmNqy(dJ(?VNHg`Wyn75gK+kuXUtgBjPFA?RAymak^*bd&@iJiTz3j+dUoKAH#
+zE#++II-;?CeO!OXisMK6drhO%_OZ!SWM@BI%yPx<>Vr!MA2te#+|ODZ&KvtT^7#L{
+z$;Jl`UflSI@ycn&sD0k@2iGc2TC-HFiQUIGEx|sOaY9^(;HSx4Hy<W$Q}gLcVp?)K
+zs7-@CsUhRuguT9*ch~IL`1I?QLn)7rE`CxH8uG8{!-={)C!u3CM|cVzD!thAz$ogP
+z&dIJ*8y(%+&j{$6Xn9@gu$Zh;)XH^CvwDx_Bd?2TFLmA=jFkM+z5eiYGd=aTgm}Bv
+z2Ff`(*3(v;%*^t0X|mQlxzW%u)1s*+;>nVAYs7uj?KCt?0y*+(O#Y`{|883sad_S8
+ziRYd;zKEY=d(Wl*`-;59tN**)U%x5%-@oH4-{kHxw0O1h&#PO9o}GJ<QU1wq?qa$B
+zS8g48cI(iK!=ayV9qQXPZ>v}8s{cpK?ykG2ynXS%O>*mWbCCFMf7j{eeDYIhDSrMw
+z?dgx@HTSIlg$dWzM*e)k<8ybXb>qHm1!=Q49q0YbHr>=FNaOS^-=%S7wz~>i&F)H^
+zbLaYdck!;^&&zK_9>3)qZ~E)3icIO(+8?39uMS=Qt@(P^-uYMFcbp2;U$)V#+U5cO
+zixu^pVP?(Qd(N*)lFEKOPhq{T&cW4PnQMBT+-?7bZeQ8vo8W)k`qs}04c6{|)7P%j
+ztCpG7f5-B%-`2wCJ=V7E#~+<pw=-rE&-vnuf&6?70+SDf?DoBXBF1T9#4Wa%txdDC
+W;$|lqN-~E=-=1|?Ct<5fgAM@Ek#%YS
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_entries_len_huge.btridx b/test/btrpkg/fixtures/crafted/hdr_entries_len_huge.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b00e0756919f651d4b8d8e7731b2692ce7bf987
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_K-eI$=OBWCfx(O!B32Eh-wN5EcC<Y?H(0A}YG1~j
+zJwJa0SiHUUKyu%l$cw38@2qz}A3gu>;@)Xr?H^y6vE<fQyW+c3{10m~e3~V)Cc)_G
+z({e54%8bmY)dy;hES4-PYmm$=FgUlG`~C3%r}H8zJ;o5*$S2=72pgB)%$YjB<onLg
+z&e6Yw9lX=nMWS!de&91D>_V6k+++g=hE1Fd3{Y<}Ontk(ZOMk;yIQT&b*5w*B_uw1
+zzToPGGUfR`ecWDZ%Pa$3`OnW-YP)D6d*^N~{Rw?>&3|9)5qQ&^v2fe;s{cYN3<gk>
+z4Hy}wCLqjRzKWsfhh_QCIpL<RN8}%=+2@>oawuR5yYiI-YY%futkn4EyX%?ChN45^
+z4YME5vFToWPtSPiohdsDoF?mQ-WF`o*sA|G;W^`7HU<-RZjcpA7#Z&SGGyOY<zir9
+z&~pm)^l|a@bMt4YV`OCW4GD5}UCGE1;O)-%78GHn#YOD;Ihje^`h_KC{Q8BtIl}t>
+z<*73IKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_GI%#6x~xj8ABMhXJV6BRGB
+zF$ZM`9W&5lc8g*@Y&7}q3en91tgQ^+&%Sxk*0t=t>&_GXj50192TqtjaBg5!jAv+>
+zmbd%QaR#Qu9W&xjctxarV7dOF@bIICmd&?)4u_pRr1IFm`2$zM>Ob4#Bei3|o~&j{
+zm1HRUc)+tjs)$eho8ixuRmtr81bBJbj`=jPCpkGD+}OQDx8TN&Fje*Vz2Da6^n1Bk
+zdFp8C#1$Tv>e_Wm{MYw<SzX?a!u8*-$V>RhOD;IcaD<_c!O4cVB!MZT<-jYixS1P^
+zmUy`99ltQOUvSa183w5?8Cmy&IutG69>{8Py1wAY2S-uW)eeqL(GQdyg#^50E%X<(
+zh?E$-;rh+k@b*s>pXSuxZB2@uDw<pQtGM6tm^!|=`KYCrVTRzryUSQ+a2J^!Uc<p1
+zbJI`iJ8$mM<iNAJ`+35=&HURAbUb8T)iQgDD0k$gYbV5Z@a9hJ>}_2b5E$chs-tNs
+zXFJysjqU5>`a4z}Khoc88l|?6O{O9{`{81iD|S~OTsru$QBdT5*5Yv9*uRm-|JO}6
+zK5+2j#z%}-PBTXB^OirjR&mmrrD9F&KDKEI_Nj~$;z9&JP3F4!FmaojPgfGtlG8zL
+z8th388TTga_07DyX2-^-U#}cWd31E~lakPoe@!1w)a5w|9jiIQQ}9sf#hwR7QP*@%
+zcAeVj=+=HlK-Wae>r#isWR;>;u49_jdo&+;T}*qa^X6cr<d^RCho_tAskbG>+pRWG
+z&dIT!w&G-FmY++LwdTo<hK`vQO*IiumaJPN?xSv}p;;2hkym5#KlS=|+q#Iu>sC)Z
+z_r&o<{2beRF7@A6<SkzP-{t=LO~L>E9bfq-cbB2XtCfFV-8%H_+>4CzPkwV3%l*G{
+z>(H}Xhh7{G{e0_C->!LEy;4{GKVo)w-9_c?i~ntsTc?|Y#CQ9<PB-V1pF&IV^Y>{_
+ze=M)LXZ<fsxVAR(=L;U6yF0BL_iZako4x5c?`O8@rZzzur*HW#jVrU=RnTg7SK^#I
+z*WbH~cLjf5ek1buE#G+4UuRWhO25|r2o-*H=<;vP*R%G{zw*B0RG|K{jb_z05BOiK
+zsOJnbYtG(tepQlG_Tza9>veSwuI|cQ)9d7J`!96+$~NBw|KrxTeoknxcK@5cc9mYW
+z%&h)9mXH0m7C!H>wrxND=*+sEF_U=C7heqI=VK6<d>~}E@BI@oP75P$vBhj{nw1qd
+UJIPRzIW+qAtiw79TU8o#0Pc@;?f?J)
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_entries_raw_cap.btridx b/test/btrpkg/fixtures/crafted/hdr_entries_raw_cap.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..353d43f8a5f5aad624afa0836c074d0f3319d231
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYav2#I1VBtPW)R81Pz|Nu3fZ4_v^_aDSgUPn
+zU&fq0KYs*RyuI~6a^IZDi>Y7ltam>jJ^$|F-f3U$A77cV<knZa;=5D)4{I`fnkBL(
+z!RYDJaxLY`jLfLj2WpNimMki3kjyMFIJcVn{qX>&^CBue#t_@cC+lsteaXIbT_Eq)
+z{RuM}-~D6|W4WKBviI8Ush=1ewz5gWO*UX)*u=@e0Q3LUx7*v6Z1}ya)jC~gN~Tdl
+z;*;kKu3jipp6}Dg?WMNNGSHR({EVfxizc#n?$*+u&==SI_r)H8H@z7Pw@t75FQmd?
+z05#cwkzr~A!rbMn7>a&amj9d+Zt8kO{*jt}&gmzI0;aGlUpcV$FsH;yjgP*&o~djo
+zIuzb8`|%u`?zQ*yjF;Y-va`TxvcBeR!3K@3`hOFiGu~xmFk$BgS+RtX;l3|J_H9)z
+z1_lN_r%+EH7f(Moe}+0nMmFD&AXnFwj2r>p?u>6i5ms7U#IB!{nZ&JMSYpPnUznRC
+ztnXi*Dx>d{pPcQMnwr9ppv`EYpI@FDpOc@QotB!KqF0<B!l2H~s9czvlagtqAiz9P
+z@iH58P=?Sk13hN9DCWaPlkct&-7LV`%JBW{n+I)O%ig>0Jkif6<HB*^g!u#K21dnr
+zhL&l0yZ;<#U`pIEBmRU}MA`?I>kkSKKWb>%eB0-6*x5rWkNulJa22fnvpqgiI|l5@
+zYNk|4hO&<bJPV|X_|(4{{#;p=%)U>6mzV9BPZN8RljFgS-Ai-}Zrlh{Rgd5MZEa4!
+zmz$NRj+Rbb;bEz+U8lr<eb1NG<?Se3|Luyrgpa)Bf|CqK82T8TY<No&m@--pyz+{h
+zxv^-8hr8bK3sd_A7fqXCkm{0=buXwx(emwqtR|=H3x0fX6jfdA;Mf%XK*>=^z)RLb
+ze?f~#iNPDL-;51!|3vX=PW|21q}ZvVxs|_)`z?>D<BOY*T6!5~2p+t<jAaIQk=fxj
+z9NaNC{iMG0<{nKBJe#|pC(PT-zwJQBL)KL-vzLf+M_#&iLTm?b?!?aC)`bCqF;1sC
+znwE05a~;vxzCNzMW5w|!{k^79YWvt^DzdX5E@ru6clE)ggAW@8Meb)U4(E;i8+rVH
+z-DKkf2QO}X#CYX2W7Ixx`Gac}C#_j3*2L~(o0edo$~Yk|MDWvOuA2`Nx2gGbB{3~I
+z9n_}5p45<WZ^B;R%)4uLY<&9l%Au4;M;AXS2@Uzz^x;HZo|DkAnj<^~50zf*d0-TE
+zP3L6Ssf~_q?PmmZO|-l&by!SRDQe|9rdhp5^O4uZw3j+>4n|6T>0W<$x|yDOTSC0u
+zY6In*9P4Q-PG)BLxind8p4@2Ym}${e6Y*rpx;5fH>UJ8MC4n4yH75U4uYb3#i#WV)
+z^~7^e9ACuGvAyR~|9wT?;?@6M?yuhz{O{lKm2Yx)8Ctwr`RCQGL(k5=$SD8hH+Qkz
+z|0}l+J-c=2#o^G;w+{8~nzz*}b=ChPW_Q<JRNlV$-zK?rx;aREx4-Ljb3XYgv=l#o
+zpZ4^}@|t_r|H6c8Ya@TY;PJV;)4Flrwt}?Tn~w8-W}9wm6QptamhaNIGTU7Rt!8&6
+z&bf2_y}Ni<@aN?>B9GtljW_*uRz;@tYweFv;a7()|JHmxYw!Fk?>kNf>Mz@9R&Dcu
+z|HX=W&M>p)>^<jKB}rvJo~N*0SLfjBuFN&PPVTn<LbtDM^G)zSZhh<Lga&K(zv*jN
+z=~c_j>c3<8*l%m$^B!y4_T!JvtlJqgiRXOr#Xx>O27$>3LU#M!KM~`!Fya<l%+{t^
+XS#h(I3?-REqi@eTtdp=+r9lS(RD*S#
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_image_long.btridx b/test/btrpkg/fixtures/crafted/hdr_image_long.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..58c1530161486a68d325ab4ca67eb9570ea163a7
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC=g%)GoFG;28QQQ2{UGhKsA(pD`bD#(e~urV6C>PeHnB1
+z{QMDM@%GjO$$fJoFQ$IIv)=uD^!&Svd#8Q1e|%-el3QQxitkSGKdi~{X_m;E1f!=<
+z%e9m%Gcu!AAE-I9ShA?BK{B(z;M{8N_s0XA&Wot@7(;9$pPW{4;qwze-uFjEy53|S
+z$ZDAUX7+;lQHvLyZFlzw-MIQZ+++g=hE1Fd3{Y<}Ontk(ZOMk;yIQT&b*5w*B_uw1
+zzToPGGUfR`ecWDZ%Pa$3`OnW-YP)D6d*^N~{Rw?>&3|9)5qQ&^v2fe;s{cYN3<gk>
+z4Hy}wCLqjRzKWsfhh_QCIpL<RN8}%=+2@>oawuR5yYiI-YY%futkn4EyX%?ChN45^
+z4YME5vFToWPtSPiohdsDoF?mQ-WF`o*sA|G;W^`7HU<-RZjcpA7#Z&SGGyOY<zir9
+z&~pm)^l|a@bMt4YV`OCW4GD5}UCGE1;O)-%78GHn#YOD;Ihje^`h_KC{Q8BtIl}t>
+z<*73IKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_GI%#6x~xj8ABMhXJV6BRGB
+zF$ZM`9W&5lc8g*@Y&7}q3en91tgQ^+&%Sxk*0t=t>&_GXj50192TqtjaBg5!jAv+>
+zmbd%QaR#Qu9W&xjctxarV7dOF@bIICmd&?)4u_pRr1IFm`2$zM>Ob4#Bei3|o~&j{
+zm1HRUc)+tjs)$eho8ixuRmtr81bBJbj`=jPCpkGD+}OQDx8TN&Fje*Vz2Da6^n1Bk
+zdFp8C#1$Tv>e_Wm{MYw<SzX?a!u8*-$V>RhOD;IcaD<_c!O4cVB!MZT<-jYixS1P^
+zmUy`99ltQOUvSa183w5?8Cmy&IutG69>{8Py1wAY2S-uW)eeqL(GQdyg#^50E%X<(
+zh?E$-;rh+k@b*s>pXSuxZB2@uDw<pQtGM6tm^!|=`KYCrVTRzryUSQ+a2J^!Uc<p1
+zbJI`iJ8$mM<iNAJ`+35=&HURAbUb8T)iQgDD0k$gYbV5Z@a9hJ>}_2b5E$chs-tNs
+zXFJysjqU5>`a4z}Khoc88l|?6O{O9{`{81iD|S~OTsru$QBdT5*5Yv9*uRm-|JO}6
+zK5+2j#z%}-PBTXB^OirjR&mmrrD9F&KDKEI_Nj~$;z9&JP3F4!FmaojPgfGtlG8zL
+z8th388TTga_07DyX2-^-U#}cWd31E~lakPoe@!1w)a5w|9jiIQQ}9sf#hwR7QP*@%
+zcAeVj=+=HlK-Wae>r#isWR;>;u49_jdo&+;T}*qa^X6cr<d^RCho_tAskbG>+pRWG
+z&dIT!w&G-FmY++LwdTo<hK`vQO*IiumaJPN?xSv}p;;2hkym5#KlS=|+q#Iu>sC)Z
+z_r&o<{2beRF7@A6<SkzP-{t=LO~L>E9bfq-cbB2XtCfFV-8%H_+>4CzPkwV3%l*G{
+z>(H}Xhh7{G{e0_C->!LEy;4{GKVo)w-9_c?i~ntsTc?|Y#CQ9<PB-V1pF&IV^Y>{_
+ze=M)LXZ<fsxVAR(=L;U6yF0BL_iZako4x5c?`O8@rZzzur*HW#jVrU=RnTg7SK^#I
+z*WbH~cLjf5ek1buE#G+4UuRWhO25|r2o-*H=<;vP*R%G{zw*B0RG|K{jb_z05BOiK
+zsOJnbYtG(tepQlG_Tza9>veSwuI|cQ)9d7J`!96+$~NBw|KrxTeoknxcK@5cc9mYW
+z%&h)9mXH0m7C!H>wrxND=*+sEF_U=C7heqI=VK6<d>~}E@BI@oP75P$vBhj{nw1qd
+UJIPRzIW+qAtiw79TU8o#00yymkN^Mx
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_nchunks_huge.btridx b/test/btrpkg/fixtures/crafted/hdr_nchunks_huge.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..973d36135f9484e2d67601316107c745799dc917
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM5m?0C5sP1OvlU5TAj8;W-n8Va5!htD*E;A^X#gwkPKXYqd@7
+z%b2t0=Z^r3x3?Zh?wb>NG4<=6_3r1R=igo2JMF9e<0~_k-1=%)e0PffVNHflvqaV;
+z7(IPjuBBX=kr}o6K+TcGl0{_=l9>et=T>vSKOW$8UPPtG7-AdwWK)(Z1Jn8XoBI|_
+zoYJ{_hP!k0r>W1R(&ciC=2{h;+uQ*+*?@sz6DI=$)SC=b-)?VPvf=lxR_k<~DVatI
+ziBFy{xO$;XdA?5{x0l*7%RpED^D~y(E}F>Rxm!zrLSJ0--xqrX-t=ZH+%~=HzmN)p
+z0n}szMuw>g2y>UOVkr7yS^jfQxT)(A`A2H@Ij5f-3YfyKeC5E}!<-T;H9q?8dZx0W
+z=umjW?8kF#y4T**GhTXU%FY6($@-eN1sgQB>i<o6&UlxN!GxU~WW^FjhWow@*|$}>
+z7#JAzoI*W)Ts-~U{2A&P8QFY8f?Qo!GI9iXyEDE8MObNZ5xag)W)io4VTl>PeqnBo
+zu)cqJs*Ju*esZ>3YHA8Yf;OXpetvmsd`^CHc3Ns`ie7Pk2!lE^qjF(xPD-Ycf&lYG
+z#mj8WK^a2F4D^`YqL>dGO}@KAbh7|!E5rA*ZyvODEqm{}^F%+Rj0?ws6Xp+`8yFSi
+z8Cs_0?f!F|fhlpvjQA5?5osS-u0JR|{HUR2^KGBQVP_AiJoaz?z*VsN&-VC8?HI5p
+ztC><I8OlB$@GOuj;#2=-_;Y1dGW$LOUS76iK27XNPL2mRb}!K_xN##)RXu+1x3xL_
+zUT#*NI$An$g@>iOcAXOc^*vu!m$##E{kJRf5<c>h3r;c|Vd!IUvf(XBV9IDY@X9N0
+z=EkBW9`1U_FHG$hTr_QlL8?ne*1ez(Ma#DbvYMQ(FZl7nQB-xcgJV<l10_cx0WVn#
+z{RJ%|B?fP}els?_{S(EfIrVp2lVYce=2reH?zcRqjxTOLYUyQ|A$aiaGL{+KMP`TB
+zaB#=m^ppC|n|m}l@NDjWo-l7S|F#1i4_Q~W%w8hO9eL^639%i#xf45kTNefd#yFko
+zXj;nI&UHj%`}(;4jupp`^!J)ZsqJHvsmRWLxR~XN-PH$|4nAxY6uF<ZIGi{3Z{+d+
+zb(4(`9K5*k5#yE9j8Xf%<qxh^oU~@CSQERCZCZkTD&vH>5W!EAxo$p8+@|K!mBh5<
+zbWocHds0Kjy$O4LGw-h1vGM8GD~D1Z9bNpSBsAn-(}xpvc}_ydYL4&}JXCtI=Ydhw
+zHJy`Pr#3pewVx5tHPQ0A)L}7MrKpwbm}d1J%|~7r(_ZSlIT$JVrF;G1>1KNBZ3*#q
+zs|}QMa;&GVIGLH{=h9@Yd2*wnW2Qw@O~jKW>(+?-sM~31mIQL-)tLNGz5d;{F5>XI
+z)f3M>aeNU!$M&8}{r44li&y`5xxao>@V|e@SH8*JWoYqg<)2r#4m~^fBBT71-`vG=
+z|F7IS^z7E57l%VX-#XN{Yu;9`)K&kFnB84>QF;5~f1Bji>E<Bu-TtoA&H3b~&{F*T
+zecIC>%WLjg{|ghYt&RNog2(6XPV2^f+X~WVZ#vHVnQgkMO_0XvTfR%<%4~NPw3^+O
+zIOopw_wM3d!Jn7kh&+DFH{SHuSrwVmueCoyg<l=I{9E(&tiAKEyze*_sK0EZS+&gr
+z{ue9iIm67Fv-g}|l_Zt@c%H&~U7drgyE51GI=S2a3*El5%{RgSxb>}{6B?}D|E8~9
+zrB^L8tN)JWW52D1&wH$G+mAmwvu<b1B%brd7X$hE7z8FC2-)p>|3r+_!iZaJF<YBv
+XWyQ@-GL&QvjlMnWuuj5Ol?ELE2hDZa
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_reserved.btridx b/test/btrpkg/fixtures/crafted/hdr_reserved.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..84bd773b5b6c3674eeaa0447403eb3fa0d435642
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAt0AWT3CI%=-0EsX#JcV+fLnX|ZAp+G<`mK=tX-C_WbAz?oruJpb
+z+4J*9fW_Ne4<z@^iM*Kl_0D?t^U?F~F7BQ7)&B978B1<`wJW|m#s9D-!>3syYZ8o}
+zJ}uW$uFS}cT797A$YRN&vIfb_0)um_x!)fTa5^ud(qjy<jeJt)OFMJ4a_gLu+lP*~
+zTu@a$b=mmKHgDd5=a22#=lkE|g_~@^z_5vv0q*~)Z@0HC+3<T;t9820luV<9#3#=e
+zT)j}HJm05}+e>YkWuPnn`58-X7fodE+^wZQp)aoa?~6SGZ+bHpZkt~9Ur2?)0BW)U
+zBg51Lgt^OCF%<o<EdMzt+|>1m{3A8{oYPMZ1x#UAzH(sgVNQva8XtXkJyY3GbSS)G
+z_TxD=-D~gZ885vvWoLoYWPQ!sf(;s5_5UV3XS~bCV8YG~vSJA%!+l?d?Axkb3=9l<
+zPNAMYE}njF{tR`DjBLIkL9VVV894&H-5KA4BCNEyh+RJ?Gl^Tju*8gCzc4pPSl_=q
+zRYu<@KRMeiH8q7HL7UM)KfgRRJ|{mpJ1sReMXxwNgh8E|QMoWTCneKJL4bLp;$=4G
+zpbVj7271hHQOt*pCf{8lx><m=mErr@HxJsnmc4h~d7__D#)ad+3G)Ze4UCHM3@y|0
+zcK<ofz?8USM*In{h_nwZ*B=xfe$>#i`L@sDu(O9$9{V?c;3`=CXM234b`02))l8|9
+z3}qh=cos+%@u`0^{JF9!nSGxCFE86MpC<MsC&z;uyO-z|+_({@svf`h+uEFdFE=Ys
+z9W9->!oyNsyH1J!`kpVV%iB@7{@WFK2_JdM1t%GfF!V7v+3=PmFlDqHc;yv0b7RpG
+z4|l!e7pC?LE}AyOAk`%!>t0ZYqUGBISxrvY7yS6(D5|>J!Lcd&fs&(;fS0U={(=^f
+z5`#BfzZo0e{)yt#ocg=1NwHH!b1Q!p_gfxQ#}_vrwe&K~5IlHy8OsdrBD2G5IJjeO
+z`bmA~%{`hNcs6%GPnfrvf7^kMhpekwW-k%tj=Xg3gxC(=+=-pNtqTJJW1LQPG%e+9
+z=Q^UXeSKVi$BN@e`g={I)b_E-RAgsAT+DLC?&^a}2Ol;Hirmjy9L^j2H}d%Zy2-`|
+z4qn{&i1Es4#;ASX@(0%{PFk~6tcl&nHZ8$Em2pB`h~THmTsI#kZd3E=N@7}aI;c&9
+zJ*gq%-h{ornRnOh*!cA8l|w0yjxK&u5*qTa>BEV-JSU-JHAi>~9xA=q^S~(Tn$F3t
+zQyU%K+Rq5+nrL}l>adusQq;<IOtX5A<|D6*X)kr&9E_Cw(!KuhbTd8mwuE@Q)dtEr
+zIo8uwoXpJfb7`{HJh{=(G1H={CgRDGb!)_Z)a^7hO9DCaYE1s8UjJ@e7jbyq>WSx`
+zIKGIVV|&k~{`-o&#jF3j++V*b_}{<dE8pbqGPHQL^3SVVhn}5#kx~B1Z|-8b|5t7u
+zdUos3i^HLxZyoB}HE*j|>Z<=o%<itcsJwmgzfE%MbaRmSZhzP5=6v!~XeoaFKJDp`
+z<u&)L|Ah(H)<*t(!Q*pxr*-4LZ3StwHy!8w%r@QBCP?G-E#IYaWwyHtTFvfCoO9>;
+zdw21!;Lpo%L>|B88*lpStcpzO*V-SU!mkcp{;m0X*53J7-gle|)L*vItlH)Q|BDs%
+zoMC3o*?Z2fN|MTcJWpZ0uFk>LU72foo!o8zg>GNj=9}Pu-1^qf2@Tfnf792l(yNx4
+z)qltGvESCh=RMZ8?Z+RTS+_H063_YKi-G)n3<8r6gzWace<H?dVZ<%An5|8-vf^eZ
+T8A>vTM&F)wSSMktN`npnXKHoo
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_tail.btridx b/test/btrpkg/fixtures/crafted/hdr_tail.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a61973bd0c2a0aa7b21d4bb689cce914cbffc3d0
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)Dl95T_xtGwgCC_&U7%gE?
+zXgJW-A`=-?YB*y;$M%Su)r)H3CL1s?Y~o~KfO?Z*>f7yYOE&!8)oPutGbPg~A@Rxc
+z1y?VWDbM%m<MvWpW*O+pe}2YN+eH)EJ9lg8Pw0zl{`+E&z?<HTh1;fA{TEVUFo2qD
+zz{oH)0b%a)RSZQxEX#k+2{&~;BL7IuKIin4LjhCRm9HFFdze#VrN&3!UC&fD6dek0
+znEiN;P50V+dd5rdOxaoBG+AHswqS$CR{g&T&l&HsF_^G(gREG>$Z+46A^Wx}7Xt%>
+zo>Qo&kBg_Dn?FMxBO{w{NRX@RN=A+VZ+FJGpa?51E@Icu$xPzbFDx<R*DuV?5!UxF
+zPnFU4$xqI9OHEB-NYG|9(9bVVjnBzX&Q42BP0=gP4`EPeW>hZB%}L2LQV?LCsCb!;
+zIVeNun1LR%TNLwQqsezyh;9~OZDsg=_RWK~u4V6Ccb@2HlyTuWaKik7a|5GdJVVR0
+zyxo6}GcYCYm=S-%D<bU!%k>9^haWYxY`*PtIPB~pmB;?gAGiuu|JfcNsT~9MWHnQ&
+zBtzN91D*v^MSSYt41cbyN@m|Dz{|^a%%_Px$;t8H#_lD$1vhSlsjA2C{kArz-^<O)
+zQ%6fDuJEu_*RE6IzrN?o>hg9JuK#vLUcyISa=}T4BMf~EPBy$H2}~I+2VQx_&D>bD
+z#KT?h_=Tzcf{UijFi3UD$hsHQp=kN`Kvt8}^#wmZIEt#Sc5rNpexT$iB;X}$p}(L-
+zq{QG2*Kfv#w|}DeG^hS<Yf|h~(cH>k#r>AY)bYj5M=iY!GXxLbUB)tlyU6VD8V>H5
+zn|@N?d2^2@2cFH{&lBct=HGUp<00#+mf1^0xg#%KJ0Z4%H+N!ZZ|lN<z!;}f9ZgF)
+z+qsTtY+oPO-?8HOk^WxOD7AfTG8Ng`4;QmsvAg=<(!qy~f+F{`7Kii3{*65TzizVe
+zfrA$}K4QFbnlWmhxBS7iij&qX6>DPmu}w>`Pi34C7b5s+GS|(AiQCkCx{{cdoDOQ!
+zU{7kuxHn<1Z|2=KJ2pQ3dgV~cqoa$Tl!S)-Yx;1aF3(BmSj`chf`>{k_B=3(x~6lo
+z>(oX^xArpvx+Yp)mpUvas}!|z9n-Adqxs0|V%kfcHwPmnzjUuZJl#xBy)7Z$Znc4O
+zPLB1o6(=*Z{9Kx>HBW9dbj-A9s)=~AWZfEZA9Xto&5}Tlyc(1Lsn@^T)<qm%w|e5a
+zCyp=T=h)tJssFwrZ}IB?F89}O3jX)+_{ulAy9_N}t^D)q)}d$TUSyPi@|(L@?*Elr
+zho0R!^x|;n=Ua#RcFo)BmAdNx5wpANE-G(d{BM)oI^7&3zT4k*x;dZx6k3X(zfXJm
+zV|mRz>wjUwwY8ByU-0<c-D%ypZ(Bjy>`ljcKeJ6YwF%NVeam-gT$$~zf>yJ;66f5x
+z{@z`@EBN#B8<EFv`No_6I;$d6`nC2)sPL;pmw#)%p0#)WmG>Q|0`-?|G^@6G!2e=J
+zJ!hC%bM~I|tCFO$AJ0=*ud8!#bywz^UMF|kf1%q~w)rObAGf~sb3%i)```4ntMsa6
+zX7%5(eC)Ti@Oh85ZTs;@XV&eEnZ$Fx_+lVGAA`W;10lP8@1KZqS{QMQEoN)etgN`%
+UNrsZlq0zTz9o9+Ms?wkX0A8hZumAu6
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/hdr_version2.btridx b/test/btrpkg/fixtures/crafted/hdr_version2.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e68b1f74b9b5a2afc0e6ee0a0467d12975ef00a
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBArU|?WmfY1yekO1N_FgyjZ85kIzgA_0@Fqknz1gfF*TOs??j<zS~
+z25YrV?aP?6=jV?Ai?_EPNbZ{xc`^0to%QbLqvzjU+&k^7{o^Y$mfZSkSA2Jh|6xsr
+zPqReUBp5w?TCSyBnUNW_`asQ*#gav34U(A!2Ip3Dzds(}bY4WI#~5N8`J_Yaht(c4
+zH+gy{PI$f4&3IYIl*65`5B!uU{B(xD(wv<iZn6Ob!zNCI|EIp)-nL}J?_I6d={i#~
+zjS>={JYR72LYeY>pFVCcwPlupuKed`EVW%Uk-c-bmi~mkxaPkv_6WS`%~-f?dewg+
+z6$S&S$p(xJQxg#8E?>n^^ux0J=bUg;*CX<e)a-LkKRFaIg<bi|fwhM@C01&D^xgGL
+zWkb=S@P^rs=h$?wy{Biq^v;x>1x}OoHE#<xXl&L0oA8|RE*pahJ2%LRC5#OBeHpTE
+zt8y_gFz7jjdiuC{`nmZt)G;!$`Gy3!x~^p82=I1id<%-O(&8d^{hZ7sZvDa%Gk*QT
+z+#F$j|MFBBeV_c~Y`4_Z6ov$CMg#r)^3?d8{N(Jk)YKHc;`|T>b!JB8!rYvcOd|yW
+z=81}z*_eYegpL{LF}p=EA2ynNcZKL?0oGQA?`PjUXzN<`-gW1RenuG=jsqvmA2>HK
+zD#kOkOv~H-=QsmX;*J^dC%hukKCoPWP<Z%JL(AsdK8M539#VPi-~55AVD+Ev@sZjw
+zU{6*vrAjiCeLUb<AXUVt{>|{`%Bp1ceFD6^Y{z_>*pr+b4{q#UqFZp|MwqI4{N8VC
+zbNap9tUPtJbm9sROLgr!CI0JszN{{9N8$Q!SL7vp<RurJWH`dm$KYhcTav(((Q@FG
+zSKQ2vMN2%~^^RYd+Ap|h+6;qKmyE1?K^=;gZx3WOIbC1y<AbB9>S_narsxMsjzR)n
+zvKIOaT0}|=-f;b9Y<T-8icfRu@3tnzP8H3q{8ij<c}yK&+<es1%P>Rm;N4{`Gq{V)
+z4zJ<hj=AY4^_@5OXma4$-2FUZ-e&%72Ra_Iu4<XRM3g)7(zO#}J9u*^cJ{U|3<!*I
+zI@Qs%l(U`dh{pEyas3@DjvwjoHH}i+$0k#eo&9hz%N4t;4=x>i*eED+KWlL~Z|vX5
+z<Nxa>8y`4$apNP#E2kNw_Ib-6T&p-~%~G)@b|2fc1p8FR32`BUpC)tNe3-aR&8I7g
+zY02rJHVyWqhKzd?_WEYtU9)53)2~+!r93*i_(@4<$iJo!C+hN?gpSo5;VF2i^kUBg
+zqo`{-C%aB<baZP!BcN-d<#nmUVzNq6E7vj2>OGo|ye_7_)Om9-Qu0gp`oq)B^wirD
+z;_X%&DCgu@Pg`*^Gt1AV$y)Q|MnlI;i>8{0Crj3?5%*EI)6gsl<jAWr`Ja0IyKP;>
+z;dQGgo_pf>B7TnTJ(v3LEAkev{_k>s{ifi5|BkPGle^2%;?>GOuWlWBcJ4(+`6s`*
+zi{<`bxpnB-twS#khkm|wsBhQ2tzN0C{vR>ByY8a$_Qn4;$*t4PLE^jpU8kG#$xorB
+z`1$*^r$3h0+_U}{CR|$^`SS&j&)uEYjr+D0q|M%RocA-^bW@ukjnlV$m&TRZ?kZ?C
+zyDM?do$K%2#k+z(FTW9a{FZOL>94aYGNoT@e}oFZI&}HB=IdE|=U;i>aVk)M*+#Q!
+zn+N<aR@8HbnKftcIln4ND*N#~h4s2R2UmAxuIY7hxBVBoePx?(g8y;rTR$f>SiApC
+zU%N`LT4q-N9m~glTMM7}SlhNAe{^Qu&X`F&=Zh}}^7AnWOg<2@+xPy77^j61x7cE~
+ZHqFY4o1J7R$s8Jed)8r{gsmzKIsi0ec1HjJ
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/identity.btridx b/test/btrpkg/fixtures/crafted/identity.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ecbb1187df544fc4c9746323488b8cb39e7d520
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)T^4jINBb^8Nr*b&NCG4Mk
+zN#E&4>BOy49^6x}PfQfv!u1JmvH=6bCQb$hs5cp=zTMuoWW(=Wt=8!}Q!<Sb5}!O@
+zaP>l&@_e5@ZZEZEmVvJP=VvUnT{MxsbGMfMgub}uzc2O(yy?wYxNUmXe<2kH1E|Rc
+zj0{r~5aupl#ZdIavi#?qa8uVK@{iQ)b51`w6flKd`O1N{hdCuyYJBwF^-N_$(V_5$
+z*^lSgbg#XqXT0>zl$`}mll3)k3pQwM)&HCDobfIjg9$q~$ciP54EKE*vTv($F)%Rb
+zIfZ)qxOn=x`7_ipGP3!G1i8AdWaJ3&c4vGGim=k+B6j_p%p`98!V)un{leTFVSWGd
+zR2hAr{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRmx>1p(%XikI1#
+zgEEAU8R#*)MKK>XntXSK=w<=dR)+6q-#lpRTK3*`=ZSts85fQNC(Iu>H!v#3Gqg<0
+z+x_P_15@IT8Sy8)BGNvvTz^n__)$a4=G#7p!_FR3dF<c(fvaHkpY8FH+A&~HRx_na
+zGL(Hh;8`G5#Haqv@aM{^WcGamyu573e45ykoE#5s>|UZ<aN|aps(Sq1Z)<b<z1*xk
+zb+mNi3J*(l?K&m?>wCVeE^kNS`fpd{C4A&17o21`!qCUyWW!sMz?9K);FVY0%#B4$
+zJlyq;Uzpl2xM<o8gH)G{tb0Knik5E=WHmWmU-09Dqp0d?2gj!92TG1Y0$#Ef`U_e_
+zN(|m`{bp=<`zMM|bL#K5CdEz_&8_@Z+;4eI9beph)Y8i^L-63;Wh^tei_8wM;oy$B
+z=_mD_H}`0A;Mv^$JYn8u{%r?39<r`#nY~1mJMz-C6Jk4fb0>E8wk`|^jBz^E(X^Da
+zo$H9k_Vsc79V?C>>F+g-QrpKSQ<0tha52jjyQ>c_9emg*C~`k*aX4@6-^k<t>n0l?
+zICyd6BgQMI8Kd@j%O6~;IBCsNu_ksO+q4AxRK^K$A%dSKbKQKHxJ}KcD~V~z>7X_Z
+z_N0c4dlUBhX5L-1W8>4WR}Q5-I=c8tNodHwrVl6T@|=W@)g0j|c&PMZ&jX{VYdR;p
+zPHl8_Yd<5PYog_Ksl#HjN>MA<G0o~dnvc9LroGg8b1+i!OZWQ2)6MkM+Y;jKRvRei
+z<XBHzaWXT@&!x#)^W;WD$4rZ+nusS$)~yluQMc33ED7Yut1<bXdi}d?UBuyat0$g&
+z;`kzdj_o~{`tK|97O(#Aa)14%;D7&)uY8lc%h2N0%0I7e9eQ@|MMn82zqyO${$IIu
+z=-I79FAj%(zICW?*SxJ>sjL1UF}u6&qVo2||2E03)6GHRyZv3KoAb#}p{4lw`?RM&
+zme<^~{ud@(TO0ZF1&`0&oz{)}wiTq!-gKPzGuw1in;?zTw|tkzmD%npXf?Ylan7CV
+z@7=|_f<G_65qbQUZ@lTRvnn#BUu%Da3cosZ`M2ilS$pSSdEap=P=DD*vuc|M{4ZA2
+zbB38UXYV<`DoHB)@jQj~x;h6}cV({Wb#k};7rK3An{R^uaqC+@Cp1{Q|4m=JO0QaG
+zR{tH#$9`K2pZ8eXwjY0VX5G%1Nj&F^F9!1SF$hdP5VG6%{)rf;g%P*dVzxHT%8Hwv
+TWGKlT8hv}#VV#7nDh)aS)+lwB
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/kind_4.btridx b/test/btrpkg/fixtures/crafted/kind_4.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..329ae08ba1946986237005f47b3cdb135c765792
+GIT binary patch
+literal 1477
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfiPQa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dRAeU#=gUiJCC3JX2!vgqr&*^K%0)*Zdak3ffFBOR!Eg=
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW5iR#@L8Pv$-UBArQX*ViuF
+zr|Fj2=Dw-v>96hUDw8LCzXdnhfPrBXCj$f2n+#LmZf{$%;rFgq>vWwdnMMhTPo6Kh
+zdZA2tzE2;wm)bJRKv(|rGnU#en#kU{TT6dJUtIIw7kdQW^kyvFHofY<kP3qV)MNuj
+zhN%e%bC<7TDEeVp{&P;asp}E>M{4#tr=J`On8L1n<-pp*oDwTFKKkx@rm~^vP<X@a
+z$8&7D*WS}JUV3NB&H|^&`kJ=|8#K1+|4n$#xR#B<gq<5?#S%t_`@Rg>w^g|q7#Q@N
+zLOp$4JpJ7K8R{4r*?dESTwPZ(as+t0v%CdGSZQ$)BfEZ1W)io4VTl>PeqnBou)cqJ
+zs*Ju*esZ>3YHCV?Hlu-letBwqPJVKBT54*FUU7a1gE}*#a$#;xN~XSo0`o-0%Z$uH
+z8A8V-zB4MXbv$U4yw>;GYlDl+9XiUw^&TlZG<Ps+{A8=+F<5X~oZ(<l{`CJG3IcrW
+z=aWx%yp{1O$dxnK;qy@0Eo+i<RVPQ%Ug}Qxoam$b?w*Qz#sv0WHB+i2L)pgzo&{1x
+zeCpo}f3B=bX5S~k%gc7mr-?nu$?@RE?j^bfH*SQfs>kpBwl=5V%gxGDM@uKJ@UT?Z
+zu2bT_zURy8@^%!i|8_-Q!be_m!AXWA41EkvHoPSXOc^Z)UU|jM+*q{4!(H$Ag{l35
+zi>A#mNOj4`x);=;X!-U)R+H291wTGGimI-5aBPZxpyVhd;3aFJzo12=#NZ9rZ^nkV
+zf1>y_r~YnhQtVXG+{$0Y{g%hn@x{$YEximg1P|U_#xjGu$n5YM4(^znep26gbB`tm
+zp3U9Q6XtE^-*%wmA?vD^*-J#ZBQIS$A-01zcVcI6>%xG*7^hPmO-ni3xsGUTUmw@s
+zvEulV{$A54wS8<d71`Mj7qeWkyZYeL!H124BKNZvhx5k%jXeIpZnE)#gBLeGV!U#i
+zF>0T;{K2(~lh!O1Yhw4YO-ry(Wt<QfBKT=C*Ug8C+thrzl9-m94r<e2Pin}xH({@D
+z=G`?rHa`7&<xt9_ql=%EgogZU`f#Ey&q?T5%@Ll0he|K@JTQv7rgO6E)J8|Q_A>&y
+zCR$#XIxHru6t!|4)2!a3`N->H+Dn}`2O}lFbgw@=-AqrtEg{}+wSjU@j`g$^Co{AB
+zT$-#kPi{1H%(Q5#iFmSP-5PNpbvq5sl0c5U8k7I2*T37=MI2tYdg8e!jxXZp*xqxg
+z|Gpw`@#_CB_t$R<{`c?r$~U>Y3@u)*{PXJ8p=ak_WR!pMo4Z)<|CL*Zp4~e1;&ABa
+zTZj5~&D-jgy6XQCv%BjqDsNx>Z<E|Q-5eyo+uwD%IiLI#T8f{)PkZ`fdCfiRe__J4
+zwUIwx@c7)_Y2CPQTS40FO~-jZvrRX(3DP)y%Xev9neDEER<pYj=iIse-d(&a`1A4`
+zk;iZO#+&{+t0GhSwf0A-@T)_Ye`~&;wRirN_Z_DK^_OiltG0Q-|6)ZwXP8-Y_MY>r
+zlBBX9&r?{ht8;L5SLT{tCwJR_q1#us`6l=ux4!jrLW8yY-}JSs^r~fM_2034?6<Y>
+zd5^Vi`|(F-*6oa$#B;v*Vjw>sgTUkiA-jF=pNMf<7;%d&W^2=|thm`phLX&o(YI$E
+L)=Ai^(x3wX_8(~W
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/large_off_overflow.btridx b/test/btrpkg/fixtures/crafted/large_off_overflow.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..206e27c0ec544de3c31d7c1141a6e0b436fe4244
+GIT binary patch
+literal 1497
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ea-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`r^`U<!XyLOANJix&K`@h@O7JX;Fl}cB0{~pL^t<3MiCo
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW4%U1Cb`g`l^uFP_W_d07)<
+z%^!TmUi;)E#ZSED2U6`y<KZS7FfeT5WMF`LlVR%H?QKgo{NB}Sovt$_(<mYF$@2wQ
+zFO(_I_vz#IQd?#j=*oY7#!}lw6WKd=Yw1tui);S-VvoR^-i(FYrdRzJQeiNFnry(x
+zFf{>T?($U(ML#Udf6fUvbv+{gNX<Uy^pisYQ`nWS99VmpQ(~pYN8eq~R5lbH3U8SG
+zc#ci?+IxD&OYcnCS>QBTU-PzLgT_|<zX{J7ec2g~uycc~Si;C~-<Ki#wkiVy!-xM2
+zTnr2hdQPF9J}#bqZvG5)jEro)AwjOLD;YTgyxke!GJxW(w77^}KPNMZTfeZxj9<Sn
+zH%D0CzdTh&-zPsg+buOUg&{$k(Lg`HJT*QiKRG)sH8n-AI6s6z9h69v3v+W)GEEf}
+zm<3m6F*65cYzo|N_-#YqmZ;WLwcQhSH&5u$W)0vdxPOMnZ$-wZdsDmr2sk)=(tDWP
+z(4ZCn;5Y+Q;%=Kdg9Zl)Jvsf5LuC>Ngkq*2Uv^ZHGj+QpZ}`>yu9iB7``KRU_PzLV
+zK-^>EPOz7&nNlSg%03?OERZVVQ~zf8b7fUB`#u3)UbbUCP3%cdjt4h(FVQWyaU)Ds
+zJ$~=EwK@G>ZdRT;S~_usho!o9of7}`JzrLrx1(_Vw=41zKJt<aPBI)}=wooQ;VnsE
+z%4j+8$}4W>#-b%2?s~^BOzjt3G;M}Ks!K-Jy`T<7%eM!znw+jL`0>F}RCTq3V^j14
+zB}X9vFIfxy1uY^a25-22Gd8^a6UC=F^><s7VyBAcR{kpPw>+kfFK#|+>1CK9c<}Br
+zmKoedW{1~saL3&Allsn^do(%lZ0>%ZFmE&ewgVjxSy#2pULwjJdFk2-u^qg*6FYlb
+z7X}2zIGyTfTFTkZbwp$P`ndj%6~~YC_nJnj?PHUv$j*ManB|Jy)d!ajK5P^exu3N-
+zoHzDw<njM?lZ_7?ytwfZ<CW8lQTx2*53W_5v}UPT6T6RXT7rEl<Ak^n!B3O9Zaz%h
+zrsmU?#I)peP@4vOQbWeQ3447r@2=Ug@#)tqhf*FLUHqgZG~{2?hZA*qPD00Oj_?#b
+zRC=-Jfl<^oos(UsHafbspApbC(ek>~VKG^ysFmxOX7wJ;M_w1xUh2F#7%BOsd;Q_*
+zW_s#v3GsHT4U}_otf#FwnVIG1(qyf9a-*SRrbSat#FHiK)`<J4+i7T)1ajonnEX$@
+z{@u1N;_$lF6VE+yd=Wp#_MS`q_Z4}ISO0gpzkXBjzkkP9zRBHXXz^<0pI5gIJv;Xz
+zqx_TK+{JSLuiQHH?AD<dheJQ#I@Gso-d3;FRsWBe-CcK4dHdpjo8;E%<{<Ii{;t!_
+z`Q)e2QvCdV+S4D)YwlV93lpxbjr{q7$LH=&>&AWC3esk8I?nr<ZMvyVkjCj-zDwiE
+zY<Cs3n%$K+=g#%_?&4j+pO@c=JbueJ-t^a56`9hnwLe0IUmd#qTl4j-z4NcU?>H5x
+zzigvfwao+m7c1&H!_1nq_ncpqB$fSmp2B)vor9~pGS~Dvx!e8=-M+HTH^Kk7^{t;1
+z8m!&_rmtP4S1mKE|BmHjzpaJOd#r8Sk3TxIZfDFSp7X^Q1Nr$F1STH{+3kD(M2yqI
+eh+AwiTbpKO#m!DKlw=N#zCG)(PQq4|1|0wtd~x6a
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/large_past_image.btridx b/test/btrpkg/fixtures/crafted/large_past_image.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c9bcb837399b70e5a513cf503d57749c991ab04
+GIT binary patch
+literal 1494
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?8a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`f3NgtV`RLefnHpuCOKVP?F@Aln+njR^63d8Fp8qzb>O(
+zOSv*5GivpLnj?!Pi^>`#GYbsPt>%7zJizI^h)Rz!#5VFt_o{-ALc%2iTb!+SFG-)^
+z__FI=pUtcrcA^t2CWm+Z*$+3_fPrBXCj$f2n+#LmZf{$%;rFgq>vWwdnMMhTPo6Kh
+zdZA2tzE2;wm)bJRKv(|rGnU#en#kU{TT6dJUtIIw7kdQW^kyvFHofY<kP3qV)MNuj
+zhN%e%bC<7TDEeVp{&P;asp}E>M{4#tr=J`On8L1n<-pp*oDwTFKKkx@rm~^vP<X@a
+z$8&7D*WS}JUV3NB&H|^&`kJ=|8#K1+|4n$#Xv)qog`FE@#S%t_`@Rg>w^bP!7(j8x
+z#lXOz=M?Jc<KpS(=3mFi$mSao<m$STkt4v{o$)OLDBenoi`eyZGLyLV3ro!S^$T-z
+zg!TQ)Q)Tph@{_aOQd3hH60{i&^z+M8<8$(pv(r*jQ}l}SLm1SVl?!uoQZh{y6qp59
+zW-&7dX-FEclU%cUO<3a0lX)qpbyOaCF^VwVF*j}&)|$1a{Hc;Xi@=0E-ajN17Mv3Q
+zVc6hsL$6<+M?s*i`#AU14YF(-Sgt?am|5uIbTilOaOl^5v6;<Ae||UmaJTgF*EEXE
+z<Och<nkiM1q3q)U&jP6;KJ{;gKUY>Iv+on&<z+kO)5M<S<alsn_Y&QL8#lsK)#LYm
+zTbtAG<!0rnqoos9cvz}y*D3K|-}7a4c{>W%f4d?t;Uh1(;3UHlhCT)-8{U!xri_*Y
+zue{=BZY)~j;jVZ5!qk4jMbl;&q`G8e-3#haw0wIYtI6s5f*&6oMO9ZjI5tH;P;wL!
+z@RGIAU(g~_V(^CRH)F%wKT&*|Q-8NLDR!!8Zso7ye#>L(_~PcHmR^P#f(P#|W0}ES
+zWOjHB2Y1X(KdJA$xkr-&&*tvu3G+7dZ#&TOkabnd>?NYyk(aKW5Zl3<JF&C3bzwkY
+zjMJ%(rlp+iTt_svuaE2RSaJMFf3Inj+CDa!itOx%i&?JNU43xr;KN2ik^5PT!+B%>
+zMjroPH`(~W!HXLoF<v>%7`4w^{@_~0No$shHL?5HrX|>?GERsK5&Sfn>*mA6ZE8MU
+zNlZ&l2eoOiCpBc;o3Ph6^X{4*8=ro?awz4|(Zx?nLPP#FeK=8<=OlEj<_J&0L!}pc
+z9vDSk(>d97YNMlD`xyaU6D_Yx9Tt;SidwmjX;$yieB^a8?WN9}gOQS7y4N3`Zl<T+
+zmJn~Z+CVuc$9md|lbKn5E=|^&CpQ{8W?D4WL_ArtZjHE)x}An*NgzjFjmiJi>)&nb
+zA`Y)xJ@MQV#~1N)Z11_$e_xTec=dmm`|CFa|ND1*<(u4Hh8C|@{&{ul(6e(dGRi;s
+z&0Q?_|H`dH&u$%haX9qztwVjg=56&#UG@Kn+1+&)mA5bcw@GfDZVnRP?e99>oKJoV
+zEyd5@r#=0#yyl+uzcAt2+Q^?Tczo{ev~JwDtsrgorsKSy*`}M?1ZkYU<-0Vl%yw5n
+ztJz(NbM9P!?=IdI{CW9}$m6$s<4u2^Rgo$ETKgkZ_|>7yzcpXa+B^Ts`;JqA`pY(&
+zRogt^f3c#TGt8_xd(Zh*NmAL5=P9h$)j7DjD|1b+le_J|(CsVRd=vbSTi^OQp~2ey
+zZ~EF*det(s`tMji_S;(cyvN$M{rICZ>vqOW;yGV@F_52+L16NMklnubPsBJajJU-X
+bv$bhfR^03)LrLb)=-aan>m+PdY0v=x2B&ao
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/large_size0.btridx b/test/btrpkg/fixtures/crafted/large_size0.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..56620e09d6d4c13113307e562442bb4fa37cf2d3
+GIT binary patch
+literal 1476
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfiPMa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`aJOovWLu${oi@BC;EAcwUg@_hw6755-ppwUQLK!_vLE2
+zmU3lAX4L8fHAfap7L_$fW)>KnTh0Ccc!1M+5tSZeh;8JPQ*5<D4+e!a99aJ>)}>GC
+zb)Z73VSRa9@zpqf<@jHFGT|m0FfeT5WMF`LlVR%H?QKgo{NB}Sovt$_(<mYF$@2wQ
+zFO(_I_vz#IQd?#j=*oY7#!}lw6WKd=Yw1tui);S-VvoR^-i(FYrdRzJQeiNFnry(x
+zFf{>T?($U(ML#Udf6fUvbv+{gNX<Uy^pisYQ`nWS99VmpQ(~pYN8eq~R5lbH3U8SG
+zc#ci?+IxD&OYcnCS>QBTU-PzLgT_|<zX{J7m$EU4uycc~Si;C~-<Khqfs28GLC-1F
+z)5pcr&&{8qj**egHzdf_btNN5fVVs2TTpzJ78kMW=VT^v>lc=o@#`1n<_PQim#50;
+z`{XBQyQQY4FeGR*8tCVjr^e^xCugUnrl#l>=ZB~>Gb$J6=A>jAC>Stvw)jXh2W1Ey
+zlc+p4G0c0znH2M^qdG2*iU(?qrDcLHe%Y%j{!`Jxv4vq?4YM5+2gfH?rv%O0PwiMZ
+zrW`){xOGiSDw}^ntem+HpNGcovl%y5MgB0VGx-qqYl{p!*mu=Tsgew39}jpINEPv^
+ze>42KvMQN<p8zi}+cBRe_9Q3AgB!b-=oZ|#5vHmhzxUhPoPIAiD^DFQow&loQeC@F
+ziU0bZFRRPjQMmrw6?q9CdC3JQ8ICaYF*w=qmLxD`v>bTl6*qHZ(Gm}Lz2g_A_6shW
+zHp3v*B_r!zP=})B+XGomPS+Rw_~0n2y4u09Df)quqmY1?tcCu97LgKzH(b9N8{Ynj
+z;?tb^yRAvFQ$=$te--yz9#h8`Hy^e1GRzP>cy}4g4DKSc!)rLWV{ZCMedo<RnjCmG
+zcRx><x0!$2fsTi)t6F9+5#^4&bnS%L4&K~}oxQCK0|H~5PIWXb<!t9VqOpB_Tz|)k
+z<45{?O{3KIvB^|qXFpuba>efIgG&b=HVTT|&srSL8~Zo%`2V`e#s>~w-1vy`%4x=^
+zectj1*D6k0vsA2!-N!a9!9JC7LR^U8r^#G5A0}>7^XW=rT5>w5O@lqDA>-bJy}p@u
+z*X-E%^y`&FDUXgWeo_(|@~`Q`iMl)|p<^{icnTgWz1Z`>DC(Nd$*xly9o^c`2<Vz<
+zd0pzTn5<IN%5_Y$dXMHKuZw9fb>19|l>E}Y{_u1&J@vMPc)QgG$~igK(^j0!%<^+-
+zverDg(a<r|qNyh0$&z(z#C_E5G&D;BIr3^u{-<95Zd(^|c-`uW=bkveh@WG7&!ztR
+zioC_E|GV5@zbW|NzvC<4<nA)Gc(wA+t6PVjoqLf{{>g9dV!8iUZXJ4d>(GnCp`ULZ
+z>f1GMt5@o(|3}R3uDhtbeeu6da_e++koazY*Xibb@>6Ije*Qk~>5t_#_pJYg3D?#}
+z{(QmXb9bk8<GyVLX|p#S=l#q!-P9&X<Mb`xrEz7py9!#(?n<0<=lXkh@vh*{%Wp&;
+zzvUZm`s=KUOzGF!AECmp4qg7O`Fhsg`B&a|oC?%mw$ZHG<^lhU74@89X3g1q&aX<6
+z%6>dgVZE--!PQ-vYkHmBZU2RCU)koH;D6lu*3StI*6x4P*RIm5mYLOm$MUh?*23pK
+z*0$}(ADvmZGiDOc`QnR#{Co@olMjUK_Pu{1#%W>1Ew-4gO|!D%W+xd+GKWUro^@C!
+JVXI1m4gi{!XqW&1
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/large_size_huge.btridx b/test/btrpkg/fixtures/crafted/large_size_huge.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..886bc50be32c968f6c4b453104c66b1f1038f938
+GIT binary patch
+literal 1486
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD;a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dhzKR)|$@$Z|20rw)|mCDtIu*df!2Xmv57zZylbM*dSA`
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKCSiAl;M`{ehTITIhfw_oZ~
+z+r#(${FGfHFSc9c9tpm(dMDgu0|tgooD2+5Z!%1MyS;76hTpqdt<!a;WEv$TK6$?2
+z>V-1p`96KzUTVuM16}#g&sb`^Xd-*(ZY})@eR0iyU+fWh)0?qy+w`jcLMjXfP?HT9
+z8Kx#6%w4{Uq3DNY`Oi7wrmjciAF0{roPKgBU<$kPl>=)Jb4sk#_~^UqnaYNuL*Wgx
+zAJ4JrUVBf^c<G%fI}4m9>ucT?Y|z-M|2N?|<5xBY6LxNp6-yWy?)x%i|L0<0V9;|4
+z_4IM^^mFrPsAFXF4GD5}UCGE1;O)-%78G5j#YOD;Ihje^`h_KC{Q8BtIl}t><*73I
+zKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_Dp4C>5`%7wW(DVZh;49tQ`m)V$u
+zGK7vfrREndxf-Nne6u&okUKDdBjNrTp1zeCzv8BL|B+~LJi;)ihS`oyBH$Bi+kv2M
+zr)xP3F0^-lZMA7BW%DVJl`Gff^U&D6)+FaDPwwMWJLa>+O%y$N;^et!Nkxoce^xW4
+zN-~svJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7TX5q>n5ugG-fwGj`n}w&
+zJax2m;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!;AF#FlE9SFa^RI$+{}$d
+zOFZ25j$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYGY6r)r=m$!ULIPg07WxZX
+zL`n?aaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*FhlU*-DNB@xQomVui@a1
+zx#=hMoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1HcylLq_O>nz2#j$$)zP$+
+zvz_aR#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>C@6A2YjHSl?BB@a|LZ0j
+zA2@h%<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`ACUf0<n7B>Nrz?qR$?2dr
+z4fdpljC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~j@2CDDR`*#V$TDksB1bW
+zyH0I%bZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ@=N#n!_&?5)Y}r`?N%Eo
+z=j2#VTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$$g45=pL+efZC%9Sb*m?y
+zd*b*aeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAwZXJ4d?nOrVC%?Ii<^Er}
+zb?DixLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx;=BD_r<?Q1Pobsw`TMk|
+zKbF_rv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-)3<z=#+BLbDrhykD{;=9
+z>+jvgyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}UwPkgDo}sfMzd<02mCKq
+z)N_WJHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;|8eVEKPNO;yZ=pJyGpNG
+zW>)_l%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o_x_0(r-c!>*kZOe&B}_K
+Uon$D<92$Ll)?uB5ttt&V080dMnE(I)
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/large_unaligned.btridx b/test/btrpkg/fixtures/crafted/large_unaligned.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..188edb7ea341121a15eefea1de9e8e502486e3e6
+GIT binary patch
+literal 1489
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD^a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dXr-3Q<d)~Yec{BJa#C7J+Pw4WxCDJpZ#i=<HF89m={{E
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKD7Gso@oj<q_8nQhqn+hX|~
+z{?Ki+KTi7AaA2YO3(k@tvmUs~1`G_FI2jnA-ej2ic6-~B4ZnA_TBqww$uvqxeDZw3
+z)eB|H^L_fbz0{Uj2D<W}pRv?-(M0yn-CFt+`r?}ZzStx1rZ;2Zw&_*>g;W>}pe7qI
+zGE7ZCn7e!xL(vb*@}G0UO<j-3KT@;LIsN2Nz!Y}nD+ksd=9E~e@zHnJGnEZRhr%0X
+zKb~XLz4o4-@zOg}b{05I*4Ml(*r2gh|8K%`MqYM?7Itos6-yWy?)x%i-&SP+#~~L3
+z1B0GZsHcyMr=OdD9U}uHn{P;vtLsWejsS0W#<!qoD=jW!*U!mJ;?^%LG2_=S%*_$j
+z_b*SC(f7$u&UQ;pO<_pTW;D>xFHeon$xqHsOHEDDE6xvLP-j*y%*{#3G*(bx7F4{<
+z#vG)<xp^Jy8tXM-i8D{;UFnMKXmV=!ot9SM<U0BLx|k!!8CV6GW_;rP!C|0qLY$*<
+zY3}sj5(x|V#b1kW61pZi<H0SPcTqAEGRkKEP4MK_*v$L)>un?50_A%jB7;)&z+SCp
+zN|j_N`*^^!K&psO{hQ&>l~u{?`viD-*^c=%u_rk>9^BZyM7Q9^jWAX9_`ToO=Jb2H
+zS$XPc>BJQtmg?GdO8nRNd|6%Ij>7fduE<OH$V)Cb$#8_BkHN`?w<LinqvgOWueg~T
+zi<Wq}>m9!^wO?@2v>67eE*V+(f;to}-yX<na=O0Y#|KAI)zuD;P0<gO9EAkDWG(a;
+zw1|`#yy5!I*zopG6rbkQ-)&8bohq7J`K!3!@|ZflxcR81mtltB!Mn>?W^fmo9bUu1
+z9dpx9>N{`l(d59hx%+v-yv_XE4s<+ZUDYysi70pErE4d|cJSs-?Cfn_7!VlabgH9i
+zDQ7#^5smHZ<N7;R96!?EYZ|4tk4>f`JNw~cmMeBwA6z>4uu)Lte%9h}-q^p9$N$$&
+zHa>9h;>JgeS57lV?emsDxK?q}nx$e*>^`<>3HGUs6XHSyKTYPk`7m*tnom~}(~{Fc
+zZ5r%J4H@?)?DfsOyJpA6r(dreN_lj2@spC!kbg}dPSoW&2_36B!c*{2>BXK0Mp4&v
+zPIjHz=;+pdMnKm@%j;5y#blMDR<2{3)q6A_d0k9<sq^Mwq~w?G^@pdM>8ZCR#M`Yl
+zP|nG*p0?s-W|p5zleOl_jfRey7ELt~PnN7(BkrSar=eLA$dOlL@;~+ZciXy%!|PU0
+zJom)$Mf@DwdoK0gSL7{T{om#O`c1+A{vBWWCU=*i#jBNnUfnwM?A(it@=tzq7t8&>
+za_i8uTZdj84*h)VP~Wb3TfI_O{Xb%Mcilzh?Ti0yl3S;ngT#0HyG}Rflb=FM@$>g-
+zPk$`0xo7<^Ot`i-^5+X4pSwG)8~1H1NSnRsIPYh+>83V88mDjhE{!X*-Br+Pc30w@
+zJJ;X4i+2ToUVbC;_$}Xf(_d#*WJ<r*{s<L*b?EYM&DXQ`&cE`$<5ZyjvW;fdHV^n;
+ztf=P<Gi%P?bADBlRQBU}3hQ-s4zBLXT+{31Zu>8E`^q-o1pnjKw|-7&uy+5OzIK&f
+zwal#kJC=|AwiZ6`v9@hL{^-oQoiUSm&KF+{<mY1$n0z2)x9|NEF-{93Zn4E|ZJL!8
+VH#^Btk~uW`_N>D?30qYfbO7Wcaku~g
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_2e2e.btridx b/test/btrpkg/fixtures/crafted/path_2e2e.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4c923cc59704773e5fda453d8ea9e07155a8af6
+GIT binary patch
+literal 1494
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?8a-TsZ%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`r7afzlxrIRV$f$KWJA;^RKz4kIr_con$;_`uFIU^j}ZQ
+zwUjF}GNV=>s5!D&vZ$;<GPA(o+-mOk#{-<si>UM%Lu@0T++O!gBjdVh{O5QE>9snO
+zPDD55{P^?e?5F4JLsxNU$_2trHeg`b#L2(_^(MpAx7*v6Z1}ya)jC~gN~Tdl;*;kK
+zu3jipp6}Dg?WMNNGSHR({EVfxizc#n?$*+u&==SI_r)H8H@z7Pw@t75FQmd?05#cw
+zkzr~A!rbMn7>a&amj9d+Zt8kO{*jt}&gmzI0;aGlUpcV$FsH;yjgP*&o~djoIuzb8
+z`|%u`?zQ*yjF;Y-va`TxvcBeR!3K@3`hOFiF`BY7Tw&)1S+RtX;l3|J_H9)z1_lN_
+zr%+EH7f(Moe}+0nMmFD&AXnFwj2r>p?u>7l^w=2~7)pza^m8(kxb+K5%=q;Sb903C
+z{mWBj^nLP^v)xitQy3Do84dLF%TwcX@{_aEQd3j(it|Gl)R`HT3v+W)GK)ZVg0P_i
+z1M@`1$?PgB58g1ZQ|K#{6u2bCaXP0=IXW#<@H*p!>l<fSi;CP|T_h+F;qqR{jwL}r
+zfnnS1-vSK|H{Q)zw*M>B+;#m8*3oJ^%=)dx+Evtc+nVHD)ya{xm)a4&B>L(8yQgkF
+zVFLTNnkiM1q3q)U&jP6;KJ{;gKUY>Iv+on&<z+kO)5M<S<alsn_Y&QL8#lsK)#LYm
+zTbtAG<!0rnqoos9cvz}y*D3K|-}7a4c{>W%f4d?t;Uh1(;3UHlhCT)-8{U!xri_*Y
+zue{=BZY)~j;jVZ5!qk4jMbl;&q`G8e-3#haw0wIYtI6s5f*&6oMO9ZjI5tH;P;wL!
+z@RGIAU(g~_V(^CRH)F%wKT&*|Q-8NLDR!!8Zso7ye#>L(_~PcHmR^P#f(P#|W0}ES
+zWOjHB2Y1X(KdJA$xkr-&&*tvu3G+7dZ#&TOkabnd>?NYyk(aKW5Zl3<JF&C3bzwkY
+zjMJ%(rlp+iTt_svuaE2RSaJMFf3Inj+CDa!itOx%i&?JNU43xr;KN2ik^5PT!+B%>
+zMjroPH`(~W!HXLoF<v>%7`4w^{@_~0No$shHL?5HrX|>?GERsK5&Sfn>*mA6ZE8MU
+zNlZ&l2eoOiCpBc;o3Ph6^X{4*8=ro?awz4|(Zx?nLPP#FeK=8<=OlEj<_J&0L!}pc
+z9vDSk(>d97YNMlD`xyaU6D_Yx9Tt;SidwmjX;$yieB^a8?WN9}gOQS7y4N3`Zl<T+
+zmJn~Z+CVuc$9md|lbKn5E=|^&CpQ{8W?D4WL_ArtZjHE)x}An*NgzjFjmiJi>)&nb
+zA`Y)xJ@MQV#~1N)Z11_$e_xTec=dmm`|CFa|ND1*<(u4Hh8C|@{&{ul(6e(dGRi;s
+z&0Q?_|H`dH&u$%haX9qztwVjg=56&#UG@Kn+1+&)mA5bcw@GfDZVnRP?e99>oKJoV
+zEyd5@r#=0#yyl+uzcAt2+Q^?Tczo{ev~JwDtsrgorsKSy*`}M?1ZkYU<-0Vl%yw5n
+ztJz(NbM9P!?=IdI{CW9}$m6$s<4u2^Rgo$ETKgkZ_|>7yzcpXa+B^Ts`;JqA`pY(&
+zRogt^f3c#TGt8_xd(Zh*NmAL5=P9h$)j7DjD|1b+le_J|(CsVRd=vbSTi^OQp~2ey
+zZ~EF*det(s`tMji_S;(cyvN$M{rICZ>vqOW;yGV@F_52+L16NMklnubPsBJajJU-X
+bv$bhfR^03)LrLb)=-aan>m+PdY0v=xM(}i$
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_2e2f78.btridx b/test/btrpkg/fixtures/crafted/path_2e2f78.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd5d4ac411404ee9aa591338f234b2996a294678
+GIT binary patch
+literal 1495
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ca-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dg~cUv41mXP3dv4)L+zP=d}9I#x-V4k?*A5eX)O>8D>_l
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKA+AHyk=#={3HUPl&NtEh9&
+zeZf23X7Y`$>NVe0fBL%l+QUsYU|`t9$-n^hCd1UX+uN3G_`R#uI$dW<rcpxTljjSr
+zUMN$Z@6*TarMAp6(3SuEjHR}VCbD<#*3zHQ7uWpv#U6n-y%`I)O|SYdq{3hTHQ9iX
+zVQK=x+~unnihfv@|C|$U>Uu=}k(zzZ=_iK*rm!ntIk5IHr^HH)kG{K}sca}Z6y7lV
+z@f@4(wfFRlm)@DOv%qPxzUFPg292%ye-oZF+Ojh|Vdn-}v4oM~zAr=eZB;G?1_nK+
+zP){EhPd_(*hB`(@Hs6pSSJ#z{90A_$jBlCsE7%zr7)pza^m8(kxb+K5%=q;Sb903C
+z{mWBj^nLP^v)xitQy3Do84dLF%TwcX@{_aEQd3j(it|Gl)R`HT3v+W)GK)Z#g0PVS
+z1M@`1$?Pg31$zsbn;DhYHf}hRX1?jD&e8=E3u=w5cLZE~Vyh+o(~zOLgVE<FTOEhN
+zg45y*jZ1T<|CeB3?tk8DlbFs}zRjl~SFT)#&(o)@I^)Kw$Qwp=CI#y~wx6osJ$36z
+zR<MVwnNlSg%03?OERZVVQ~zf8b7fUB`#u3)UbbUCP3%cdjt4h(FVQWyaU)DsJ$~=E
+zwK@G>ZdRT;S~_usho!o9of7}`JzrLrx1(_Vw=41zKJt<aPBI)}=wooQ;VnsE%4j+8
+z$}4W>#-b%2?s~^BOzjt3G;M}Ks!K-Jy`T<7%eM!znw+jL`0>F}RCTq3V^j14B}X9v
+zFIfxy1uY^a25-22Gd8^a6UC=F^><s7VyBAcR{kpPw>+kfFK#|+>1CK9c<}BrmKoed
+zW{1~saL3&Allsn^do(%lZ0>%ZFmE&ewgVjxSy#2pULwjJdFk2-u^qg*6FYlb7X}2z
+zIGyTfTFTkZbwp$P`ndj%6~~YC_nJnj?PHUv$j*ManB|Jy)d!ajK5P^exu3N-oHzDw
+z<njM?lZ_7?ytwfZ<CW8lQTx2*53W_5v}UPT6T6RXT7rEl<Ak^n!B3O9Zaz%hrsmU?
+z#I)peP@4vOQbWeQ3447r@2=Ug@#)tqhf*FLUHqgZG~{2?hZA*qPD00Oj_?#bRC=-J
+zfl<^oos(UsHafbspApbC(ek>~VKG^ysFmxOX7wJ;M_w1xUh2F#7%BOsd;Q_*W_s#v
+z3GsHT4U}_otf#FwnVIG1(qyf9a-*SRrbSat#FHiK)`<J4+i7T)1ajonnEX$@{@u1N
+z;_$lF6VE+yd=Wp#_MS`q_Z4}ISO0gpzkXBjzkkP9zRBHXXz^<0pI5gIJv;Xzqx_TK
+z+{JSLuiQHH?AD<dheJQ#I@Gso-d3;FRsWBe-CcK4dHdpjo8;E%<{<Ii{;t!_`Q)e2
+zQvCdV+S4D)YwlV93lpxbjr{q7$LH=&>&AWC3esk8I?nr<ZMvyVkjCj-zDwiEY<Cs3
+zn%$K+=g#%_?&4j+pO@c=JbueJ-t^a56`9hnwLe0IUmd#qTl4j-z4NcU?>H5xzigvf
+zwao+m7c1&H!_1nq_ncpqB$fSmp2B)vor9~pGS~Dvx!e8=-M+HTH^Kk7^{t;18m!&_
+zrmtP4S1mKE|BmHjzpaJOd#r8Sk3TxIZfDFSp7X^Q1Nr$F1STH{+3kD(M2yqIh+Awi
+aTbpKO#m!DKlw=N#zCG)(PQq4|1|0x7!EO5h
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_2f6574632f706173737764.btridx b/test/btrpkg/fixtures/crafted/path_2f6574632f706173737764.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9aa950eeed8d37db98733b37674bb6e6eee3f554
+GIT binary patch
+literal 1501
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Fa^FKG%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`X%4%FLmgoUpMc|Klba8NrzOeQbX{xh5jLe7c*Ch`#G0u
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW6dUM*^0;-bpYV)IeDy31Q-
+z?NjM<1?DqCnci6K{d4tZCfsBL28K<X3=B|jGE9BDy=}>c-@96^({-j~8YLt?dA{K4
+zg)-&&K7HI?YRfDGUHQ+?SZcdyB75g<E&U07am{~U>=Ag=o3U`)^s4_tDhvitlMNUd
+zrY0cFUA~H;=!a$b&pF|yu1Dk_soCe8esU;a3cK=^18Wa+O03lQ=)3Eg%7&st;SIAN
+z&#~!Vdr!}J>76M%3!EnFYu*-Y(AcW~H{m^FE<3{%4sMVYOBfmM`!ZzTR^?(~V9;|4
+z_4IM^^mFrPsAFVg^9>1dbzRBG5#a64_!gvEKeZ%TzaX)=xIBfOfq|j4xJW-IGl^Tj
+zu*8gCzc4pPSl_=qRYu<@KRMeiHI*Sjo6$f&zdSWQCqFqmEj2YouQ)%1L7kaVxiB{;
+zC9?=*KM3n92rvsO-eyzLdXV*)`8=cX+Q!70C-X#FBR}o%Ph(piVsf#9%Y9$(0|h2#
+zCZ-c*rFJY50zaD$2yL@o{*rNzLdYVc_3CTcc1v$#KQiZI+7-R4x@V03nQ*Lc$ea5A
+zn|5|9H`v?NOsSF#WgicC7DyHGsed#4xw0ymeV+g?FWWJnCiWyJ$AcTYm*^JUxDlqR
+z9>4e7+MIqbH!DvaEuFZ+!%|(lPKp2eo-eD*+flgw+ZA~UA9=|ICmD_~^f5Tu@RlSn
+zWwac4<rOz`W6=^1cfI2mruGXinl{5A)g>eAUQmak<=X>UO-|Pr{P^G~s=C_2u_^k2
+zlB1A-m#l^Uf)<eygEw5i85`dIiQ?0o`n#=3u~S8JD}NRDTOL!#7dIcZ^fJs4Ja~5*
+z%M9)!v%_mRxMObmNqy(dJ(?VNHg`Wyn75gK+kuXUtgBjPFA?RAymak^*bd&@iJiTz
+z3j+dUoKAH#E#++II-;?CeO!OXisMK6drhO%_OZ!SWM@BI%yPx<>Vr!MA2te#+|ODZ
+z&KvtT^7#L{$;Jl`UflSI@ycn&sD0k@2iGc2TC-HFiQUIGEx|sOaY9^(;HSx4Hy<W$
+zQ}gLcVp?)Ks7-@CsUhRuguT9*ch~IL`1I?QLn)7rE`CxH8uG8{!-={)C!u3CM|cVz
+zD!thAz$ogP&dIJ*8y(%+&j{$6Xn9@gu$Zh;)XH^CvwDx_Bd?2TFLmA=jFkM+z5eiY
+zGd=aTgm}Bv2Ff`(*3(v;%*^t0X|mQlxzW%u)1s*+;>nVAYs7uj?KCt?0y*+(O#Y`{
+z|883sad_S8iRYd;zKEY=d(Wl*`-;59tN**)U%x5%-@oH4-{kHxw0O1h&#PO9o}GJ<
+zQU1wq?qa$BS8g48cI(iK!=ayV9qQXPZ>v}8s{cpK?ykG2ynXS%O>*mWbCCFMf7j{e
+zeDYIhDSrMw?dgx@HTSIlg$dWzM*e)k<8ybXb>qHm1!=Q49q0YbHr>=FNaOS^-=%S7
+zwz~>i&F)H^bLaYdck!;^&&zK_9>3)qZ~E)3icIO(+8?39uMS=Qt@(P^-uYMFcbp2;
+zU$)V#+U5cOixu^pVP?(Qd(N*)lFEKOPhq{T&cW4PnQMBT+-?7bZeQ8vo8W)k`qs}0
+z4c6{|)7P%jtCpG7f5-B%-`2wCJ=V7E#~+<pw=-rE&-vnuf&6?70+SDf?DoBXBF1T9
+e#4Wa%txdDC;$|lqN-~E=-=1|?Ct<5fgAM@N=x<g4
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_612f.btridx b/test/btrpkg/fixtures/crafted/path_612f.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..dbadafb4ba15012e952bba8bc9edaa024f878c3c
+GIT binary patch
+literal 1496
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Aa-TsZ%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`jp<or^NepMVsR@J=&C+Pdf*GKXpgi`}4u~-#>Cswumj)
+zQm)L%j9Pu5=E!2nqOu0b%mRaRtGVAF4{$m!qS9jwv5kB(Wuh+6vlAPaM&1`@iA^}M
+z`dsy={l`;Gg>?k)$!e@^(Sn<7z`(GHlYs&1O@^s&x3?|X@OxLQb-K=!OrwOvC(jpL
+zy-=n+-=~k;OKq8Dpez6R8B1*!O=R!ft))MqFRuCTi#-BwdNUSon_l%_NQJ=wYO(<%
+z!_)+Xxyx5E6#cL)|2Zez)b)t`BQ^V+(@zcsOkr2Pa$xOYPKlKoAANT{Q`t~-D7<0z
+z<2g3nYwzh9FTFEmXMxjXea+i~4H{eZ|0X<RbY*7{;ot^Yv4oM~zAr=eZB;G?1_nK+
+zP){EhPd_(*hB`(@Hs6pSSJ#z{90A_$jBi0cOVnp)U|=XMF4E7*OybrrEHUHPFU-vm
+z*7q+@mC^UfPtJBrO-*4)&}KBy&o57n&&f~DPD@Qq(JRgmVNhpgR4&ZTNy#h%*$cu3
+z3JlB>6(_T+s62SXyiTF7P*UKM6vyeDGUe#BOu_4n6RvNZVJ#|he|3?dK!nSCAv=}?
+z0R@I_vwsUTINW$QXW9O*OjV1lnALWe^;?UztEla^HOaZElOt&_wIh5<^wa%!Pu+UL
+z1om+?Q>r9G*~bH(1yV(P>fa21uB=LC-zUJ!%XZACi9N~5@!-bpCAtMSZiK0-$M5~N
+zHmBdq&B{|pODC@IuvFKsQ{unA=gaEyb`-Avc12#oM_zKlNroc~eGE=Eyd?=t87&81
+zdBx4#ShU2$UGMmXsr`bBrp+)&b;-!O7u2C>`Sw6olhgGDKR!5$s;+i$Y>IxM<R~QI
+zC2OI-phcv_;0@Pr#)h|lqWCnY{%&hh>{QX*%3sC(mdDib#mz@8y$mx158hqIGK0Iw
+z?C=^6?wFf?Qr~%Vk0uA6&E3xv=56NRcA(=S>#CO7OGLRNFI_t!wu3i!VrOsb!hpaS
+zr&AqGOF7%Qj%aLOAJ^Zp;`ovNUehSGeQYun+1U>lvs|&e`ry*RhmC?F_p=s<^Tz&-
+zJpR9Kvhjg~7dJj)ymFc`YM;0K!L^E$)+`lkV)wC4OR!I6oDdfx_-QiN&4-EG)O@;<
+zn3kLlYSUm(YRI@ZVXtrI-8DNlKK**-P|BmDi=UK)hWu;#aH1~HN$6P35uSpFN-y?2
+zFp9dSbF%ByMn|{yGXlCMT3(krEGDZIwQ?QPtlp#f$m?R-OPx0dBPG9duRlE9Oi#Tn
+zA>MAafpSic^|TcyGqe0$nyfWXZZvevv}me{c(P>O8gU<WI}Oc}K#sf`lmDsLzuVSD
+z9A3A2;<+b|FXHFe-gBw{z9Mh&>i;hH*KZ2`_wV@1H@UkEEncns^Xk^2XXjpIlz;M@
+zyIAi3m0O3N-8%H*aOme-hx&HS+v=6N>i-e5yX!70Z(saxliWJp93;Nm-*vh<pZpYB
+zil4tvd-`K}%{}XXVZybwkw0JX_}txT-MDXCLE7w1$9X@qO*gd((l~v~cWGRi?XH4W
+zv%3=K+`0bVUA!y!^YR;!$8Y(@oBlehB2)Uc_D87jt3#K6YrdYfcm9?49j5~Imu)nw
+zwt2w+Vnsb?m|1i7p7X1cq_Q8+Q&_L7b8vN6=9*q7ciVrV+gG;vCiow>zV&lLgSGqL
+z^tG$>s%2*N-?4n`x3%zjkF{<4@keLY?TnekbH4auAU_|2z~loVyM6DUh;dpNaf>Zx
+aYtyW(xY<dDlFXsew`U#JN!Y5=paTGuRcti?
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_612f2e.btridx b/test/btrpkg/fixtures/crafted/path_612f2e.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..113334ab793a2ba7e48c4402a2e348b26c528924
+GIT binary patch
+literal 1497
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ea-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dgJiI$@8CAoDmSaRLgTLqxb_$p4#-I-k&soe`k;=zUE%8
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKD7!C8h2BukYmGv{a(+J9Qv
+zQBe6?sbm7DY5x_D*Bv=e_rpy#U|`t9$-n^hCd1UX+uN3G_`R#uI$dW<rcpxTljjSr
+zUMN$Z@6*TarMAp6(3SuEjHR}VCbD<#*3zHQ7uWpv#U6n-y%`I)O|SYdq{3hTHQ9iX
+zVQK=x+~unnihfv@|C|$U>Uu=}k(zzZ=_iK*rm!ntIk5IHr^HH)kG{K}sca}Z6y7lV
+z@f@4(wfFRlm)@DOv%qPxzUFPg292%ye-oZF`m!^qaBzdHSi;C~-<Ki#wkj6`1B0GZ
+zsHcyMr=OcYLmeX{n{P;vtLsWejsS0W#<!pdOVrn6XJB9`EiTf}$xPzbFDx<R*DuV?
+z5!UxFPnFU4$xqI9OHEB-NYG|9(9bVVjnBzX&Q42BP0=gP4`EPeW>hZB%}L2D0$B{g
+zh6)VK6BQ@3tB4frEo5$HR9@S-;Y^zOrlUGb7f39qHL~6jaPf()miSLYhUN}NpPy`X
+z90m(ci!(GX&7J;Vf`PgJd8<uJDVtA0u3WhepQle*b;gZVkvEL$ObXU}Y(G`Md+OGc
+ztY9x!Go?y0lzlwlSs+!!r~b|G=gO*N_I(1pyllsOn%I+^91m{nUZPuY<3^aOdi>sR
+zYjgU&+^jrxv~=PM4@-6JIwk(=d%mnLZ%5(!Z&&0ceB>n;oMbq{(8u6p!&{QTl+kkF
+zl~>%%jYUg5-1UxMnA$J6Xxa>eRF{mbdqEwFmTwPaH91{h@Z*D{sOoA5$EN59N{&JT
+zUa}VY3tB`<4Bl}4W^8!-CyGyV>hHED#ZDE?t^8HoZ+T1|U)+4u(#tSI@ZjBLEHk)^
+z%nq;N;EuWJC-t2-_h@q9+1&j+Vcur`Z3j9YvaV{Gy+o8d^3t^vVmo+qCwBI>E({2a
+zaXQt}w3M@*>xjno^>O_jD~=!O?=_85+s7tTk)8c;G0PRZs}C+6eAp-`azATvIB)FV
+z$m9R(CL13(cyZ$+#w({8qxN~rA6%<AY0XlxCUzg&v;_N9#tCsDf}bXH-F%q1P0gn(
+ziD}8{pf(Nmq=t-p6ZZOM-d(d}<I}HK4y8Ogy7);+Xvn{&4=3vKoP>_m9N{T=sPtmb
+z1EZ*GIw!kMZFF>NKO>-PqUCj|!(y^ZQ7hLm&FVdxkGw9Xz0`SgFjDeM_xi)r&GgjU
+z65{Pv8z|@GSWjDVGBeB1rO8_J<VHisOpB(Ph$l<dtr7Q8x6{xp3FOGDG5Mc*{kv^l
+z#Nl<TC!Txa_#%Fe?LC+J?<?{aum10HfBmN5fB%lJe3QG&(Bjp~Kd){bdUozbM)@bd
+zxr^ogU%7SY*{wq_4u^ieb*OLGysciTtNtG`ySwh9^7h65Hp#8i%|YV3{avS<^T|)4
+zrTF>#w5LCo*W9!I7baX=8~O7EkI&tm){XnN6{OAHbe#7y+jLW#AdS<ve3!<R+3qT6
+zHM=Wu&YkP;-Nn0tKQF%#dHj}dyy>sADl(;CYk!0azdCgJx900vd*@$y-*GBXf7wQ}
+zYMTfAFILoZhM6^I?>WCJNh<sCJcaeTItN#GWv=OUa<}~#x_xDvZ-W1E>svo3G+4X;
+zO<%i8uUckS{~gQ6ep?Hl_gLGuAAfXa-OiXvJm-rq2J-VU2uwZ@vfKCmi5RDa5x3Z4
+awl>YmikqEeD9IceeS6knorJ9_4LSfG25mS1
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_612f2e2e2f2e2e2f78.btridx b/test/btrpkg/fixtures/crafted/path_612f2e2e2f2e2e2f78.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af02455ab718fc5e2b66134f73fe2fdc34919784
+GIT binary patch
+literal 1501
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Fa^FHF%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`WspGaW^N_*KQA;_`T^0v+6B=1|gq^$<2}->}QvVH8q!O
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW6N_k!@ItPctG+8tB&?I@86
+z5uWt>v2*)1_u~&=c4>I-D2AJCz`(GHlYs&1O@^s&x3?|X@OxLQb-K=!OrwOvC(jpL
+zy-=n+-=~k;OKq8Dpez6R8B1*!O=R!ft))MqFRuCTi#-BwdNUSon_l%_NQJ=wYO(<%
+z!_)+Xxyx5E6#cL)|2Zez)b)t`BQ^V+(@zcsOkr2Pa$xOYPKlKoAANT{Q`t~-D7<0z
+z<2g3nYwzh9FTFEmXMxjXea+i~4H{eZ|0cX;%w=bA;ot^Yv4oM~zAr=eZB;G?1_nK+
+zP){EhPd_(*hB`(@Hs6pSSJ#z{90A_$jBhy^7#I@u_4F#(85kH!i;MJgGLyLV3ro!S
+z^$T-zg!TQ)Q)Tph@{_aOQd3hH60{i&^z+M8<8$(pv(r*jQ}l}SLm1SV8I=ojb5b&k
+zKvsjWp~3^ENs5!%Ra73lVP2=uW+?aJk`&K0$+E@qX_<o88Fl)T4a&7N>hzx~Ib}?|
+zr}|IgfMWy0?L0Yo4h4bSa=Xjbbsv|%W?E-C<w2B9UbM`l2XDSz*buti;M9-H4(mO(
+zpQ_(I)$|-I*xS`isgew39}jpINEPv^e>42KvMQN<p8zi}+cBRe_9Q3AgB!b-=oZ|#
+z5vHmhzxUhPoPIAiD^DFQow&loQeC@FiU0bZFRRPjQMmrw6?q9CdC3JQ8ICaYF*w=q
+zmLxD`v>bTl6*qHZ(Gm}Lz2g_A_6shWHp3v*B_r!zP=})B+XGomPS+Rw_~0n2y4u09
+zDf)quqmY1?tcCu97LgKzH(b9N8{Ynj;?tb^yRAvFQ$=$te--yz9#h8`Hy^e1GRzP>
+zcy}4g4DKSc!)rLWV{ZCMedo<RnjCmGcRx><x0!$2fsTi)t6F9+5#^4&bnS%L4&K~}
+zoxQCK0|H~5PIWXb<!t9VqOpB_Tz|)k<45{?O{3KIvB^|qXFpuba>efIgG&b=HVTT|
+z&srSL8~Zo%`2V`e#s>~w-1vy`%4x=^ectj1*D6k0vsA2!-N!a9!9JC7LR^U8r^#G5
+zA0}>7^XW=rT5>w5O@lqDA>-bJy}p@u*X-E%^y`&FDUXgWeo_(|@~`Q`iMl)|p<^{i
+zcnTgWz1Z`>DC(Nd$*xly9o^c`2<Vz<d0pzTn5<IN%5_Y$dXMHKuZw9fb>19|l>E}Y
+z{_u1&J@vMPc)QgG$~igK(^j0!%<^+-verDg(a<r|qNyh0$&z(z#C_E5G&D;BIr3^u
+z{-<95Zd(^|c-`uW=bkveh@WG7&!ztRioC_E|GV5@zbW|NzvC<4<nA)Gc(wA+t6PVj
+zoqLf{{>g9dV!8iUZXJ4d>(GnCp`ULZ>f1GMt5@o(|3}R3uDhtbeeu6da_e++koazY
+z*Xibb@>6Ije*Qk~>5t_#_pJYg3D?#}{(QmXb9bk8<GyVLX|p#S=l#q!-P9&X<Mb`x
+zrEz7py9!#(?n<0<=lXkh@vh*{%Wp&;zvUZm`s=KUOzGF!AECmp4qg7O`Fhsg`B&a|
+zoC?%mw$ZHG<^lhU74@89X3g1q&aX<6%6>dgVZE--!PQ-vYkHmBZU2RCU)koH;D6lu
+z*3StI*6x4P*RIm5mYLOm$MUh?*23pK*0$}(ADvmZGiDOc`QnR#{Co@olMjUK_Pu{1
+h#%W>1Ew-4gO|!D%W+xd+GKWUro^@C!VXI1m4gjFibTa?|
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_612f2f62.btridx b/test/btrpkg/fixtures/crafted/path_612f2f62.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..92d66867bbc3d5fd8b77250cefc781871c1be744
+GIT binary patch
+literal 1497
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ea$i6t%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`b>d4iqS{n1(R2r9Z(dm-M#<owb<@SRj;;pzl_gwU|w0S
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKCSlS10!%XeqLTE52Zk>`!B
+zq;*xt=A5^Q*)41S=Gxv{e+=O!8!#|z;$&cedXr)5+wE;jHvHbzYMrh#CDSM&@yYWA
+zS1*()&-dx$_EKAB8R*J?e#TPUMHAUOcWdcS=!<Lq`(ls4o8F9t+oo6j7gAv`fSPQ;
+z$S^elVeax(3`IXI%YV)ZH+4NC|47X~=k$|90aMtOuN+u=m{Ve<#z)^>&r~)P9SU!l
+z{dkT|_u6}U#!K%^*;(K;Szq(EV1ve1{l5t>7=76pOgOkfRxDv;xbMr5eOr}_fq_BK
+zDb&-)#naEtpP`PCk<B+G$klZvBS(O@JL6jx1_p*ief=bM1_p-G;v)T=%p`98!V)un
+z{leTFVSWGdR2hAr{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRrKW
+zkj)@$puoU9QE@W6ib%oULgr>h)wPWq&ZL=dN}VQFn9FdK;qBy`2V1+;-UsgV;Lu%E
+z-YL(_@!}I}9go6=-1hbb*V5}8`47%z7LJ*HT(;X;X!2b-scl(e+j``A?`U6I`{{mO
+zYHkrD*vr*Ssgew39}jpINEPv^e>42KvMQN<p8zi}+cBRe_9Q3AgB!b-=oZ|#5vHmh
+zzxUhPoPIAiD^DFQow&loQeC@FiU0bZFRRPjQMmrw6?q9CdC3JQ8ICaYF*w=qmLxD`
+zv>bTl6*qHZ(Gm}Lz2g_A_6shWHp3v*B_r!zP=})B+XGomPS+Rw_~0n2y4u09Df)qu
+zqmY1?tcCu97LgKzH(b9N8{Ynj;?tb^yRAvFQ$=$te--yz9#h8`Hy^e1GRzP>cy}4g
+z4DKSc!)rLWV{ZCMedo<RnjCmGcRx><x0!$2fsTi)t6F9+5#^4&bnS%L4&K~}oxQCK
+z0|H~5PIWXb<!t9VqOpB_Tz|)k<45{?O{3KIvB^|qXFpuba>efIgG&b=HVTT|&srSL
+z8~Zo%`2V`e#s>~w-1vy`%4x=^ectj1*D6k0vsA2!-N!a9!9JC7LR^U8r^#G5A0}>7
+z^XW=rT5>w5O@lqDA>-bJy}p@u*X-E%^y`&FDUXgWeo_(|@~`Q`iMl)|p<^{icnTgW
+zz1Z`>DC(Nd$*xly9o^c`2<Vz<d0pzTn5<IN%5_Y$dXMHKuZw9fb>19|l>E}Y{_u1&
+zJ@vMPc)QgG$~igK(^j0!%<^+-verDg(a<r|qNyh0$&z(z#C_E5G&D;BIr3^u{-<95
+zZd(^|c-`uW=bkveh@WG7&!ztRioC_E|GV5@zbW|NzvC<4<nA)Gc(wA+t6PVjoqLf{
+z{>g9dV!8iUZXJ4d>(GnCp`ULZ>f1GMt5@o(|3}R3uDhtbeeu6da_e++koazY*Xibb
+z@>6Ije*Qk~>5t_#_pJYg3D?#}{(QmXb9bk8<GyVLX|p#S=l#q!-P9&X<Mb`xrEz7p
+zy9!#(?n<0<=lXkh@vh*{%Wp&;zvUZm`s=KUOzGF!AECmp4qg7O`Fhsg`B&a|oC?%m
+zw$ZHG<^lhU74@89X3g1q&aX<6%6>dgVZE--!PQ-vYkHmBZU2RCU)koH;D6lu*3StI
+z*6x4P*RIm5mYLOm$MUh?*23pK*0$}(ADvmZGiDOc`QnR#{Co@olMjUK_Pu{1#%W>1
+dEw-4gO|!D%W+xd+GKWUro^@C!VXI1m4ggJTaeM#(
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_780079.btridx b/test/btrpkg/fixtures/crafted/path_780079.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..090fd0107882625dbeb152cd1e1c45afab99076d
+GIT binary patch
+literal 1497
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ea-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`X@=s_q=NhPS1+>>YFJ1w9kNj?U(pDH_I0KK1-Rycjs}r
+zmU3lAX4L8fHAfap7L_$fW)>KnTh0Ccc!1M+5tSZeh;8JP^X&o~zRy?Xm}kkpo3-Vc
+zmf#~>wHF%~8rfY}>bd`H+X=YI1`G_FI2jnA-ej2ic6-~B4ZnA_TBqww$uvqxeDZw3
+z)eB|H^L_fbz0{Uj2D<W}pRv?-(M0yn-CFt+`r?}ZzStx1rZ;2Zw&_*>g;W>}pe7qI
+zGE7ZCn7e!xL(vb*@}G0UO<j-3KT@;LIsN2Nz!Y}nD+ksd=9E~e@zHnJGnEZRhr%0X
+zKb~XLz4o4-@zOg}b{05I*4Ml(*r2gh|8K%`MqhRY6%KBY6-yWy?)x%i-&W;fU|`U5
+z3ib4H@$_@^XQ*RjWb+LPa&=wF$PwV}&iED-VHFIO><kPHrNu@1Ihje^`h_KC{Q8Bt
+zIl}t><*73IKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_GI%#6x~xj8ABMIeho
+z*ieCid7|QEb`_C=y@kxpjLK^pH=Ic`-*i-G=>mxbwMN!E0xmwW)e`?{$k5!u=<}1U
+zj>BNVX>o?erMc7pOE56^KX0{ZDP{91$dxPC;q&w<tIoKwD)NR=ok_uZkL{=GcTe4V
+zk`?UbYNk|4hO&<bJPV|X_|(4{{#;p=%)U>6mzV9BPZN8RljFgS-Ai-}Zrlh{Rgd5M
+zZEa4!mz$NRj+Rbb;bEz+U8lr<eb1NG<?Se3|Luyrgpa)Bf|CqK82T8TY<No&m@--p
+zyz+{hxv^-8hr8bK3sd_A7fqXCkm{0=buXwx(emwqtR|=H3x0fX6jfdA;Mf%XK*>=^
+zz)RLbe?f~#iNPDL-;51!|3vX=PW|21q}ZvVxs|_)`z?>D<BOY*T6!5~2p+t<jAaIQ
+zk=fxj9NaNC{iMG0<{nKBJe#|pC(PT-zwJQBL)KL-vzLf+M_#&iLTm?b?!?aC)`bCq
+zF;1sCnwE05a~;vxzCNzMW5w|!{k^79YWvt^DzdX5E@ru6clE)ggAW@8Meb)U4(E;i
+z8+rVH-DKkf2QO}X#CYX2W7Ixx`Gac}C#_j3*2L~(o0edo$~Yk|MDWvOuA2`Nx2gGb
+zB{3~I9n_}5p45<WZ^B;R%)4uLY<&9l%Au4;M;AXS2@Uzz^x;HZo|DkAnj<^~50zf*
+zd0-TEP3L6Ssf~_q?PmmZO|-l&by!SRDQe|9rdhp5^O4uZw3j+>4n|6T>0W<$x|yDO
+zTSC0uY6In*9P4Q-PG)BLxind8p4@2Ym}${e6Y*rpx;5fH>UJ8MC4n4yH75U4uYb3#
+zi#WV)^~7^e9ACuGvAyR~|9wT?;?@6M?yuhz{O{lKm2Yx)8Ctwr`RCQGL(k5=$SD8h
+zH+Qkz|0}l+J-c=2#o^G;w+{8~nzz*}b=ChPW_Q<JRNlV$-zK?rx;aREx4-Ljb3XYg
+zv=l#opZ4^}@|t_r|H6c8Ya@TY;PJV;)4Flrwt}?Tn~w8-W}9wm6QptamhaNIGTU7R
+zt!8&6&bf2_y}Ni<@aN?>B9GtljW_*uRz;@tYweFv;a7()|JHmxYw!Fk?>kNf>Mz@9
+zR&Dcu|HX=W&M>p)>^<jKB}rvJo~N*0SLfjBuFN&PPVTn<LbtDM^G)zSZhh<Lga&K(
+zzv*jN=~c_j>c3<8*l%m$^B!y4_T!JvtlJqgiRXOr#Xx>O27$>3LU#M!KM~`!Fya<l
+b%+{t^S#h(I3?-REqi@eTtdp=+r9lS(#I$bT
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/path_empty.btridx b/test/btrpkg/fixtures/crafted/path_empty.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b35f875a585ee4ab220b6fa0fa8489eddd204f4
+GIT binary patch
+literal 1489
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD^a-TpY%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`cx72nj5~4Pt@IZ7pk~4q4|?%wa%-<pC1)<g={sSS7}?W
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKCSL+Jqlo|CERruu=hW$NxL
+zQlxg*mnkeLoH^CTYLit}BHUyH28K<X3=B|jGE9BDy=}>c-@96^({-j~8YLt?dA{K4
+zg)-&&K7HI?YRfDGUHQ+?SZcdyB75g<E&U07am{~U>=Ag=o3U`)^s4_tDhvitlMNUd
+zrY0cFUA~H;=!a$b&pF|yu1Dk_soCe8esU;a3cK=^18Wa+O03lQ=)3Eg%7&st;SIAN
+z&#~!Vdr!}J>76M%3!EnFYu*-Y(AcW~H{l5*FFV5)c5aXrOBfmM`!ZzTR^?(~V9;|4
+z_4IM^^mFrPsAFVg^9>1dbzRBG5#a64_?Df4fuXdxNIxetiCe$0#Ef6RFgHh7-@iOn
+zM&BntIomBYHH9HTo6$f&zdSWQCqFqmEj2YouQ)%1L7kaVxiB{;C9?=*BM2KPFf<D)
+zPG(n;d3B8`Tv~ny&x;J+mQ=Id6LmLl>3Gd>;&sHCxm;cELw9!YGjede7qa70Sn!1V
+z1v|3<$L*&z4;de3+g_A5IJmX)&PEFr!<%m%53icls{GiUxt_IT^`GtWk;XA#uU0dq
+zN-~svJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7TX5q>n5ugG-fwGj`n}w&
+zJax2m;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!;AF#FlE9SFa^RI$+{}$d
+zOFZ25j$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYGY6r)r=m$!ULIPg07WxZX
+zL`n?aaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*FhlU*-DNB@xQomVui@a1
+zx#=hMoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1HcylLq_O>nz2#j$$)zP$+
+zvz_aR#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>C@6A2YjHSl?BB@a|LZ0j
+zA2@h%<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`ACUf0<n7B>Nrz?qR$?2dr
+z4fdpljC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~j@2CDDR`*#V$TDksB1bW
+zyH0I%bZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ@=N#n!_&?5)Y}r`?N%Eo
+z=j2#VTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$$g45=pL+efZC%9Sb*m?y
+zd*b*aeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAwZXJ4d?nOrVC%?Ii<^Er}
+zb?DixLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx;=BD_r<?Q1Pobsw`TMk|
+zKbF_rv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-)3<z=#+BLbDrhykD{;=9
+z>+jvgyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}UwPkgDo}sfMzd<02mCKq
+z)N_WJHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;|8eVEKPNO;yZ=pJyGpNG
+zW>)_l%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o_x_0(r-c!>*kZOe&B}_K
+Uon$D<92$Ll)?uB5ttt&V0ORy*lK=n!
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/reencoded.btridx b/test/btrpkg/fixtures/crafted/reencoded.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ecbb1187df544fc4c9746323488b8cb39e7d520
+GIT binary patch
+literal 1483
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrYa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3diV3u^Y1S1o%YrK@s$}%Zhf^YzB|SLuqMN&St4r^jGjI%
+z*HW&`$c$QjpytS8$)d6b$;<+SbE~=E9}jRkFQU?846%)T^4jINBb^8Nr*b&NCG4Mk
+zN#E&4>BOy49^6x}PfQfv!u1JmvH=6bCQb$hs5cp=zTMuoWW(=Wt=8!}Q!<Sb5}!O@
+zaP>l&@_e5@ZZEZEmVvJP=VvUnT{MxsbGMfMgub}uzc2O(yy?wYxNUmXe<2kH1E|Rc
+zj0{r~5aupl#ZdIavi#?qa8uVK@{iQ)b51`w6flKd`O1N{hdCuyYJBwF^-N_$(V_5$
+z*^lSgbg#XqXT0>zl$`}mll3)k3pQwM)&HCDobfIjg9$q~$ciP54EKE*vTv($F)%Rb
+zIfZ)qxOn=x`7_ipGP3!G1i8AdWaJ3&c4vGGim=k+B6j_p%p`98!V)un{leTFVSWGd
+zR2hAr{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRmx>1p(%XikI1#
+zgEEAU8R#*)MKK>XntXSK=w<=dR)+6q-#lpRTK3*`=ZSts85fQNC(Iu>H!v#3Gqg<0
+z+x_P_15@IT8Sy8)BGNvvTz^n__)$a4=G#7p!_FR3dF<c(fvaHkpY8FH+A&~HRx_na
+zGL(Hh;8`G5#Haqv@aM{^WcGamyu573e45ykoE#5s>|UZ<aN|aps(Sq1Z)<b<z1*xk
+zb+mNi3J*(l?K&m?>wCVeE^kNS`fpd{C4A&17o21`!qCUyWW!sMz?9K);FVY0%#B4$
+zJlyq;Uzpl2xM<o8gH)G{tb0Knik5E=WHmWmU-09Dqp0d?2gj!92TG1Y0$#Ef`U_e_
+zN(|m`{bp=<`zMM|bL#K5CdEz_&8_@Z+;4eI9beph)Y8i^L-63;Wh^tei_8wM;oy$B
+z=_mD_H}`0A;Mv^$JYn8u{%r?39<r`#nY~1mJMz-C6Jk4fb0>E8wk`|^jBz^E(X^Da
+zo$H9k_Vsc79V?C>>F+g-QrpKSQ<0tha52jjyQ>c_9emg*C~`k*aX4@6-^k<t>n0l?
+zICyd6BgQMI8Kd@j%O6~;IBCsNu_ksO+q4AxRK^K$A%dSKbKQKHxJ}KcD~V~z>7X_Z
+z_N0c4dlUBhX5L-1W8>4WR}Q5-I=c8tNodHwrVl6T@|=W@)g0j|c&PMZ&jX{VYdR;p
+zPHl8_Yd<5PYog_Ksl#HjN>MA<G0o~dnvc9LroGg8b1+i!OZWQ2)6MkM+Y;jKRvRei
+z<XBHzaWXT@&!x#)^W;WD$4rZ+nusS$)~yluQMc33ED7Yut1<bXdi}d?UBuyat0$g&
+z;`kzdj_o~{`tK|97O(#Aa)14%;D7&)uY8lc%h2N0%0I7e9eQ@|MMn82zqyO${$IIu
+z=-I79FAj%(zICW?*SxJ>sjL1UF}u6&qVo2||2E03)6GHRyZv3KoAb#}p{4lw`?RM&
+zme<^~{ud@(TO0ZF1&`0&oz{)}wiTq!-gKPzGuw1in;?zTw|tkzmD%npXf?Ylan7CV
+z@7=|_f<G_65qbQUZ@lTRvnn#BUu%Da3cosZ`M2ilS$pSSdEap=P=DD*vuc|M{4ZA2
+zbB38UXYV<`DoHB)@jQj~x;h6}cV({Wb#k};7rK3An{R^uaqC+@Cp1{Q|4m=JO0QaG
+zR{tH#$9`K2pZ8eXwjY0VX5G%1Nj&F^F9!1SF$hdP5VG6%{)rf;g%P*dVzxHT%8Hwv
+TWGKlT8hv}#VV#7nDh)aS)+lwB
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/small_end_exact.btridx b/test/btrpkg/fixtures/crafted/small_end_exact.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..535478bd186d9d56b00d1aedfae34f89a34668a3
+GIT binary patch
+literal 1487
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD?a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dVwpR2lnoWw%D3xlcBLHOR3qSmgB-=e>p`P(JAGZmavs;
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW4nJae%)tF*<6Uy=>VOT}tt
+zBwX0=OT0Ae^`z7f+?rcn3&Kq{U|`t9$-n^hCd1UX+uN3G_`R#uI$dW<rcpxTljjSr
+zUMN$Z@6*TarMAp6(3SuEjHR}VCbD<#*3zHQ7uWpv#U6n-y%`I)O|SYdq{3hTHQ9iX
+zVQK=x+~unnihfv@|C|$U>Uu=}k(zzZ=_iK*rm!ntIk5IHr^HH)kG{K}sca}Z6y7lV
+z@f@4(wfFRlm)@DOv%qPxzUFPg292%ye-oZF{$*nbVdn-}v4oM~zAr=eZB;G?1_nK+
+zP){EhPd_(*hC0T-jEro)AwjOLE9*D{yxke!f}*UnxQJapCo_p#zp%uNU%xOnM_Av#
+zJXJ>DCqFscEj2ZTAwiqbKtI1cH9jXlIXf*iHASyDKZHS@nNhhgHzy_2RKb8*aA6iR
+zb5MrSF#|qkw<zX=Mw9QJm=@`AWGa&e%Z~iCW@oKg`^=vz*|A9k?D77=p`dU|{Da{E
+zhnsr+@*D;i+PlAUAMRMn$XwBsZSzgQZRVRmhSg~w8x0@$Gk@iJAGR@n|E6a<z#gq;
+zN|j_N`*^^!K&psO{hQ&>l~u{?`viD-*^c=%u_rk>9^BZyM7Q9^jWAX9_`ToO=Jb2H
+zS$XPc>BJQtmg?GdO8nRNd|6%Ij>7fduE<OH$V)Cb$#8_BkHN`?w<LinqvgOWueg~T
+zi<Wq}>m9!^wO?@2v>67eE*V+(f;to}-yX<na=O0Y#|KAI)zuD;P0<gO9EAkDWG(a;
+zw1|`#yy5!I*zopG6rbkQ-)&8bohq7J`K!3!@|ZflxcR81mtltB!Mn>?W^fmo9bUu1
+z9dpx9>N{`l(d59hx%+v-yv_XE4s<+ZUDYysi70pErE4d|cJSs-?Cfn_7!VlabgH9i
+zDQ7#^5smHZ<N7;R96!?EYZ|4tk4>f`JNw~cmMeBwA6z>4uu)Lte%9h}-q^p9$N$$&
+zHa>9h;>JgeS57lV?emsDxK?q}nx$e*>^`<>3HGUs6XHSyKTYPk`7m*tnom~}(~{Fc
+zZ5r%J4H@?)?DfsOyJpA6r(dreN_lj2@spC!kbg}dPSoW&2_36B!c*{2>BXK0Mp4&v
+zPIjHz=;+pdMnKm@%j;5y#blMDR<2{3)q6A_d0k9<sq^Mwq~w?G^@pdM>8ZCR#M`Yl
+zP|nG*p0?s-W|p5zleOl_jfRey7ELt~PnN7(BkrSar=eLA$dOlL@;~+ZciXy%!|PU0
+zJom)$Mf@DwdoK0gSL7{T{om#O`c1+A{vBWWCU=*i#jBNnUfnwM?A(it@=tzq7t8&>
+za_i8uTZdj84*h)VP~Wb3TfI_O{Xb%Mcilzh?Ti0yl3S;ngT#0HyG}Rflb=FM@$>g-
+zPk$`0xo7<^Ot`i-^5+X4pSwG)8~1H1NSnRsIPYh+>83V88mDjhE{!X*-Br+Pc30w@
+zJJ;X4i+2ToUVbC;_$}Xf(_d#*WJ<r*{s<L*b?EYM&DXQ`&cE`$<5ZyjvW;fdHV^n;
+ztf=P<Gi%P?bADBlRQBU}3hQ-s4zBLXT+{31Zu>8E`^q-o1pnjKw|-7&uy+5OzIK&f
+zwal#kJC=|AwiZ6`v9@hL{^-oQoiUSm&KF+{<mY1$n0z2)x9|NEF-{93Zn4E|ZJL!8
+VH#^Btk~uW`_N>D?30qYfbO5~TZ2<rP
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/small_flag_2.btridx b/test/btrpkg/fixtures/crafted/small_flag_2.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef1c9e2bb846a9fc56773515a10fb8a9da7c4f3
+GIT binary patch
+literal 1485
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffcraa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`q}pv9xPv(AM?6Pqr=%-wc%Y$$>c>#_$MDbX%>7;O5|<1
+zmU3lAX4L8fHAfap7L_$fW)>KnTh0Ccc!1M+5tSZeh;8JP8oyrJzMWWWv~-c<9ChuC
+zkhlZ>uM;1n8Seb?*|+T1Bq_Mb1`G_FI2jnA-ej2ic6-~B4ZnA_TBqww$uvqxeDZw3
+z)eB|H^L_fbz0{Uj2D<W}pRv?-(M0yn-CFt+`r?}ZzStx1rZ;2Zw&_*>g;W>}pe7qI
+zGE7ZCn7e!xL(vb*@}G0UO<j-3KT@;LIsN2Nz!Y}nD+ksd=9E~e@zHnJGnEZRhr%0X
+zKb~XLz4o4-@zOg}b{05I*4Ml(*r2gh|8K%`#<y$?A?(~BE0!=a-1lY3zOBl|z`&sA
+z6zb{Y;_2t+&rrw6$mSao<m$STkt4v{o$)ObD8@>Qix}ATb25{-^$SbP`1K2ObA<K%
+z%Ts0aee#pD-BMFi7!tG@4fONNQ{!{;le5!OQ&aSc^FtWanHiM}b8}KMjT8i!Cn{cM
+zV-Cs?I%c59>=wm**l6<I6{4F3SX&vspMCS7t!vqP*PSQ&8D(5J4xBK5;M~Bd7|+l$
+zEpPXq;|xp(8w~bOnEF8BA?Lb-kK2wia;9&e*|v68tLL%#Y!5{rg#FClzbR}7*qhZ%
+zsgew39}jpINEPv^e>42KvMQN<p8zi}+cBRe_9Q3AgB!b-=oZ|#5vHmhzxUhPoPIAi
+zD^DFQow&loQeC@FiU0bZFRRPjQMmrw6?q9CdC3JQ8ICaYF*w=qmLxD`v>bTl6*qHZ
+z(Gm}Lz2g_A_6shWHp3v*B_r!zP=})B+XGomPS+Rw_~0n2y4u09Df)quqmY1?tcCu9
+z7LgKzH(b9N8{Ynj;?tb^yRAvFQ$=$te--yz9#h8`Hy^e1GRzP>cy}4g4DKSc!)rLW
+zV{ZCMedo<RnjCmGcRx><x0!$2fsTi)t6F9+5#^4&bnS%L4&K~}oxQCK0|H~5PIWXb
+z<!t9VqOpB_Tz|)k<45{?O{3KIvB^|qXFpuba>efIgG&b=HVTT|&srSL8~Zo%`2V`e
+z#s>~w-1vy`%4x=^ectj1*D6k0vsA2!-N!a9!9JC7LR^U8r^#G5A0}>7^XW=rT5>w5
+zO@lqDA>-bJy}p@u*X-E%^y`&FDUXgWeo_(|@~`Q`iMl)|p<^{icnTgWz1Z`>DC(Nd
+z$*xly9o^c`2<Vz<d0pzTn5<IN%5_Y$dXMHKuZw9fb>19|l>E}Y{_u1&J@vMPc)QgG
+z$~igK(^j0!%<^+-verDg(a<r|qNyh0$&z(z#C_E5G&D;BIr3^u{-<95Zd(^|c-`uW
+z=bkveh@WG7&!ztRioC_E|GV5@zbW|NzvC<4<nA)Gc(wA+t6PVjoqLf{{>g9dV!8iU
+zZXJ4d>(GnCp`ULZ>f1GMt5@o(|3}R3uDhtbeeu6da_e++koazY*Xibb@>6Ije*Qk~
+z>5t_#_pJYg3D?#}{(QmXb9bk8<GyVLX|p#S=l#q!-P9&X<Mb`xrEz7py9!#(?n<0<
+z=lXkh@vh*{%Wp&;zvUZm`s=KUOzGF!AECmp4qg7O`Fhsg`B&a|oC?%mw$ZHG<^lhU
+z74@89X3g1q&aX<6%6>dgVZE--!PQ-vYkHmBZU2RCU)koH;D6lu*3StI*6x4P*RIm5
+zmYLOm$MUh?*23pK*0$}(ADvmZGiDOc`QnR#{Co@olMjUK_Pu{1#%W>1Ew-4gO|!D%
+VW+xd+GKWUro^@C!VXI1m4glZ2bh7{e
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/small_overflow.btridx b/test/btrpkg/fixtures/crafted/small_overflow.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..38c07ffa2f4e857517a279df8735f23315d465ac
+GIT binary patch
+literal 1490
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfhD<a-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dfQ(UH76Qh=XkB&d3uI<r_3u>JBfm8*Q-zN7S-^~`p;Ib
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVjKBn<EL}a7r#>|&~lzLg;ip9
+zt%daA{%!NS1QVIR31rXx^a5_O0RzJ(P6h_3HyNhB-QKoj!|z?K*6BJ^GK~@vpFCf1
+z^+K8Qe4jpUFSTWsfv)`LXDqc{G?Be?x0e2dzPRSUFZKw$>CITUZF<#zAr%G#sL2M5
+z3{w*j<}P2wQ1rvH{O6o-Q`aN%kJRjQPCq#mFoj+D%7L|qIVDzVeDvM*Ol3pSq40*;
+zkLTEQuf3;dy!6hLodr&l^)+t`HfU_s|C{ifQIws*g`FE@#S%t_`@Rg>w^g|q7#Q@N
+zLOp$4JpJ7K8R{7SGqU-H1i8AdWaJ3&c4vGGim}q-B6j_p%p`98!V)un{leTFVSWGd
+zR2hAr{N!x6)YKG)1Z_qG{rvLO_?-OY?6lO>6usj75C(N-M&-iXoRmyc1%YP4m08Tp
+zK^aEJ48xe+qL>dGO}=|#TBOI3sZ1IyJMz=m%|lFT^-sCh@hB)%P5)uo(4Z0j;5Y+Q
+z;qDlFfdmD9@y+7Pgt(d653pQ+zA?4XW6{mriwsMDt#(cMw$MK7t#)5@=>EH>qMkE>
+z{aVeGD#=jx@qlN6R1u&0H^ZMRtCHFG3Gni=9rI~oPjYfRxUqYQZo!QkVXEr!d%vyC
+z>GyK8^3>7Ni7PxT)wS!C_^<Ezvbww-h3mgvk(cn1mt1g?;Rr(?gOd$!Ndi+w%Yj#3
+zaWgj-E%9*IJAPqmzu=;2GYnE)GP3RkbtqcCJ&@JpbbY~(500X$s~sGhq8}(Z3JG}0
+zTIerm5h*cv!}Xi7;q9L&KFz7W+nN+RRW!HqS8>1PF?D=#^HEDL!wkWLcbBou;4U&d
+zyoQ52=BA(2ci!Bi$$@8c_w$5#oB6jL=y=Gws%7>PQSQh~*G`D-;LV-b+1t7>ATY-1
+zR7cZN&UUUN8r#>$^>?f|ex$$GG)iqBn@mM^_QS<2SM07nxODJgqoBzBti|EHv410v
+z|F4^DeBj{4jgJ_woMw#L=PiG5t>UCLOU0VleQeVb>{A&h#Dxfcn#^_cVd6G5pROdP
+zC8vYhG}x0GGVV>->zjFZ&5n&vzg{_%^62Q|CncdF|C&CWsLOK_I#zRpr{JN|i#-pF
+zqOR$j>^im4(XIWAfUb#_*QE}N$tp#yT*ox4_h>%yx|sG-=gq-L$uHgO4^KDKQ*TR%
+zw_9zXoReccZN<sVEI*efYt54z4IMKrnrb4RELpck+(+F`L$f51Bd^Bff9mz`wsjGQ
+z*R7s-?up}z_&K)sT<X8C$XmSnzsvpgn}YxSJHGNw?k+=%S1bR#x^?K;xfdDbpZw-7
+zmivF@)}d#&4!t-W`uWzOzFqUSdZn)Vf5hzWx{J!&7ysKNw@x<)iSPDzoo>!2KZTa!
+z=kL>={#agf&-!1OaBXem&lfyCcXwJh?%P(7Hha@?-p_2)O>KfSPT%rf8dqk!tDx2F
+zuEaTauD^E|?+X6B{6^&QTfXt8zs{=2lzy%K5i0!Z(B<EnuV?L@f8~A0sX+Z@8_lY1
+z9`L_dQO_A>)||cP{Hi3W?8oyI*6ZpVT-}wqrq{{c_Fw4sm2JKW{>QCv{hZKX?fy4?
+z?JB)$nOXgJEFb%AEqvZ%ZQFkQ(V2BSV<z#OFTNPa&&MDz`9R2S-}@(GoEAphVvE_@
+ZG%G7^c9Nkab7=JKS%-BJwyHGf008LjZxa9j
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/small_past_blob.btridx b/test/btrpkg/fixtures/crafted/small_past_blob.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..856255eaa1dd71b3a76bdcad6cd68e9aba1fd1b3
+GIT binary patch
+literal 1484
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrWa-Tyb%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`ZuO}Z8O)eEEK=E^6KB2Go9TG=Uw8ejoX^Y*K<L;L^rQo
+zOSv*5GivpLnj?!Pi^>`#GYbsPt>%7zJizI^h)Rz!#5VFt`yL0Tb-{Dbu3B+o!W=uk
+zm+K-=m#Y{5daWBHp<tzWCjoA<0RzJ(P6h_3HyNhB-QKoj!|z?K*6BJ^GK~@vpFCf1
+z^+K8Qe4jpUFSTWsfv)`LXDqc{G?Be?x0e2dzPRSUFZKw$>CITUZF<#zAr%G#sL2M5
+z3{w*j<}P2wQ1rvH{O6o-Q`aN%kJRjQPCq#mFoj+D%7L|qIVDzVeDvM*Ol3pSq40*;
+zkLTEQuf3;dy!6hLodr&l^)+t`HfU_s|C{if@hKaF2s<~(iY1H;_k9_%Z>w@KFfiyj
+zg?jq9c>1~dGt@CwGc&UJh6K5~u4Lp0@OEc>TUuPiuAh^c#I0XgV#cpun42T4?_ZuO
+zqwkZSob8sHn!=Ev&1j&XU!EGDlb@WOmYSNPSDYWhpw7&wT$r1al4+u#z$~bEnT<Ip
+zL+F?xAG2Fj^C6?jcUOpR7GP~<_<r`xgO)C}_pv)W`Wd;DSPY&@e-KP?n4mAf<b7N3
+zyWs%`dA)1;DVe{-9MTh-vOn+0E_7IQGxrk1%Dj(__7B{fe|J3&yPCg!)3lvnUsf}v
+zN-~svJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7TX5q>n5ugG-fwGj`n}w&
+zJax2m;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!;AF#FlE9SFa^RI$+{}$d
+zOFZ25j$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYGY6r)r=m$!ULIPg07WxZX
+zL`n?aaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*FhlU*-DNB@xQomVui@a1
+zx#=hMoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1HcylLq_O>nz2#j$$)zP$+
+zvz_aR#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>C@6A2YjHSl?BB@a|LZ0j
+zA2@h%<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`ACUf0<n7B>Nrz?qR$?2dr
+z4fdpljC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~j@2CDDR`*#V$TDksB1bW
+zyH0I%bZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ@=N#n!_&?5)Y}r`?N%Eo
+z=j2#VTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$$g45=pL+efZC%9Sb*m?y
+zd*b*aeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAwZXJ4d?nOrVC%?Ii<^Er}
+zb?DixLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx;=BD_r<?Q1Pobsw`TMk|
+zKbF_rv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-)3<z=#+BLbDrhykD{;=9
+z>+jvgyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}UwPkgDo}sfMzd<02mCKq
+z)N_WJHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;|8eVEKPNO;yZ=pJyGpNG
+zW>)_l%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o_x_0(r-c!>*kZOe&B}_K
+Uon$D<92$Ll)?uB5ttt&V01WzZYXATM
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/symlink_abs_ok.btridx b/test/btrpkg/fixtures/crafted/symlink_abs_ok.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc49cd1a7cd4317a4fc7a5c96f72f1a8b51be0b2
+GIT binary patch
+literal 1514
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffgz{C<ZNNh`1S)u7=WYh3ro|+Mb*ntkpKPFJsQ0
+zpFaXD-rjm3xo=M7#ni8N*6&PEKCM%n8~)et(wF6(E(`8B)%;szbT2QtU+M~@*R2WV
+zTFR9fnNh0`)ErqXSya{_nOR_PZZ-G&;{i_RMO1o>A-0lF8r80T#2>j_e~tNxBbhs9
+z&uoy1nOi>Vy6VZpA7}1KnCAmG*?@sz6DI=$%>Ps0Zf{$%;rFgq>vWwdnMMhTPo6Kh
+zdZA2tzE2;wm)bJRKv(|rGnU#en#kU{TT6dJUtIIw7kdQW^kyvFHofY<kP3qV)MNuj
+zhN%e%bC<7TDEeVp{&P;asp}E>M{4#tr=J`On8L1n<-pp*oDwTFKKkx@rm~^vP<X@a
+z$8&7D*WS}JUV3NB&H|^&`kJ=|8#K1+|4q<hy2{Qlg@XrV#S%t_`@Rg>w^g|q7#Q@N
+zLOp$4JpJ7K8R{4r*?dESTwPZ(as+t0Grk2ySZQ$)yM9h)61RR~i5b6sVQ!AFzJGbD
+zjJ{8Pa<*G)Y6?SwHlu-letBwqPJVKBT54*FUU7a1gE}*#a$#;xN+wfPRZeDJwti|!
+zvVK8gadCMH$PH!+49ycIFSA_{S*pc+g6Z&k2GLnPg*}-EJhB`j(l$%qOq#ZAfxv@(
+zGi74}FFx5jrTdSfgJTQBt{P^07KsZ_xf>2#%A5XQz(GM$Z=U!jj@LXh9^A5d7a=og
+z#v8NC8$!1moceL`Ks;mK)c@bKv)j1AVNlJKD#=jx@qlN6R1u&0H^ZMRtCHFG3Gni=
+z9rI~oPjYfRxUqYQZo!QkVXEr!d%vyC>GyK8^3>7Ni7PxT)wS!C_^<Ezvbww-h3mgv
+zk(cn1mt1g?;Rr(?gOd$!Ndi+w%Yj#3aWgj-E%9*IJAPqmzu=;2GYnE)GP3RkbtqcC
+zJ&@JpbbY~(500X$s~sGhq8}(Z3JG}0TIerm5h*cv!}Xi7;q9L&KFz7W+nN+RRW!Hq
+zS8>1PF?D=#^HEDL!wkWLcbBou;4U&dyoQ52=BA(2ci!Bi$$@8c_w$5#oB6jL=y=Gw
+zs%7>PQSQh~*G`D-;LV-b+1t7>ATY-1R7cZN&UUUN8r#>$^>?f|ex$$GG)iqBn@mM^
+z_QS<2SM07nxODJgqoBzBti|EHv410v|F4^DeBj{4jgJ_woMw#L=PiG5t>UCLOU0Vl
+zeQeVb>{A&h#Dxfcn#^_cVd6G5pROdPC8vYhG}x0GGVV>->zjFZ&5n&vzg{_%^62Q|
+zCncdF|C&CWsLOK_I#zRpr{JN|i#-pFqOR$j>^im4(XIWAfUb#_*QE}N$tp#yT*ox4
+z_h>%yx|sG-=gq-L$uHgO4^KDKQ*TR%w_9zXoReccZN<sVEI*efYt54z4IMKrnrb4R
+zELpck+(+F`L$f51Bd^Bff9mz`wsjGQ*R7s-?up}z_&K)sT<X8C$XmSnzsvpgn}YxS
+zJHGNw?k+=%S1bR#x^?K;xfdDbpZw-7mivF@)}d#&4!t-W`uWzOzFqUSdZn)Vf5hzW
+zx{J!&7ysKNw@x<)iSPDzoo>!2KZTa!=kL>={#agf&-!1OaBXem&lfyCcXwJh?%P(7
+zHha@?-p_2)O>KfSPT%rf8dqk!tDx2FuEaTauD^E|?+X6B{6^&QTfXt8zs{=2lzy%K
+z5i0!Z(B<EnuV?L@f8~A0sX+Z@8_lY19`L_dQO_A>)||cP{Hi3W?8oyI*6ZpVT-}wq
+zrq{{c_Fw4sm2JKW{>QCv{hZKX?fy4??JB)$nOXgJEFb%AEqvZ%ZQFkQ(V2BSV<z#O
+xFTNPa&&MDz`9R2S-}@(GoEAphVvE_@G%G7^c9Nkab7=JKS%-BJwyHGf000?qe&GNB
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/symlink_no_target.btridx b/test/btrpkg/fixtures/crafted/symlink_no_target.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..285f6960119a7fe99eae6239d1a64b46c9bbf9c8
+GIT binary patch
+literal 1498
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?9a^;yJ3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`f26l{slu7R)AvkRnRdJN$jQ}{oJ>m}=9c~a$^Mq()Zwe;
+zTFR9fnNh0`)ErqXSya{_nOR_PZZ-G&;{i_RMO1o>A-0lFO6-qMcRXBdq&)R*bcAk)
+zm#WWvuH!%TLVbJhF>&Qz6N8&<z`(GHlYs%||EX`cw=LQ5dsnM<y3UkLqlCmK&lg<1
+zP^LWJr;po9ZJA}DEC2Z!OKlfTWbfRqr9YuBuKDkaJpylfGZt=}UiDu{g~0%7vH>H*
+z)C7dN%U3ZJ{je<mIVarI^@#i<HT#^?PYwl4VOPF#VC`W}iIo~3eRn-m*-&&SykYj^
+zIX2yE@97yYy)$KJfzxDt&D(+v8e8@MCde~|vNJ4U=K)!<gpuLCFGKciRW1ew20f=x
+zPahXgKR17dIz~n|-;f|z*OiPM0p9M6Z$S}OT3p1gpOcxytzTGT#;;$Pn<K36U!E$X
+z?~|XL?UtIF!jPcNXrP~8o*JK%pPZeRnwp|loFBrV&djJ>n46Q5$y8O9lbM%orohlV
+zQSvgI!%{8g6HJHSGl<UWDeTES;F0AJk+xa-X414}3j`kQn<*O;c=5^JDcye*9UNO2
+zcGWQ3vq)Tc%H43_Qr`6c0uBn2dh^6LalGc4@!*!ty9k*{Gv1h8-VnOo;M9+c2jUs?
+zrvCq?o!!O__H#8;sw6|%#{-@PQbl~~-wc1QtV(9zC&0_gcFd=VJ;}-O;KuGHx&=3G
+zgsG~>@BOwmr{BxX%2P*6C$8|YRM)Ok;=jJ<%j)uW6t4evMP9;3UUI=nh9eAp3{Ez@
+zB?(L!EeBqC#m(GUw8X<*@A!qO{ep|8%`ixH$;i4F)S+nk_CQvX)Aa>EJ~)c1u6A&2
+zihiKvC?wz|YoWiOMWn>w4cBkRhPQvB_%x^fZfjEPRMFhZU&Z~F$JFt~%||W03^N1|
+z-d)BrgS*J=@EQ*8n45l5-+6P7CI_C)-Om%|ZRX#0pyMIys+QSHM7bj`T{|JRgEx0#
+zXK(AmfWR21Qyoo9Ior98Xl!2}*Wa<?_>ulz(<rrlY%&$u*$)@9T(P_Q;L^c|je;Wg
+zvlfT*#{P{w{=aUr@qvREH$Gy#a+)z}pSS$MwThG0EEQ{F_pwb&uuo;25Eml&X)@Q%
+zhl$(Ne7cgDmYfc1(_l|($hbFQuW#nvH9Iyw{d(n4%A=!;pOl1#{A>DfqAt%#=vd7W
+zo`Q!;FZMhzin^wAvg_1FN4NGf0=gzzUY9y7CaV;+avjsG-lO@*>tfnVoi_&~CBJm9
+zKRn$`PrWT6-fp#la!!u*v=t{av;16|tTj(=G<3|gXsU^LvSi&FaUXR%4b753j=UO^
+z|Ebr%+tx)KUblMUxhIY<;^)}jbE*HnB5(2P|1S5}ZwmhR@A%3$xw{N4UakD|>eiuW
+z=U!x#fAX8VSnmIoTZf+AI`raj=;vF9`gYCR>Xo|c{}Hph>n<v9U;J;A+&bMHB);3<
+zb-Fp9{1jS>pTAFg`eS*`J?npA!nL)LKVR_p+}&y2xNloQ+U!loc|WsFH?;}UIDN}^
+zX<V7@u7XyxyAtQzx&Gc=yes(g@*9!IZ~4ZX{yM87Q~I^`N2u_tLzjPRzMi#r{+0I~
+zrvmktZ8WR4dBFc-MLlPjS#$QD^Q)4ivLDY=Sg)&daCKManqDV&+kc_kSGM^k_#d~v
+z^>adlwfo=nwX5{1WoGr?v3%^eweWe5wQc+HM`zaUjG4r9zW8DwKOcj@<O3nQeea)$
+haatI0i!Ekr)2ytx*-3_y%%Rb@XC2l_*s9W?0{}r`c^Loz
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/symlink_nul.btridx b/test/btrpkg/fixtures/crafted/symlink_nul.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..18383ff030621ab7d22290dde9ab24b1edb2afe9
+GIT binary patch
+literal 1508
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffjasa+R1N3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`U-EO#$B$BfdG2~f_q!k7@~Ez%e!A2Sjo#eTt_6MhS|a6I
+z%9R<JQL7Ks99b+`RMsGwSzvH(HTV1D0Z!*dRC<gdwvtaaI}7UPPk!+7i9$iym$C%S
+zx^9UrxxYlszGur@91eGR12@@#fngIT0|U(eQ{QfHTe9Kzu2$=Gohg|{35idhFSvT4
+zOnJUfAGep<GRr_${_``I+Af;N-nm;#e?nhe^WPVH1m5&!EZjD|>c5Z*g8|fJ14f3a
+z2?%qSuVN_rVOjojPPnP-5&1`I_Bp4Y9157iu6*Ud+QXa@D>Xj)?s}%Oq3BR}!|ca%
+zY`WLp(=%RrXUfh3r^))7w*?zCw(9>)P-0rj&Je=E1F~WXBg1`PhV0v_Tnr2hdQPF9
+zJ}#bqZvG5)jEro)AwjOLD;YTgyxke!f+DQ6xQJapCo_p#zp%uNU%xOnM_Av#JXJ>D
+zCqFscEj2ZTAwiqbKtI1cH9jXlIXf*iHASyDKZHS@nNhhgHzy^Nsj4a`GcOxtRw6?Z
+z$bM4=f#!*lm)TYsHRuKWke%Q(*`TdZ(%_Pm#I%`j+}6%$)zDzsk)OtH9%53ff6BFv
+z=YfI~gWEnvc_to?pG*o{N^U>3V-w(L@BZ4VbI7P!eFs~=v>3aJ&Td;1ovXTQjQ*K)
+zgwKgSy6^6(sOL;z-&ZrGN-~svJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7
+zTX5q>n5ugG-fwGj`n}w&Jax2m;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!
+z;AF#FlE9SFa^RI$+{}$dOFZ25j$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYG
+zY6r)r=m$!ULIPg07WxZXL`n?aaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*
+zFhlU*-DNB@xQomVui@a1x#=hMoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1H
+zcylLq_O>nz2#j$$)zP$+vz_aR#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>
+zC@6A2YjHSl?BB@a|LZ0jA2@h%<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`A
+zCUf0<n7B>Nrz?qR$?2dr4fdpljC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~
+zj@2CDDR`*#V$TDksB1bWyH0I%bZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ
+z@=N#n!_&?5)Y}r`?N%Eo=j2#VTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$
+z$g45=pL+efZC%9Sb*m?yd*b*aeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAw
+zZXJ4d?nOrVC%?Ii<^Er}b?DixLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx
+z;=BD_r<?Q1Pobsw`TMk|KbF_rv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-
+z)3<z=#+BLbDrhykD{;=9>+jvgyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}
+zUwPkgDo}sfMzd<02mCKq)N_WJHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;
+z|8eVEKPNO;yZ=pJyGpNGW>)_l%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o
+k_x_0(r-c!>*kZOe&B}_Kon$D<92$Ll)?uB5ttt&V0CqcYVgLXD
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/through_file.btridx b/test/btrpkg/fixtures/crafted/through_file.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..de15e128c450d83f7f4abc6fca11c8a31404ae8e
+GIT binary patch
+literal 1494
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?8a#fij3^OQQ4W-`-*`Ic_Jvld6t8Hpu#+*Gr
+ze*{>(z4btH-<-&csbBA`pS~vKzq{q)h7WniG^cHoDs64Jnk>3ts>9bKW!Jp5`hCl_
+zlq)kbqgEfNIkH%?sH{OUv%uioYVP;P1Dwu_sPq^^Y$czRVq0JH)%!=Z*-iVu8X+l1
+zCG~Ezs+{hbX0u?e!X~@j9&nQl7#KEjGBCjWKlSbQwj~>W?`pM9*O`)Ol#ux3`GTt#
+z%9Q8(^l^KsEwc=C<v%}TsqLbP?47%{^e6PiHUE9FN8n9w#=>pWtNshAFc?5hHeh6!
+znt(8O`6`B@AC~1m=Y*TO9+7{fW}kEV$)SKL?8;XTtUb&ru~Ors@2+Pm8;TBvH_U!K
+z$EJJjJw4;4cc$ztaGI>Id0VhSW2^q(1XU(ec7_sm9*`AF7#Z&SGGyOY<zir9&~pm)
+z^l|a@bMt4YV`OCW4GD5}UCGE1;O)-%78GHn#YOD;Ihje^`h_KC{Q8BtIl}t><*73I
+zKKaSnZmFp$3<=td2KxEssqs1a$=PYCsVREJ`5_GI%#6x~xj8ABJo*(3rV0$r6D2RR
+zO<1_o#v<YkgXXNB!k)|n9$5|%X`7{QCQVzmK;Xf?nX)l~7oY5%()~x#!Lfy5R}Hg0
+zi^PSe+zkgV<xT%D;GiI>H&1*M$7`M$4{q7Ki;$T#<Bi$n4WZi&PW`xeAf7RA>i=)r
+z*=^il|5h`lN-~svJm6U%Rm7+M&G6^Ss$}+k0=&Fz$9$UDlbjq6ZtPy7TX5q>n5ugG
+z-fwGj`n}w&Jax2m;tCH-b?rJO{_A_btS)ay;ree^<RyIMB^R7zIKt4!;AF#FlE9SF
+za^RI$+{}$dOFZ25j$fGCFSuyh41-jcjI4V>9g3E34`ektU0?9ygQKYGY6r)r=m$!U
+zLIPg07WxZXL`n?aaQ$X%c>5=cPjl+;wkE|+70s>uRoriROdVg`eALp*FhlU*-DNB@
+zxQomVui@a1x#=hMoj3Pra^TtA{XAjbX8vslIv%pFYMH%6lsod$wG(1HcylLq_O>nz
+z2#j$$)zP$+vz_aR#`g7b{T(ZgAL;KkjZ)jkCR34}{cthM6}zhsE**T>C@6A2YjHSl
+z?BB@a|LZ0jA2@h%<0Hl^rx~O6dCMPMt2k-RQn4m>AKSD9`&7mWaUp`ACUf0<n7B>N
+zrz?qR$?2dr4fdpljC&LI`exo;vt#4auU8JGJUY7gNl9qPzori->hhd~j@2CDDR`*#
+zV$TDksB1bWyH0I%bZb8&plhP#b*aN*vPw}a*D=lNJ(`caE~dTId2=vQ@=N#n!_&?5
+z)Y}r`?N%Eo=j2#VTX8Zo%g?3BTJz*aL&r>urkaQ+OV+Is_ffag&@2h$$g45=pL+ef
+zZC%9Sb*m?yd*b*aeva)um-_E3@)ocD?{a_rrr>}7j<0-^yUWnx)yhAwZXJ4d?nOrV
+zC%?Ii<^Er}b?DixLoW`8e!g|6Z`Zu7Ua718A2GYT?xOPc#s4<Rt<%jx;=BD_r<?Q1
+zPobsw`TMk|KbF_rv;G$*Tw5FY^97I3-JRBr`?eLN&E9mJ_cPmcQ=1@-)3<z=#+BLb
+zDrhykD{;=9>+jvgyMjM2zY%%-mT$c2ud^yLrC)1*gbKepbosaD>sfo}UwPkgDo}sf
+zMzd<02mCKq)N_WJHD~WRzbZ*8`|&)5^}0F-S9fKu>2-3q{TI4@Wt(q;|8eVEKPNO;
+zyZ=pJyGpNGW>)_l%g26O3!nE`+qNHnbY|Vom`Ob6i!TQ9^DziaJ`l3o_x_0(r-c!>
+c*kZOe&B}_Kon$D<92$Ll)?uB5ttt&V0LMRds{jB1
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/through_symlink.btridx b/test/btrpkg/fixtures/crafted/through_symlink.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a9e60999114139ef7643d3c8945f31963b1f54e
+GIT binary patch
+literal 1521
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfedKD28xmh`1S)u7=WYh3ro|+Mb*ntkpKPFJsQ0
+zpFaXD-rjm3xo=M7#ni8N)|W;9(qw8~(;PC9>D@icSq}0t6GMzYv-Xz!66BWX{i0B=
+zrCgbj8MXRA&5^~DMP&_=nFR*tR&&2U9^iCdM5V_VVk`M%^3l(qI4fmm3+C=hT5*UW
+zY=L3hgWTLH_w(=k?Rc8y@*8fl0RzJ(P6h^;|EIp)-nL}J?_I6d={i#~jS>={JYR72
+zLYeY>pFVCcwPlupuKed`EVW%Uk-c-bmi~mkxaPkv_6WS`%~-f?dewg+6$S&S$p(xJ
+zQxg#8E?>n^^ux0J=bUg;*CX<e)a-LkKRFaIg<bi|fwhM@C01&D^xgGLWkb=S@P^rs
+z=h$?wy{Biq^v;x>1x}OoHE#<xXl&L0n-I>#%fax3gBN7Q5=Msmz6{y7Rk;`#81$S%
+zJ$+m}{oMQ+>KGZ>d_#g<T~{)41bDkMz6C{CX>k#|eokf*w|-%X8NYsEZjP|Ne|f5m
+zzE6H~wp(gy3PXZ6qk(>Yd1`!4esXqNYHEsJaefGcIy0kkVQx-JCKJe%s;V3o1_lQG
+zlH3AT{R)sHK-gSCpn0O?Wwt*G8yOso!l!-RAu+*evO!y+q`@UAiD@(6xUHShs-eNM
+zBR`GZJjA3{|CDPT&jSS~2Dg2T@=QD&KbaJ^l-z!5$0oqh-u<;z=a5me`VO{!X)$&c
+zo!z!3I#+eq82vNp2%i&ubl=@mQO}vcK~c?=D#=jx@qlN6R1u&0H^ZMRtCHFG3Gni=
+z9rI~oPjYfRxUqYQZo!QkVXEr!d%vyC>GyK8^3>7Ni7PxT)wS!C_^<Ezvbww-h3mgv
+zk(cn1mt1g?;Rr(?gOd$!Ndi+w%Yj#3aWgj-E%9*IJAPqmzu=;2GYnE)GP3RkbtqcC
+zJ&@JpbbY~(500X$s~sGhq8}(Z3JG}0TIerm5h*cv!}Xi7;q9L&KFz7W+nN+RRW!Hq
+zS8>1PF?D=#^HEDL!wkWLcbBou;4U&dyoQ52=BA(2ci!Bi$$@8c_w$5#oB6jL=y=Gw
+zs%7>PQSQh~*G`D-;LV-b+1t7>ATY-1R7cZN&UUUN8r#>$^>?f|ex$$GG)iqBn@mM^
+z_QS<2SM07nxODJgqoBzBti|EHv410v|F4^DeBj{4jgJ_woMw#L=PiG5t>UCLOU0Vl
+zeQeVb>{A&h#Dxfcn#^_cVd6G5pROdPC8vYhG}x0GGVV>->zjFZ&5n&vzg{_%^62Q|
+zCncdF|C&CWsLOK_I#zRpr{JN|i#-pFqOR$j>^im4(XIWAfUb#_*QE}N$tp#yT*ox4
+z_h>%yx|sG-=gq-L$uHgO4^KDKQ*TR%w_9zXoReccZN<sVEI*efYt54z4IMKrnrb4R
+zELpck+(+F`L$f51Bd^Bff9mz`wsjGQ*R7s-?up}z_&K)sT<X8C$XmSnzsvpgn}YxS
+zJHGNw?k+=%S1bR#x^?K;xfdDbpZw-7mivF@)}d#&4!t-W`uWzOzFqUSdZn)Vf5hzW
+zx{J!&7ysKNw@x<)iSPDzoo>!2KZTa!=kL>={#agf&-!1OaBXem&lfyCcXwJh?%P(7
+zHha@?-p_2)O>KfSPT%rf8dqk!tDx2FuEaTauD^E|?+X6B{6^&QTfXt8zs{=2lzy%K
+z5i0!Z(B<EnuV?L@f8~A0sX+Z@8_lY19`L_dQO_A>)||cP{Hi3W?8oyI*6ZpVT-}wq
+zrq{{c_Fw4sm2JKW{>QCv{hZKX?fy4??JB)$nOXgJEFb%AEqvZ%ZQFkQ(V2BSV<z#O
+xFTNPa&&MDz`9R2S-}@(GoEAphVvE_@G%G7^c9Nkab7=JKS%-BJwyHGf00552aVP))
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/xattr_empty_name.btridx b/test/btrpkg/fixtures/crafted/xattr_empty_name.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6388d04bd275d768d0b4e97d95aec21ba80a73a3
+GIT binary patch
+literal 1484
+zcmZ<?2@3FbXJBAtfM6yDC`bT_FfcrWaz8*N%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`ok6;-=8g(h!N10lK&za={D#38T+Gqd;d<oEiNVVW!<fE
+zE#=CL%&64|YK|<HEGlb|%q%cCx0?I?@c^guA}T$`5ZlNn-&Zh%sOL)UxFjGHC9ycS
+zt~@iB(QN06=LfA_C$zkh(1x3Az`(GHlYs&1O@^s&x3?|X@OxLQb-K=!OrwOvC(jpL
+zy-=n+-=~k;OKq8Dpez6R8B1*!O=R!ft))MqFRuCTi#-BwdNUSon_l%_NQJ=wYO(<%
+z!_)+Xxyx5E6#cL)|2Zez)b)t`BQ^V+(@zcsOkr2Pa$xOYPKlKoAANT{Q`t~-D7<0z
+z<2g3nYwzh9FTFEmXMxjXea+i~4H{eZ|0aB3e9Fd<!p;q{VhJO|eP4#`+p1g)3=Dcs
+zp`Jc2o_=or40Vi*Y`!5uuC6N?IRd=h8Q+2;thBg@v5Z|mCo_qGTfeZxj9<SnH%D0C
+zzdTh&-zPsg+buOUB|)3fKtI1cH9jXlIXf*iHASyDKZHS@nNhhgHzy^t$WTFndE(5=
+zjN&ee$vlru7c4W?h)CNct?9Ed@<F1`>?W35YhzSe#4he`>1W_&V#(P3lb?}o)7uaF
+z0#6UHy+~zBxwmFoDVy4kzT>ss%tBM|%1KSj5;K#mmud)~6Mb~w-BVG|n83cQW=fT0
+zDEoN8vp}kdPyL(W&y`il?E3_GdD)KnG_fZ+IUd~Dy+pU*#*Hvl_4vKt*5>qkxmkJY
+zXz9ci9+v9bbxQo#_k3Ah-j2fc->%3@_{d8xILUB?p^w4IhPNbvDWm1UE3dej8;h2B
+zxa%FiFtuNB(X<%`sV*5=_kubUE#Dr<YI3^1;Kv6?QPtHBj!n@IlpKWwyksr(7qp0!
+z7`);7&DikvPZXc#)ZcAQik&K&TluTF-}0C`zPS0QrI%rb;K94gSY~h+nH^rk!5wqc
+zPwG2w?$PAHv$^|u!o1D=+YWR*WL?!Vdx<D_<fUsT#CGuJPVDS$T^JA;<8-Q{X(?wr
+z*Ab2F>*M-6RvbUl-)kDBwvSDwB0KxxVwNj*S07wD_^?q><bKxTaNgLzk;nhnO*TGo
+z@Z!ctj8{%GM(y*KKe$$L(we1WP3%6lX$khJj1%HQ1V2sYy7@41o0?Bo64R2?L2VlB
+zNevnIChYaiyt`({#;0Ge97=g~bn%mt(2##kA5PTeISC!BIl@!$Q0c{<2S!oXbWV1i
+z+UV%kenvpoM9b?^hs9)-qE@bBn$>$WA9-C&d#Us0V5H=i?)8VKo9U^yCB)mUHc-yV
+zv7WZ#WM-D1OOv(c$&H4NnHEho5l@z^TO;nHZl|GH63CHPWAZ=s`ghy9h{NkvPdxX;
+z@kRU`+j}nc-&f=<Uj5(Y{`yV9|Nb3c`6hRlp~b6}e_q`>^z7V=jPg%@a~I3~zjEu)
+zvs;H=91i__>rmgWd0V|wSN%U?c6Z%H<?W0AZIWB3n}fu6`@2pz=aZj8OY!sfX-|JF
+zueoRaFHE?$HuC2S9-q5AtsD1kD@dEY={WCaw&|ueK^muT`7Vtsv)xtDYIaxRoIBUw
+zyNh=Pe_nng^7t*^c++2JRb)!P*8T_;es$>bZ_U@U_RhcZzT;G&{<4i`)iw|KU#zI-
+z3^Qxa-gACcl2rENc?#=wbq=oX%3Ray<Zk;fbo<IS-vs~T*0+96Xs~wwo4$6HUbW1u
+z{yUbB{k9f9@3FRRKmO><x}7nTc+MAJ4CLoy5SV-*WVi4A6ERK;BW|(9Y;BsA6*oJ{
+SP?9+``u42DItg1<8gu~4plovh
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/xattr_nul_name.btridx b/test/btrpkg/fixtures/crafted/xattr_nul_name.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e08b235a4984326c8033f57d7363c796b5c0a4bd
+GIT binary patch
+literal 1498
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?9a(_T2%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3ddI?~J?jlJD*k9rG@ZO{lai2f%c{c7!CD5|`#Ez`&RLaf
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW72Y03VclVZURH7y%{=4>~L
+z^in7{`x#TCW!E@&rH#;+!*G)g7#KEjGB7~B$uRZp_O>M(e(!3vPS=@|X_S!o<oSZD
+z7s{09`}A>psV%b%bmc!kW2x<;iR_)bwe%<S#WnwZu}9!dZ^puH)2sdqsW2EoO*UX;
+zn3{kvclj!Yq92y!Kj(y-x*m~#q-LLU`pKbyDeTHu4y--QDX~)HqwlU~DjSLpg*VK8
+zJjbSc?L9r?rFW+6EO45vuX$UrL1U}_--I8Gq3jG-*ttPgEMa80@5_*VTa}A}fkDqH
+z)YHes)6dPHp^lM}%{L^-)paE!M}W6G<6BUKl@=G37N-{JB{C$HvFqn#CUNT*mYDJD
+z7v|;&>-(3d%IN##Cuh5*rlv3?Xfqn<=a;9(=j116r=_N*=oROOFsL&#Di`MFq+}ME
+zD12ZNoHdvEx{G2WPqNj56{ZCdX}5Z}oY^FJompXhvcdNi3qHtA>HZ^-;7~pNLtq1=
+zYW#!a3@lA=i{c~%UlmNYl~$7IZOyr1)0oPpwxjR(+M|g=6Yr|=u6`w^CuuKrCj7+O
+zru+9!Nj+c!`?;DaRg$6X;{neCsUkl0Z-zftRwc9V6X4}#JLc2Gp5)|saAWrp-GUo8
+z!c^7c_kLTO)9>YG<*B2k6IXaxs%zIN@n7HbWp#Nw3fF(TA}`@1FS+0(!x4r)1}7Wd
+zk_4uVmIJT6;%06vTH@iZcl^TCe!)f4W*DTpWMth7>QJ<NdmyXH>H2~n9~?zhS35X1
+zML$q-6cX@~wa{PCB2r@ThU+(D!`nYme40~#w>2qts%UQIui}2oW9s<g=A)Kgh8cnf
+z?=EAR!Cho_cnt@4%uPS3@4UH3lLOD@?&k^fHuG;g(D9IURm<!pqTG>}uALCu!J9j=
+zv$u6&Kwym1sg9<lob6mkG`6pg>+e``{78SVX_VSNHkpd-?1zh4uGn3DaOvQ~MnRGL
+zS&PGYWB*1T|6e!R_`t!78y_)VIn5Zg&s+ZBTE$6gmWnm8``D%>*rzg1hzk+?G@0w>
+z!^CZBK3z#nOHK#1X|N|XWZavu*EjR-njIUTe!X%i<<Zf_Pf9{V{xy9#QJ3c=bgbqG
+zPr*Z_7keHUMP1W5*>!58qg(qK0bLU<uS*>klU0gZxsGX8@6mkZbusOw&YOdgl3%*l
+zAD(Wer{0zjZ@1b&IVZ<@+KQ8zS$-}})|w|b8aifLG}S~rS+Z`8xR1J>hGt11M_!G|
+z|J3W>ZR;WquUkFw+!Mza@pEkNxzvAOk+*pDf0z5~HwFLucYNiW++BtiuU7tfb?eZx
+zb1yQ=Kl#mFEcgG)twYal9eQy%^z*GleY@su^-5j!|A^V$br+SlFaEblZk=up65s9b
+zI^CR4ehMwc&)=s#{jt2}p7p;l;o92BpD%cP?(Vd1+_$YDZT6<)yr0>oo7x0voWA9|
+zG_K5cS3#@UU5Rt<Tz~H_-WB|L`Hjfqw|wJGf1Op4Dg9deBUJd+q07HDU(eb*|H}K0
+zQ-S)+Hkwu2Jm7z^qMkF%tT}tn`Bh0$*^lQbtk=~!xVkHIO|O%??Z43NE8Bb%{Eu7T
+z`Z=M&+Wl|(+EsehGPC;cSU&dKTKK%j+P3}pqciJv#!TWlUwko;pN~Oc@_~@uzV}bW
+hI4z90#TK)*X;xO;>?A`;=FsTdvkvPdY*lH{0RRR$bzJ}e
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/crafted/xattr_ok.btridx b/test/btrpkg/fixtures/crafted/xattr_ok.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c32275cae5764ebe61f9107bc363862c686ca8d
+GIT binary patch
+literal 1497
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffe?Ea(_T2%$Okp)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3dYu`@g@2}|*lHil-okl?kwM4ILRsUr`|Yq>H+rJ?7qOLV
+zDOYA>My)<jb7Zk(QCWjzW`V)E)!gro2RNM<QRy*;*hW6-e&Vv4_46J6Hapu{?wzUG
+zWD=LL%Ixxav(;KJ%k(wYq`^%#U|`t9$-n^hCd1UX+uN3G_`R#uI$dW<rcpxTljjSr
+zUMN$Z@6*TarMAp6(3SuEjHR}VCbD<#*3zHQ7uWpv#U6n-y%`I)O|SYdq{3hTHQ9iX
+zVQK=x+~unnihfv@|C|$U>Uu=}k(zzZ=_iK*rm!ntIk5IHr^HH)kG{K}sca}Z6y7lV
+z@f@4(wfFRlm)@DOv%qPxzUFPg292%ye-nN%`m!@zVdn-}v4oM~zAr=eZB;G?1_nK+
+zP){EhPd_(*hB`(@Hs6pSSJ#z{90A_$jBh~^R$5$CTAW&>m&nY>#IB!{nZ&JMSYpPn
+zUznRCtnXi*Dx>d{pPcQMnwr9ppv`EYpI@FDpOc@QotB!KqF0<B!l2H~s9czvlag6v
+zqQJmBapr2~>n@7PGRam8R+t7vq-~O3d*)KdYlcb3H_qS=38?5l<yyy~ps?5bkA#E6
+zbo~#`42>zf=ZGKUG`w^2xUgFS!xH8voNJ5|nzAeIY_d>Tcr$ld;_9@-$sZRtR=e&B
+z{darq8ecuIm#djlB^k;-9`G!XD&kZBX83buRWkcN0bX9VV?IsnNluOjH+C=4Ex2(b
+zOjSL8@3*x%{a$WXo;q4OafOGax^|rs|MfjzR+qP<aQ(L{@)ADsk_%2U9AW5VaI)bo
+zNnpxoIq=FWZsx|KB_8g2$1hCn7hE)LhC!-JM%KNc4n@ni2eO)+t}poU!BJFowS!|*
+z^aCYFAptL03;hKxA|(cIxPCJ>y!{i!r#ba^Ta#j^isn}SD(<&Drj9ReK5FS@m?3!Z
+z?lP7c+(l-G*Klyh-1L+B&YOEQIq+=mex5LIGyk>&9S>Powai{3${l&>+6l28ytxxQ
+zds`O<1jaa>>S$WZ+0J!DWBdBJ{*D#LkM#GNMyc&%lc~tgez=(Birv)*mkvH`6co9i
+zwK$wN_HX3z|8<j%4;;L>@e$*d(~MF3yyXwBRh+bDsaO-ck8N6leJbOGxDdflleum_
+zOx&jC)0M=u<aAJ*276LN#=Qx9eKYT_*|G8I*DHro9vxl$q$D)tU(<&Zb$L!g$7+u7
+z6g*UVvFCwN)HR)xU8goWy0xDX&^6KWy3}DYS*56z>zHQs9?eHy7t>zqyg3*t`K5dP
+z;pt|2>TL<}cB>7Pb8@VwtvH#P<>%65t$A{zp<|{+Q%%H^CF|CR`>5M#XqE(W<kgt`
+zPrd%#wl3oEy44fUJ#l;yKgaf-Oa1p1d5c&7ce%fQQ}Dlk$5+0|-DPO;YUQ6-w+=l!
+z_adYGli%FMa{sT~I`r(;p%;fkKi@jkw`<;3uhdolkC@$EcTsu!;(wdu*6HRT@!kHe
+z)6Mzhr_fUT{C(QfAIod*S^o<YuC0yy`GUvi?oR8*ecKAsW^X#q`<ZRJsZEf^>07=_
+z<H~Gz6||b&l{n|l_4n@LUBRE1--tYZ%QxQi*I5;r(yz5YLWN%)y8K)7^{l<~ue|R#
+z6{x>#qgl1h1O68)>N&&AnzQ$uUzH@4{dk_jdR?7^tGhDS^g6lQ{tMl{vduTa|G4$7
+zpA#Ca-T$VqU8PqoGpqlO<zv6Ch0lAeZQGAOI<szP%p{)k#TNtl`4|Ky9|+m)d;dg?
+g)53^bY%yD#W@W|APBN5a4voG&>#$D3R+R=F0Dp6IfdBvi
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/keys/btrpkg-test.pub b/test/btrpkg/fixtures/keys/btrpkg-test.pub
+new file mode 100644
+index 00000000..09bb9041
+--- /dev/null
++++ b/test/btrpkg/fixtures/keys/btrpkg-test.pub
+@@ -0,0 +1,2 @@
++untrusted comment: btrpkg public key btrpkg-test
++RWRyo2c5TFcV7EAVNr8qF8Cdf2vdl5BkNRWFISWg186/YHQ+qde1pG6t
+diff --git a/test/btrpkg/fixtures/owe-lockfeed.btridx b/test/btrpkg/fixtures/owe-lockfeed.btridx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9164c441bdf29aa1a421e5bc2d649aada8105ad4
+GIT binary patch
+literal 1403
+zcmZ<?2@3FbXJBAtfM6yDC`bT_Ffbf~a-TybIGG^=)lmAako{>#+mmyHwc4ikWz5<0
+z^GATi+glGL_sxmCnELh3`c=Wd%d9ypeV2Rp@t#@!`nZ=L^YS?h-p}4<xXY7G>gwI&
+z<(A10=N);MHS^P{1HPgs&aS$!V;!&gL$P$XpabukpFnIQpX8Y}-_v@tpZChh3-$W!
+z`o~hYac=n>&K<*dRXOma`OFr$$p#Dzn>ZO5px$Jd`gVKUk`2FiwOXg^OvyA#NPO~q
+z!PN_8%JY5txV_YtSq8fDpP#YRcF{!k&fQx26Z+zs|GwBG@TNCo;kM~j|AkZ-44@_(
+zFfvR{K$yFH6+_Vv%krOd!cAR|$UjoE&pG|%P{0&+<tqo)9_Ex-sqxWw*E5w3MTf#0
+zW<Q=|)4ledp7GK<Q+5_OP1e`EE!d#3RsV0obH<~r3{%*+8I~|I-1lY3zOBl@#lXOz
+z=M?Jc<KpS(=Fd>a$jIg!66ET-vW}4>z}ubiEhxT9i;LLxb25{-^$SbP`1K2ObA<K%
+z%Ts0aee#pD-BMFi7#I??84dLF%TwcX()5b+L)4j-Q!<Ox7X(ZT)%7VB@MOAZ>aWb^
+zVb*l#<gJHm8|9fI6P)GP+%jHTxhkK1mf19O6Wa{FYjaM{ka90x;{T-do|D_mckb78
+z9y32Tb+GVW+hD;6_CYn%UvY*ln)2No49sgM`DRNy^0dAGC(6CIdg;$8eAS$)swO6T
+zzr>`u1?{?Wthd}bqrUd|xsw-`seDno@Z#}RkMq0#R)yT{>0WpE*XMRWv-c$xb5ffg
+z{>%B!eo?b^!_B_itM$#dzt6Xez0do4&vi~?cNKQU{KSZ7@m7UNGSl*p9##3gSMN2;
+z%Htc8H0&%L1r;=B9*x{4)uE)h<;dCHS|O$@j=Zo9ai25W%kpI1zaI}(FFts*G;I^l
+zM3ou(GqpCKe>HLU#yL?F*!CHyaVWZMbU7MP<JvWEqgC-0Q~BwS<)56}eZtUgz1OqH
+z#m{!ke*JpW@pjX_`;uyIyuTM_de8RdZSCW?oqyM@)%w5isAfUMrS-etMStIZ`r*=b
+z&zYZ3VTzfz<L9-P1zQcQHP?!q<T+=f_{Hpk(Q31!856x6IkxWPYV+N?Y+BRb>{I_P
+z{QqSBNF&D2`Od1HF;@OBZZ2S7lgzi~Y?meLMZSGEIbF3SmwukNC25)6iqCnUrI}2m
+z7ql}oFeodyr{<*=C6=V7C?r)X<R)gP7G$R@nCltp8E`2plon^^r7NTr<>!|ul%*CG
+zXXfWA80s0D>ltz7CFZ6o*ec|gr|Rb9CugUnrluq%7FVPsmL!%`7Npu5=o#r5TId?4
+zq!uUpC=@3brKaX7lx3!*<|`=V=BJeAq$;H47b%ovq$>D_yDF3?=HwJ47Niy_q~@h(
+z=B09#7Ug7=loS+O>FcLwmSmJB=_Tjq>gVSsawU~!=A@(=np>J0S{NCam~#~*CTAz6
+z`{yPWC1+GB*c3bD>*W`v+i?|VR+*cb8<}ubSeV6|nQ-M~Ca324dWLYNq!y&+r4*K!
+z>87M6=Oh*-mSmQtawYqhr|P-ol*Shq2NWv=mIRh&CTDZ$Y6N%~uwQ5X=%~8V_8YGN
+z8_$B(haD$qu9;XdUCl91X?B{-s+HkgFPk`zJaFK=^+aiLgId6buy0R}^#0p(;M&%N
+m+$e{O1$v^P`@{uLYdqE}kmL!qd0;Vjv0g@L{xUOv2NnS9Djv=N
+
+literal 0
+HcmV?d00001
+
+diff --git a/test/btrpkg/fixtures/owe-lockfeed.btridx.sig b/test/btrpkg/fixtures/owe-lockfeed.btridx.sig
+new file mode 100644
+index 00000000..ee031016
+--- /dev/null
++++ b/test/btrpkg/fixtures/owe-lockfeed.btridx.sig
+@@ -0,0 +1,2 @@
++untrusted comment: verify with btrpkg-test.pub
++RWRyo2c5TFcV7JCE8mZPYM0Ws6wQdfiicjktUUQEKK8GlYfUQd9SQHrzs5CqjSA8/fO1P2IuAX0QeVHs3+Nakkti7GX66DYA0Q0=
+diff --git a/test/btrpkg/fixtures/owe-lockfeed.dump b/test/btrpkg/fixtures/owe-lockfeed.dump
+new file mode 100644
+index 00000000..0fa4dfdf
+--- /dev/null
++++ b/test/btrpkg/fixtures/owe-lockfeed.dump
+@@ -0,0 +1,16 @@
++id 0c9a9f493bb34e4ba959d07f2f072fc665b609b4f3570b5c0ed52351c9379984
++header 2 90112 194 743 777 891 index 1403 base 4096
++c 0 12288 2482 2 95edb786a4b0fbba853b672c9469326061e4e7a0d5d076239f4c8e0b4a26a639 51450fcf98a53da2910789bb2a2f908e5e83fde8bc10ec8d68a1b6977aff1224
++c 12288 77824 24725 2 a7aa0072f83977f99c573545c41fe2263f6ccbe4c250940723d4c0adc30918a9 28f14dbae624b072c257809be39c3c8badde2e33a5dc94b97042932f29db1180
++e 0 420 0 0 1795182047 9691 0 0 2e4255494c44494e464f  0
++e 0 420 0 0 1795182047 382 0 1 2e4d54524545  0
++e 0 420 0 0 1795182047 425 382 1 2e504b47494e464f  0
++e 1 493 0 0 1795182047 0 0 0 757372  0
++e 1 493 0 0 1795182047 0 0 0 7573722f6c6962  0
++e 1 493 0 0 1795182047 0 0 0 7573722f6c69622f717436  0
++e 1 493 0 0 1795182047 0 0 0 7573722f6c69622f7174362f716d6c  0
++e 1 493 0 0 1795182047 0 0 0 7573722f6c69622f7174362f716d6c2f4f7765  0
++e 1 493 0 0 1795182047 0 0 0 7573722f6c69622f7174362f716d6c2f4f77652f4c6f636b46656564  0
++e 0 493 0 0 1795182047 76640 12288 0 7573722f6c69622f7174362f716d6c2f4f77652f4c6f636b466565642f6c69626f77655f6c6f636b666565642e736f  0
++e 0 420 0 0 1795182047 84 807 1 7573722f6c69622f7174362f716d6c2f4f77652f4c6f636b466565642f716d6c646972  0
++small 891 fc6fcdcfffbbf18d621535012e0c9251b3e6e9e9db77cb3e29783a48bc08a30c
+diff --git a/test/btrpkg/meson.build b/test/btrpkg/meson.build
+new file mode 100644
+index 00000000..81acddcf
+--- /dev/null
++++ b/test/btrpkg/meson.build
+@@ -0,0 +1,13 @@
++btrdump = executable(
++  'btrdump',
++  'btrdump.c',
++  include_directories : includes,
++  link_with : [libalpm_a],
++  dependencies : alpm_deps,
++  install : false)
++
++test('btrpkg',
++  find_program('run.sh'),
++  args : [btrdump.full_path(), meson.current_source_dir() / 'fixtures'],
++  depends : btrdump,
++  protocol : 'tap')
+diff --git a/test/btrpkg/run.sh b/test/btrpkg/run.sh
+new file mode 100755
+index 00000000..f74702fe
+--- /dev/null
++++ b/test/btrpkg/run.sh
+@@ -0,0 +1,43 @@
++#!/bin/bash
++# Tests for lib/libalpm/btrpkg.c through test/btrpkg/btrdump.
++#   run.sh BTRDUMP FIXTURES
++# Fixtures come from btrpkg (https://github.com/hegjon/btrpkg): a real index and its signature,
++# its `btrpkg dump` output, the public key, and indexes from bench/craft_indexes.py (valid hashes,
++# bad contents) with the verdict btrpkg's reader gives each.
++set -u
++D=$1; F=$2; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
++n=0; failed=0
++ok() { n=$((n+1)); echo "ok $n - $1"; }
++no() { n=$((n+1)); failed=$((failed+1)); echo "not ok $n - $1"; }
++check() { local what=$1; shift; if "$@" >/dev/null 2>&1; then ok "$what"; else no "$what"; fi; }
++refuse() { local what=$1; shift; if "$@" >/dev/null 2>&1; then no "$what"; else ok "$what"; fi; }
++
++IDX=$F/owe-lockfeed.btridx
++"$D" "$IDX" > "$T/dump" 2>&1
++check "dump matches btrpkg's" cmp -s "$T/dump" "$F/owe-lockfeed.dump"
++id=$(awk '$1=="id"{print $2}' "$F/owe-lockfeed.dump")
++check "expected id accepted" "$D" --id "$id" "$IDX"
++refuse "other id refused" "$D" --id "$(echo "$id" | tr 0-9a-f 1-9a-f0)" "$IDX"
++check "every bit flip and cut refused" "$D" --mutate "$IDX"
++
++check "good signature" "$D" --verify "$IDX.sig" "$F/keys" "$IDX"
++cp "$IDX" "$T/t.btridx"; printf '\001' | dd of="$T/t.btridx" bs=1 seek=200 conv=notrunc 2>/dev/null
++refuse "signature over a changed header refused" "$D" --verify "$IDX.sig" "$F/keys" "$T/t.btridx"
++mkdir "$T/none"
++refuse "unknown key refused" "$D" --verify "$IDX.sig" "$T/none" "$IDX"
++mkdir "$T/rev"; cp "$F"/keys/*.pub "$T/rev/"
++kn=$(sed -n 2p "$F"/keys/*.pub | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n')
++echo "$kn  # revoked for the test" > "$T/rev/revoked"
++refuse "revoked key refused" "$D" --verify "$IDX.sig" "$T/rev" "$IDX"
++echo "not-a-key-number" > "$T/rev/revoked"
++refuse "malformed revoked file refused" "$D" --verify "$IDX.sig" "$T/rev" "$IDX"
++head -c 40 "$IDX.sig" > "$T/short.sig"
++refuse "truncated signature refused" "$D" --verify "$T/short.sig" "$F/keys" "$IDX"
++
++while read -r name expect; do
++	if "$D" "$F/crafted/$name.btridx" >/dev/null 2>&1; then got=accept; else got=reject; fi
++	if [[ $got == "$expect" ]]; then ok "crafted $name: $expect"; else no "crafted $name: expected $expect, got $got"; fi
++done < "$F/crafted/cases.txt"
++
++echo "1..$n"
++exit $(( failed > 0 ))
+-- 
+2.56.1
+
