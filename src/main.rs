@@ -13,7 +13,7 @@ use anyhow::{bail, ensure, Context, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -113,10 +113,25 @@ fn frame(level: i32, data: Vec<u8>) -> Result<(u8, Vec<u8>)> {
     if align(z.len() as u64) < data.len() as u64 { Ok((COMP_ZSTD, z)) } else { Ok((COMP_NONE, data)) }
 }
 
-fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64, nframes: u64, min_frame: u64) -> Result<()> {
+/// A package archive's tar stream, by its magic bytes: zstd (Arch, Omarchy), xz (Arch Linux ARM
+/// ships .pkg.tar.xz, `any` packages included), gzip, or plain tar.
+fn package_reader(input: &Path) -> Result<Box<dyn Read>> {
     let f = File::open(input).with_context(|| format!("open {}", input.display()))?;
-    let dec = zstd::stream::read::Decoder::new(BufReader::new(f))?;
-    let mut ar = tar::Archive::new(dec);
+    let mut b = BufReader::new(f);
+    let magic = b.fill_buf()?.get(..6).map(<[u8]>::to_vec).unwrap_or_default();
+    Ok(if magic.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        Box::new(zstd::stream::read::Decoder::with_buffer(b)?)
+    } else if magic.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]) {
+        Box::new(liblzma::read::XzDecoder::new_multi_decoder(b))
+    } else if magic.starts_with(&[0x1f, 0x8b]) {
+        Box::new(flate2::bufread::MultiGzDecoder::new(b))
+    } else {
+        Box::new(b)
+    })
+}
+
+fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64, nframes: u64, min_frame: u64) -> Result<()> {
+    let mut ar = tar::Archive::new(package_reader(input)?);
     let mut entries = Vec::new();
     let mut small = Vec::new();
     let mut jobs: Vec<(u64, Vec<u8>)> = Vec::new(); // image_off, padded chunk data

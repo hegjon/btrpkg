@@ -89,6 +89,40 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Sharing btrparts between x86_64 and aarch64 (2026-11-21)
+
+Could one store serve both architectures? Measured with the aarch64 builds of the packages in the
+x86_64 mirrors: 849 of the 855 have one at the same version (Arch Linux ARM for core/extra,
+Omarchy's aarch64 repository); 848 downloaded (one 404). They were converted through the same
+pipeline (omarchy-iso's `index-offline-mirror.sh`, `btrpkg-offline-mirror.sh convert`, i.e.
+`repo-update`), and every aarch64 chunk was looked up in the x86_64 stores' raw maps
+(`bench/cross-arch-share.py`).
+
+| aarch64 packages from | packages | chunks | already in the x86_64 stores |
+|---|---|---|---|
+| Arch Linux ARM core | 182 | 710 MB | 99 MB (14.0%) |
+| Arch Linux ARM extra | 609 | 1,571 MB | 684 MB (43.5%) |
+| Omarchy aarch64 | 57 | 1,005 MB | 466 MB (46.3%) |
+| all | 848 | 3,285 MB | 1,249 MB (38.0%) |
+
+- **It works without any change to the format.** Chunks are cut per file from the file's start
+  and named by content, so identical files give identical chunks, and here every shared chunk was
+  byte-identical too (the same zstd version and settings on both sides), not only the same
+  unencoded data. A combined store would add 2.04 GB for aarch64 instead of 3.29 GB.
+- **Not one package file is shared.** Arch Linux ARM rebuilds even `any` packages
+  (`noto-fonts` comes as `.pkg.tar.xz` with `%ARCH% aarch64`), so a store of whole package files
+  shares nothing; the contents still match (noto-fonts-cjk 100%, Omarchy's themes 100%,
+  omarchy-dev 99.9%, libime 97.7%).
+- **Firmware shares nothing**: `linux-firmware*` (474 MB, most of core's share) ships its files
+  zstd-compressed on Arch (`PS_ASIC.pst.zst`, 56 MB for atheros) and uncompressed on Arch Linux ARM
+  (`PS_ASIC.pst`, 148 MB): the same firmware, different files. Without it, 44.4% is shared.
+- **Binaries don't share**, as expected: google-chrome 9.7%, webkit2gtk 2.1%, mise-bin 0.2%. What
+  is shared is architecture-independent data inside architecture-specific packages (libreoffice
+  16.7%, qt6-webengine 22.4%, hyprland 90.6%).
+- `btrpkg convert` read only zstd, and Arch Linux ARM ships `.pkg.tar.xz`: it now reads xz and
+  gzip too, by magic bytes (`liblzma`; btrpkg-git depends on `xz`). Spot checks: mesa, python and
+  noto-fonts installed from the converted aarch64 packages are identical to bsdtar's extraction.
+
 ## Omarchy ISO with the btrpkg format (prepared, not built yet)
 
 omarchy-iso branch `btrpkg` (local, in `~/Work/omarchy-iso-btrpkg`, on `quattro` `12a5daf`):
