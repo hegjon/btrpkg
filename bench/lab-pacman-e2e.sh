@@ -1,8 +1,10 @@
 #!/bin/bash
 # Stock pacman against pacman with the btrpkg patches, on a lab machine's live system.
 #   root@host: bash lab-pacman-e2e.sh OUTDIR "TARGETS..." [ROUNDS]
-# OUTDIR must be outside the root subvolume (/var/log/...). Needs: /opt/pacbtr/{pacman,libalpm.so*}
-# (the patched build), /usr/local/bin/btrpkg, /etc/btrpkg/pacman-test.conf, /etc/btrpkg/keys,
+# OUTDIR must be outside the root subvolume (/var/log/...). Needs: the packages pacman-btrpkg and
+# btrpkg-git (packaging/), or a development build through PACBTR/BTRPKG (e.g.
+# PACBTR="env LD_LIBRARY_PATH=/opt/pacbtr /opt/pacbtr/pacman" BTRPKG=/usr/local/bin/btrpkg),
+# /etc/btrpkg/pacman-test.conf, /etc/btrpkg/keys,
 # /tmp/fix-mtimes.py, snapper config `root`.
 # Per round and scenario: empty the cache of the targets, drop caches, `pacman -S TARGETS`, sync,
 # then record time, bytes written to the root's partition, data space used, `pacman -Qkk`, a
@@ -16,13 +18,14 @@
 set -uo pipefail
 OUT=$1; read -ra T <<< "$2"; ROUNDS=${3:-1}
 CONF=/etc/btrpkg/pacman-test.conf; BCONF=/etc/btrpkg/pacman-btr.conf
+PACBTR=${PACBTR:-/usr/bin/pacman-btrpkg}; BTRPKG=${BTRPKG:-/usr/bin/btrpkg}
 mkdir -p $OUT
 [[ $(findmnt -no TARGET -T $OUT) != / ]] || { echo "$OUT is in the root subvolume; use /var/log/..."; exit 1; }
 exec > >(tee -a $OUT/log) 2>&1
 if [[ -n ${REPOS:-} ]]; then
   cp $CONF $OUT/pacman-stock.conf; printf '%b\n' "$REPOS" >> $OUT/pacman-stock.conf; CONF=$OUT/pacman-stock.conf
 fi
-{ cat $CONF | sed '/^\[options\]/a BtrPkgHelper = /usr/local/bin/btrpkg --h2c'; } > $BCONF
+{ cat $CONF | sed "/^\[options\]/a BtrPkgHelper = $BTRPKG --h2c"; } > $BCONF
 CACHE=$(pacman-conf --config $CONF CacheDir | head -1)
 part=$(lsblk -sno NAME,TYPE $(findmnt -no SOURCE / | sed 's/\[.*//') | awk '$2=="part"{gsub(/[^a-zA-Z0-9]/,"",$1); print $1; exit}')
 written() { awk '{print $7*512}' /sys/class/block/$part/stat; }
@@ -70,7 +73,7 @@ run() { # $1 scenario $2 round
   elif [[ $1 == pacbtr ]]; then
     pacbtr --config $CONF --h2c --no-snapshot "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
   else
-    LD_LIBRARY_PATH=/opt/pacbtr /opt/pacbtr/pacman --config $BCONF -S --noconfirm "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
+    $PACBTR --config $BCONF -S --noconfirm "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
   fi
   sync; b=$(now)
   local w1 u1 bad

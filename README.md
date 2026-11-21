@@ -89,6 +89,39 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Packages: `btrpkg-git` and `pacman-btrpkg` (2026-11-21)
+
+Step 5. `packaging/build.sh` builds both packages in a clean Arch container from the PKGBUILDs in
+`packaging/` (details: `packaging/README.md`):
+
+- **`btrpkg-git`** installs `btrpkg` and `pacbtr`, plus a weekly `btrpkg-cache-clean.timer`
+  (keeps 3 versions per package).
+- **`pacman-btrpkg`** is Arch's pacman package (the same commit, Arch's 4 patches, the same
+  options) plus the 3 btrpkg patches. It installs beside the system pacman:
+  - `/usr/bin/pacman-btrpkg` runs `/usr/lib/pacman-btrpkg/pacman` with its own libalpm (RUNPATH).
+  - Its default config is `/etc/pacman-btrpkg.conf`: `BtrPkgHelper` plus `Include = /etc/pacman.conf`.
+
+pacman is untouched and shares the database, lock, cache, hooks and keyring with pacman-btrpkg.
+Removing `pacman-btrpkg` leaves a stock system.
+
+Checked:
+- In the clean build container, pacman's whole test suite passes: 339 tests including btrpkg's
+  73 subtests, 0 failures. The 19 failures seen on the desktop come from the desktop's
+  environment. btrpkg's 18 tests also pass.
+- On p14s, the system pacman and pacman-btrpkg load different libalpm files. Both report the same
+  49 pending updates from the real repositories, and `pacman -Qkk` is clean for both packages.
+- The e2e run with the packaged binaries (3 rounds) was identical to stock in every round:
+  4.70 s against stock's 7.34 s.
+- All 9 robustness checks pass.
+- The timer's service, run through systemd, kept the newest 3 versions and removed the 2 older
+  ones together with their `.sig` files.
+
+Two build findings:
+- zstd-sys has to link the system's libzstd. Otherwise it compiles its own copy with makepkg's
+  `-flto` CFLAGS into GCC LTO objects, which Rust's default linker (lld) can't read.
+- The btrpkg patches carry binary test fixtures, so they go in with `git apply`; `patch` can't
+  apply them.
+
 ## Iteration 3: pacman's sandbox, mirrors, cache cleaning, real sizes (2026-11-21)
 
 Steps 1-4 of the post-iteration-2 list: the parts a person other than us would trip over first.

@@ -1,0 +1,13 @@
+[Unit]
+Description=Remove old btrpkg cache files (keep the newest 3 versions of each package)
+Documentation=https://github.com/hegjon/btrpkg
+
+[Service]
+Type=oneshot
+# every CacheDir of pacman.conf, like paccache.service
+ExecStart=/bin/sh -c 'pacman-conf CacheDir | while read -r d; do /usr/bin/btrpkg cache-clean --keep 3 "$d"; done'
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full

@@ -1,0 +1,66 @@
+# Maintainer: Jonny Heggheim <hegjon@gmail.com>
+#
+# btrpkg: the format tool, repo tool, client, and the helper pacman-btrpkg runs (BtrPkgHelper).
+# Builds the repository's HEAD; BTRPKG_SRC overrides the source, e.g. for an unpushed tree:
+#   BTRPKG_SRC="git+file://$HOME/Work/btrpkg#branch=master" makepkg
+pkgname=btrpkg-git
+_name=btrpkg
+pkgver=0.0.1.r0.g0000000
+pkgrel=1
+pkgdesc="btrfs-native packages: format and repository tool, client, and pacman helper"
+arch=(x86_64)
+url="https://github.com/hegjon/btrpkg"
+license=(MIT)
+depends=(curl libcurl.so gcc-libs glibc zstd libzstd.so)
+makedepends=(cargo git)
+optdepends=('pacman-btrpkg: pacman that installs btrpkg packages')
+provides=("$_name")
+conflicts=("$_name")
+source=("$_name::${BTRPKG_SRC:-git+https://github.com/hegjon/btrpkg.git}"
+        btrpkg-cache-clean.service
+        btrpkg-cache-clean.timer)
+sha256sums=('SKIP'
+            '5d195055895f0d8f2efdd1b484de008925654763a78dce72670a12fc4983da3a'
+            '9c90ad7cdb7e2e8d6c8e1d3861008995892a766ec0d9fcdf94147bbb361322c0')
+
+pkgver() {
+  cd "$_name"
+  printf "%s.r%s.g%s" "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" \
+    "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$_name"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$_name"
+  export RUSTUP_TOOLCHAIN=stable
+  # the system's libzstd: zstd-sys would otherwise build its copy with makepkg's -flto CFLAGS,
+  # GCC LTO objects that Rust's linker (lld) can't read
+  export ZSTD_SYS_USE_PKG_CONFIG=1
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_name"
+  export RUSTUP_TOOLCHAIN=stable
+  export ZSTD_SYS_USE_PKG_CONFIG=1
+  cargo test --frozen
+}
+
+package() {
+  cd "$_name"
+  install -Dm755 target/release/btrpkg "$pkgdir/usr/bin/btrpkg"
+  # pacbtr: the iteration-1 upgrade command, the same binary under another name
+  ln "$pkgdir/usr/bin/btrpkg" "$pkgdir/usr/bin/pacbtr"
+  install -Dm644 -t "$pkgdir/usr/lib/systemd/system" \
+    "$srcdir/btrpkg-cache-clean.service" "$srcdir/btrpkg-cache-clean.timer"
+  # signify public keys of trusted repositories: packaged keys here, local ones in /etc/btrpkg/keys
+  install -dm755 "$pkgdir/usr/share/btrpkg/keys" "$pkgdir/etc/btrpkg/keys"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_name/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

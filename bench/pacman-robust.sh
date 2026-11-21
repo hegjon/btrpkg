@@ -8,7 +8,7 @@
 #   5. DisableSandbox: still works (helper runs as root, no Landlock)
 #   6. -Sc removes a leftover download directory
 set -uo pipefail
-PAC="env LD_LIBRARY_PATH=/opt/pacbtr /opt/pacbtr/pacman"
+PAC=${PACBTR:-/usr/bin/pacman-btrpkg}; BTRPKG=${BTRPKG:-/usr/bin/btrpkg}   # dev build: see lab-pacman-e2e.sh
 C=/etc/btrpkg/pacman-test.conf; BC=/tmp/robust.conf
 T=${T:-mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros owe omarchy-settings-dev gliff omawrite signed ufw-docker}
 CACHE=/var/cache/pacman/pkg
@@ -16,8 +16,8 @@ DEV=$(ip -o route get 192.168.2.2 | grep -o 'dev [^ ]*' | cut -d' ' -f2)
 rx() { awk -v d="$DEV:" '$1==d{print $2}' /proc/net/dev; }
 clean() { for f in $(pacman --config $C -Sp --print-format "%f" $T); do rm -f $CACHE/${f%.pkg.tar.*}.pkg.btr $CACHE/${f%.pkg.tar.*}.pkg.btr.sig; done; rm -rf $CACHE/download-btrpkg $CACHE/download-btrpkg.want; }
 conf() { # $1: extra lines for [options], $2: server lines for [omarchy]
-  awk -v o="$1" -v s="$2" '
-    /^\[options\]/ {print; print "BtrPkgHelper = /usr/local/bin/btrpkg --h2c"; if (o!="") print o; next}
+  awk -v o="$1" -v s="$2" -v b="$BTRPKG" '
+    /^\[options\]/ {print; print "BtrPkgHelper = " b " --h2c"; if (o!="") print o; next}
     /^\[omarchy\]/ {print; if (s!="") print s; inrepo=1; next}
     /^\[/ {inrepo=0}
     inrepo && /^Server/ {print; next}

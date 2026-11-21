@@ -1,0 +1,91 @@
+# Maintainer: Jonny Heggheim <hegjon@gmail.com>
+#
+# pacman with the btrpkg patches, installed beside the system pacman: Arch's pacman package (same
+# commit, same patches, same build options) plus libalpm/000*.patch of the btrpkg repository.
+#   /usr/bin/pacman-btrpkg           -> /usr/lib/pacman-btrpkg/pacman (RUNPATH to its own libalpm)
+#   /usr/bin/pacman-btrpkg-conf      pacman-conf of this build
+#   /etc/pacman-btrpkg.conf          default config: BtrPkgHelper + Include = /etc/pacman.conf
+# It shares the database, lock, cache, hooks and keyring with the system pacman, which stays
+# untouched and can be used at any time.
+pkgname=pacman-btrpkg
+_commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
+_archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
+pkgver=7.1.0.r9.g54d9411
+pkgrel=1
+pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
+arch=(x86_64)
+url="https://github.com/hegjon/btrpkg"
+license=(GPL-2.0-or-later)
+depends=(pacman btrpkg
+         bash curl libcurl.so glibc gpgme libgpgme.so libarchive libarchive.so
+         openssl libcrypto.so zstd libzstd.so)
+makedepends=(git meson)
+checkdepends=(fakechroot python)
+backup=(etc/pacman-btrpkg.conf)
+_arch=https://gitlab.archlinux.org/archlinux/packaging/packages/pacman/-/raw/$_archpkg
+source=("pacman::git+https://gitlab.archlinux.org/pacman/pacman.git#commit=$_commit"
+        "revertme-makepkg-remove-libdepends-and-libprovides.patch::https://gitlab.archlinux.org/pacman/pacman/-/commit/354a300cd26bb1c7e6551473596be5ecced921de.patch"
+        "patch-reproducible-builds.patch::https://gitlab.archlinux.org/pacman/pacman/-/commit/f4bdb77470528019aaba4d8b8f947e918c6db17d.patch"
+        "arch-0001-libalpm-invalidate-curl-data-in-child.patch::$_arch/0001-libalpm-invalidate-curl-data-in-child.patch"
+        "arch-0002-libalpm-use-curl-s-effective-url-without-authenticat.patch::$_arch/0002-libalpm-use-curl-s-effective-url-without-authenticat.patch"
+        btrpkg-0001-libalpm-read-btrpkg-indexes-and-their-signatures.patch
+        btrpkg-0002-libalpm-install-btrpkg-packages-from-sync-repositori.patch
+        btrpkg-0003-libalpm-btrpkg-downloads-in-pacman-s-sandbox-with-re.patch
+        pacman-btrpkg.conf)
+sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
+            'b3bce9d662e189e8e49013b818f255d08494a57e13fc264625f852f087d3def2'
+            'de428b496a825772ef49ec5555a386a4b23ffa10b9dfd9907f0671d5c1dc2178'
+            '9a734e5d75be603d58aa92e8d29a15466b3ac2af6b7d6f6728dd5c3e5ed8758d'
+            '021893dd44ec23251cfc0f2b81c12d832927ea60095d4d2956d9760e8bbfaa58'
+            '75aaaed4ebadbf8af348a3a46abbf8e98ae508d06e2e4a57e0eef5ea6bc2ca4d'
+            '02781c2b9f4e1712457ce661ef2dfbc6853db80c280f0639517d507c0d5d2b9b'
+            'b16a9de6c144b23f761f484351e5440bd2ab3a775a181c03ff9e922ce80a009e'
+            '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac')
+
+prepare() {
+  cd pacman
+  # Arch's patches, as in Arch's PKGBUILD
+  patch -RNp1 < ../revertme-makepkg-remove-libdepends-and-libprovides.patch
+  patch -Np1 < ../patch-reproducible-builds.patch
+  patch -Np1 < ../arch-0001-libalpm-invalidate-curl-data-in-child.patch
+  patch -Np1 < ../arch-0002-libalpm-use-curl-s-effective-url-without-authenticat.patch
+  # btrpkg's (git apply: they carry binary test fixtures)
+  git apply --whitespace=nowarn ../btrpkg-000*.patch
+  # its own default config file, so it never reads a BtrPkgHelper line the system pacman warns about
+  sed -i "s|conf.set_quoted('CONFFILE', join_paths(SYSCONFDIR, 'pacman.conf'))|conf.set_quoted('CONFFILE', join_paths(SYSCONFDIR, 'pacman-btrpkg.conf'))|" meson.build
+  grep -q "pacman-btrpkg.conf" meson.build
+}
+
+build() {
+  cd pacman
+  # find our libalpm, not the system's (same soname)
+  export LDFLAGS+=" -Wl,-rpath,/usr/lib/$pkgname"
+  meson setup --prefix=/usr \
+        --buildtype=plain \
+        -Ddoc=disabled \
+        -Ddoxygen=disabled \
+        -Dscriptlet-shell=/usr/bin/bash \
+        -Dldconfig=/usr/bin/ldconfig \
+        build
+  grep -q '#define HAVE_BTRPKG' build/config.h
+  meson compile -C build
+}
+
+check() {
+  cd pacman
+  meson test -C build
+}
+
+package() {
+  cd pacman
+  local stage="$srcdir/stage"
+  rm -rf "$stage"
+  DESTDIR="$stage" meson install -C build
+  install -Dm755 "$stage/usr/bin/pacman" "$pkgdir/usr/lib/$pkgname/pacman"
+  install -Dm755 "$stage/usr/bin/pacman-conf" "$pkgdir/usr/lib/$pkgname/pacman-conf"
+  cp -a "$stage"/usr/lib/libalpm.so.* "$pkgdir/usr/lib/$pkgname/"
+  install -dm755 "$pkgdir/usr/bin"
+  ln -s ../lib/$pkgname/pacman "$pkgdir/usr/bin/pacman-btrpkg"
+  ln -s ../lib/$pkgname/pacman-conf "$pkgdir/usr/bin/pacman-btrpkg-conf"
+  install -Dm644 "$srcdir/pacman-btrpkg.conf" "$pkgdir/etc/pacman-btrpkg.conf"
+}

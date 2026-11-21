@@ -8,14 +8,15 @@ Goal: make the patched pacman safe and unsurprising for someone else to run. For
 3. ~~`-Sc`/`-Scc` and old `.pkg.btr` files~~: `-Sc` works and removes leftovers; `btrpkg cache-clean`.
 4. ~~Real download size and progress~~: `pull-ids --plan` in `_alpm_sync_prepare`, fetch-ids
    progress lines as download callbacks.
-5. A `btrpkg` package and a `pacman-btrpkg` build installed beside the system pacman (with a
-   pacman hook or timer for `cache-clean`).
+5. ~~A `btrpkg` package and a `pacman-btrpkg` build installed beside the system pacman~~:
+   `packaging/` (btrpkg-git, pacman-btrpkg, `build.sh` in a clean container), installed on p14s,
+   cache-clean timer enabled there.
 6. A trial on p14s: real `-Syu` runs over several days.
 7. Repo pipeline (Omarchy publish step, R2/S3, chunk deletion, real key, keyring package): needs a
    decision from Jonny.
 8. Adopt existing installs.
 
-Results of 1-4: README, "Iteration 3".
+Results of 1-4: README, "Iteration 3"; of 5: README, "Packages", and `packaging/README.md`.
 
 
 # btrpkg: iteration 2 plan (2026-11-21)

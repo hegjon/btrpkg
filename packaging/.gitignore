@@ -1,0 +1,7 @@
+out/
+*/src/
+*/pkg/
+*/pacman/
+*/btrpkg/
+*.pkg.tar.zst
+*.patch.orig

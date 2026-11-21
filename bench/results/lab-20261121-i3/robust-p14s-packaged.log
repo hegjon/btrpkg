@@ -1,0 +1,9 @@
+ok - download (10 cache files)
+ok - fetch-ids ran as alpm only
+ok - pull-ids ran as root
+ok - download directory removed after success
+ok - dead CacheServer: fell back to Server (75 MB)
+ok - resume: first run stopped (rc 130, 320 chunks kept, 35 MB), second run 57 MB, together 92 MB
+ok - corrupt chunk on the first server: taken from the next
+ok - DisableSandbox: works without the download user
+ok - -Sc removes the leftover download directory (and keeps other files)
