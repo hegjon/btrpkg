@@ -16,7 +16,8 @@ Omarchy's `omarchy-base.packages`, omarchy-dev, omarchy-settings-dev and omarchy
 packages, resolved with `pacman -Sp --print-format '%r %n'` against an empty database. Arch
 packages are checked against `/usr/share/pacman/keyrings/archlinux.gpg`, Omarchy's against
 `omarchy.gpg`. First run: core 201 packages in about 20 minutes, extra 627 in 18 minutes
-(1.89 GB of chunks); each package converts on about one core, which is what limits it.
+(1.89 GB of chunks). That was `publish` writing every chunk file with its own fsync, in sequence;
+since it writes in parallel with one syncfs, converting core takes 15 s (see the README).
 
 Each run:
 1. Fetches upstream's `omarchy.db` through pacoloco (conditional GET). If it hasn't changed and the

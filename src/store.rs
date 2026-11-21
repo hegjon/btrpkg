@@ -40,8 +40,11 @@ pub(crate) fn write_atomic(p: &Path, data: &[u8]) -> Result<()> {
 /// Like `write_atomic` without the fsync (for many small files that are synced together later,
 /// or not at all: a download directory that is checked before use).
 pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(d) = p.parent() { fs::create_dir_all(d)?; }
-    let tmp = { let mut t = p.as_os_str().to_owned(); t.push(format!(".tmp{}", std::process::id())); PathBuf::from(t) };
+    // unique per call: threads of one process may write files side by side
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = { let mut t = p.as_os_str().to_owned(); t.push(format!(".tmp{}.{n}", std::process::id())); PathBuf::from(t) };
     fs::write(&tmp, data)?;
     fs::rename(&tmp, p)?;
     Ok(())
@@ -67,12 +70,13 @@ pub(crate) fn publish(input: &Path, store: &Path, key: Option<(&sign::SecretKey,
     // Check every chunk, and the raw hash too: it is what reuse across builds relies on.
     items.par_iter().enumerate().try_for_each(|(i, (c, d))| check_chunk_full(i, c, d))?;
 
-    let mut st = PublishStats::default();
-    let mut out = Vec::with_capacity(items.len());
-    for (c, d) in items {
-        st.chunks += 1;
+    // Decide for every chunk, in parallel: reuse (by its unencoded hash or identical stored
+    // bytes), or write it. Writes go out in parallel without a per-file fsync, each distinct file
+    // once, then one syncfs; the index that points at the chunks is written (and synced) last.
+    enum Act<'a> { Remap(Chunk), Same, New(&'a [u8]) }
+    let acts: Vec<(Chunk, Act)> = items.par_iter().map(|&(c, d)| -> Result<(Chunk, Act)> {
         let rp = hpath(store, "raw", &c.raw);
-        let c2 = match fs::read_to_string(&rp) {
+        match fs::read_to_string(&rp) {
             Ok(s) => {
                 // Same unencoded data published before: reuse that chunk, even if this
                 // build compressed it to different bytes. Check the mapped chunk first, so a
@@ -83,30 +87,48 @@ pub(crate) fn publish(input: &Path, store: &Path, key: Option<(&sign::SecretKey,
                 let cd = fs::read(hpath(store, "chunks", &c2.stored)).context("raw map points at a missing chunk")?;
                 // check_chunk_full covers the raw hash: a mapped chunk with other data is refused
                 check_chunk_full(0, &c2, &cd).context("raw map points at a bad chunk")?;
+                Ok((c2, Act::Remap(c)))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // an existing chunk is reused only if it is intact; a damaged one is replaced
+                // (identical bytes, so the full check above covers them)
+                if fs::read(hpath(store, "chunks", &c.stored)).is_ok_and(|old| old == d) { Ok((c, Act::Same)) } else { Ok((c, Act::New(d))) }
+            }
+            Err(e) => Err(e.into()),
+        }
+    }).collect::<Result<_>>()?;
+
+    let mut st = PublishStats::default();
+    let mut out = Vec::with_capacity(acts.len());
+    let mut chunk_writes: HashMap<Hash, &[u8]> = HashMap::new();
+    let mut raw_writes: HashMap<Hash, String> = HashMap::new();
+    for (c2, act) in &acts {
+        st.chunks += 1;
+        match act {
+            Act::Remap(c) => {
                 if c2.stored != c.stored { st.remapped += 1; }
                 st.reused_chunks += 1;
                 st.reused_bytes += c2.encoded_len as u64;
-                c2
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let cp = hpath(store, "chunks", &c.stored);
-                // an existing chunk is reused only if it is intact; a damaged one is replaced
-                if fs::read(&cp).is_ok_and(|old| old == d) {
-                    // (identical bytes, so the full check above covers them)
-                    st.reused_chunks += 1;
-                    st.reused_bytes += d.len() as u64;
+            Act::Same | Act::New(_) => {
+                if let Act::New(d) = act {
+                    if chunk_writes.insert(c2.stored, d).is_none() { st.new_chunks += 1; st.new_bytes += d.len() as u64; }
                 } else {
-                    write_atomic(&cp, d)?;
-                    st.new_chunks += 1;
-                    st.new_bytes += d.len() as u64;
+                    st.reused_chunks += 1;
+                    st.reused_bytes += c2.encoded_len as u64;
                 }
-                write_atomic(&rp, format!("{} {} {}\n", c.compression, c.encoded_len, hex(&c.stored)).as_bytes())?;
-                st.raw_entries += 1;
-                c
+                if raw_writes.insert(c2.raw, format!("{} {} {}\n", c2.compression, c2.encoded_len, hex(&c2.stored))).is_none() {
+                    st.raw_entries += 1;
+                }
             }
-            Err(e) => return Err(e.into()),
-        };
-        out.push(c2);
+        }
+        out.push(*c2);
+    }
+    chunk_writes.par_iter().try_for_each(|(h, d)| write_atomic_nosync(&hpath(store, "chunks", h), d))?;
+    raw_writes.par_iter().try_for_each(|(h, l)| write_atomic_nosync(&hpath(store, "raw", h), l.as_bytes()))?;
+    if !chunk_writes.is_empty() || !raw_writes.is_empty() {
+        let d = File::open(store)?;
+        ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
     }
     let ib = if out == idx.chunks { idx.bytes.clone() } else { idx.with_chunks(&out) };
     parse_index(&ib).context("rebuilt index")?;

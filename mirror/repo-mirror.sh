@@ -26,7 +26,7 @@ KEY=${KEY:-$HOME/Work/btrpkg-repo/keys/btrpkg-test.sec}
 B=${B:-$here/../target/release/btrpkg}
 WANT=${WANT:-$here/wanted.txt}
 LOG=${LOG:-$HOME/Work/btrpkg-repo/access.log}      # caddy's JSON access log: 404s teach the wanted list
-JOBS=${JOBS:-4}
+JOBS=${JOBS:-8}   # 8 measured best on the 32-core desktop (15.4 s for core; 16: 15.9 s)
 mkdir -p "$M"
 exec 9>"$M/.lock"
 flock -n 9 || { echo "another run is busy"; exit 0; }

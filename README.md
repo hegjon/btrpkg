@@ -89,6 +89,31 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Faster repository conversion (2026-11-21)
+
+Converting the root image's packages for the mirrors took about 40 minutes for 828 packages
+(core 4 minutes of conversion, extra 17.5) at about one busy core. Profiling one package
+(noto-fonts-cjk, 198 MB) showed `convert` was already parallel: 1.9 s at 2061% CPU. `publish`
+took 24.1 s at 4% CPU, writing its 2,399 chunk files and raw-map entries one by one, each with an
+fsync, behind repo-update's publish lock.
+
+`publish` now decides each chunk's fate in parallel (reuse through the raw map, identical bytes, or
+new), writes the new files in parallel without a per-file fsync (each distinct file once), runs one
+`syncfs`, and only then writes the signed index. The index is still never visible before the chunks
+it names are on disk. That package: 24.1 s → 0.25 s.
+
+A/B on the same input (core's 201 packages, a fresh copy, `repo-update --jobs 4`):
+
+| | before | after |
+|---|---|---|
+| seconds | 239.0 | 18.2 |
+| CPU | 119% | 1658% |
+
+Results: the same 23,089 chunks and byte-identical indexes. `--jobs 8` gives 15.4 s (16 is no
+better), now the mirror's default. A package pulled from the new store installs identically to its
+`.pkg.tar.zst` extracted by bsdtar. A mirror pass with nothing new to convert costs 1.7 s even on
+extra's 15,291-entry database.
+
 ## pacstrap-btrpkg: new systems from btrpkg packages (2026-11-21)
 
 `pacstrap-btrpkg` (in `pacman-btrpkg`) is Arch's pacstrap, run unchanged, with pacman-btrpkg as
