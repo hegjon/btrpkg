@@ -1,0 +1,10 @@
+scenario	round	exit	seconds	written	received	root_disk	cache_disk	btr_files	pkg_files
+stock	1	0	112.58	9778827264	3507247934	8.3G	3.1G	0	878
+btr	1	0	93.25	5317943296	4146442536	3.8G	3.7G	878	0
+btr	2	0	93.37	5298495488	4146396028	3.8G	3.7G	878	0
+stock	2	0	108.46	9703391232	3507551263	8.3G	3.1G	0	878
+stock	3	0	107.85	9693958144	3507248244	8.2G	3.1G	0	878
+btr	3	0	95.86	5357789184	4146408485	3.8G	3.7G	878	0
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 15
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 15
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 16

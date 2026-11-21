@@ -74,7 +74,7 @@ if new:
     print("learned from 404s:", " ".join(sorted(new)))
 PY
 fi
-if [[ -n $unchanged && ! $learned -nt $M/.done ]]; then log "$REPO: upstream unchanged, nothing new to convert"; exit 0; fi
+if [[ -n $unchanged && ! $learned -nt $M/.done && ! $WANT -nt $M/.done ]]; then log "$REPO: upstream unchanged, nothing new to convert"; exit 0; fi
 got=0; failed=0
 while read -r name file; do
   if [[ -z ${ALL:-} ]] && ! grep -qxF "$name" "$WANT" "$learned"; then continue; fi

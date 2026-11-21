@@ -19,6 +19,10 @@ Goal: make the patched pacman safe and unsurprising for someone else to run. For
 7. Repo pipeline (Omarchy publish step, R2/S3, chunk deletion, real key, keyring package): needs a
    decision from Jonny.
 8. Adopt existing installs.
+9. ~~pacstrap with btrpkg~~: `pacstrap-btrpkg` (omarchy-iso's and archinstall's flags), Arch
+   core/extra mirrors for the root image's closure. Next for the ISO: an offline mirror of `.pkg.btr`
+   files and encoded read/write when the cache and the target are different filesystems (the
+   root image is a loop-mounted btrfs).
 
 Results of 1-4: README, "Iteration 3"; of 5: README, "Packages", and `packaging/README.md`.
 

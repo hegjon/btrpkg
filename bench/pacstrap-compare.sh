@@ -4,7 +4,8 @@
 #   bash pacstrap-compare.sh OUTDIR CONF PKGLIST [ROUNDS] [MODE]
 # MODE image  (default): omarchy-iso's root-image flags, `-C CONF -c -G -M ROOT PKGS`, with the
 #                        config's CacheDir an empty subvolume on the same filesystem
-#      target:           `-C CONF -G -M ROOT PKGS`, the cache inside the new root (pacstrap's default)
+#      target:           archinstall's `-C CONF -K ROOT PKGS --needed`, the cache inside the new
+#                        root (pacstrap's default)
 # Per round and scenario (order alternates): fresh subvolumes, drop caches, pacstrap, sync; record
 # seconds, bytes written to the root's partition, the new root's and the cache's referenced and
 # exclusive bytes. Then compare-roots.py between the two roots of a round, and delete them.
@@ -35,14 +36,15 @@ run() { # $1 scenario (stock|btr) $2 round
     sed -e '/^CacheDir/d' -e "/^\[options\]/a CacheDir = $cache/" "$CONF" > "$conf"
     flags=(-C "$conf" -c -G -M)
   else
-    cp "$CONF" "$conf"; flags=(-C "$conf" -G -M)
+    cp "$CONF" "$conf"; flags=(-C "$conf" -K)
   fi
   # stock: the real pacman, even where /usr/local/bin/pacman points to pacman-btrpkg
   local cmd=(env PATH=/usr/bin:/usr/sbin pacstrap); [[ $s == btr ]] && cmd=(pacstrap-btrpkg)
   sync; echo 3 > /proc/sys/vm/drop_caches
   local w0 t0 t1 w1 rc
   w0=$(written); n0=$(rx); t0=$(now)
-  "${cmd[@]}" "${flags[@]}" "$root" "${T[@]}" > "$OUT/$s-$r.out" 2>&1; rc=$?
+  local extra=(); [[ $MODE == target ]] && extra=(--needed)
+  "${cmd[@]}" "${flags[@]}" "$root" "${T[@]}" "${extra[@]}" > "$OUT/$s-$r.out" 2>&1; rc=$?
   sync; t1=$(now); w1=$(written); n1=$(rx)
   local cdir=$cache; [[ $MODE == target ]] && cdir=$root/var/cache/pacman/pkg
   local rt rx ct cx

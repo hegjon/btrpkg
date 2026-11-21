@@ -89,6 +89,65 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## pacstrap-btrpkg: new systems from btrpkg packages (2026-11-21)
+
+`pacstrap-btrpkg` (in `pacman-btrpkg`) is Arch's pacstrap, run unchanged, with pacman-btrpkg as
+its pacman and `BtrPkgHelper` added to the `-C` config. It takes the same options. The ones that
+mattered first are omarchy-iso's: `-C CONF -c -G -M ROOT PKGS` (root image and live system) and
+archinstall's `-C CONF -K ROOT PKGS --noconfirm --needed`. Details in `packaging/README.md`.
+
+What it needed:
+- **Mirrors for Arch's core and extra.** `mirror/repos.conf` lists them next to Omarchy's repo;
+  the wanted lists are the dependency closure of omarchy-iso's x86_64 edge root image: 878
+  packages (201 core, 627 extra, 50 Omarchy), all converted.
+- **libalpm patch 4.** A package file already in a cache directory is used as it is. Without it,
+  omarchy-iso's offline mirror would have been bypassed for a download.
+- **libalpm patch 5.** pacstrap always disables the download sandbox, and the two-process
+  download then only cost a double write (download directory, then cache file). Without a
+  download user, one root `pull-ids` per server now fetches straight into the cache files. On the
+  first small test set that turned "slower than stock" into level, with less written.
+
+Measured on p14s (wired gigabit to the desktop's mirrors; stock pacstrap fetches the same
+`.pkg.tar.zst` files from the same mirror). The root image's 878 packages went into throwaway
+subvolumes of p14s's own btrfs (`compress=zstd:3`), 3 rounds each, alternating, with
+`bench/pacstrap-compare.sh`. Medians:
+
+| | stock pacstrap | pacstrap-btrpkg |
+|---|---|---|
+| **omarchy-iso image flags** `-C -c -G -M`, empty CacheDir on the same filesystem | | |
+| seconds | 105.96 | 93.78 |
+| written to the disk | 9.63 GB | 5.65 GB |
+| downloaded | 3.51 GB | 4.16 GB |
+| new root on disk (compsize) | 5.1 GB | 4.0 GB |
+| cache on disk | 3.1 GB | 3.7 GB, all but 328 MB shared with the root |
+| **archinstall flags** `-C -K --needed`, cache inside the new root | | |
+| seconds | 108.46 | 93.37 |
+| written to the disk | 9.70 GB | 5.32 GB |
+| downloaded | 3.51 GB | 4.15 GB |
+| new root including its cache, on disk | 8.3 GB | 3.8 GB |
+
+- **Correctness.** In all 6 pairs, every package-owned file was identical between the stock and
+  btrpkg roots: type, mode, owner, size, symlink target, xattrs, SHA-256, and mtime (backup files
+  such as `/etc/passwd`, which scriptlets edit after install, without mtime). The local databases
+  were identical apart from install dates.
+- **What still differs** is 15–16 files made by hooks: machine-id (random), ldconfig's aux cache,
+  the Java keystore (has a timestamp), and fontconfig's caches (they embed directory mtimes).
+  `icon-theme.cache` also differs in size; probably because its layout follows the order files
+  were created in the directory, but I haven't verified that it's equivalent.
+- **Why it's faster and writes less.** Large files are reflinked from the cache files, so data is
+  written once, and the new root's extents are the packages' zstd-19 frames rather than files
+  recompressed at the mount's level 3.
+- **The cost is the download.** A fresh install has nothing local to reuse, and per-chunk frames
+  compress worse than whole-archive zstd: 18% more bytes (0.64 GB) here. It saves 12–15 s, so the
+  break-even link is about 45–55 MB/s. On a slower link, stock pacstrap finishes first, but
+  pacstrap-btrpkg still writes 40% less and uses 22–54% less disk.
+- **omarchy-iso's actual root-image build** points CacheDir at its offline mirror, which already
+  holds every `.pkg.tar.zst`. pacstrap-btrpkg then installs those files and downloads nothing
+  (patch 4), so the image build changes only if the offline mirror ships `.pkg.btr` files. The
+  image is also its own loop-mounted filesystem, where reflinks can't reach. Keeping the
+  compressed frames there would need encoded read and write across filesystems (not done; today
+  it falls back to `copy_file_range`, and the image recompresses).
+
 ## End to end: an Omarchy mirror and `omarchy update` on p14s (2026-11-21)
 
 **Mirror** (`mirror/`, details in `mirror/README.md`):

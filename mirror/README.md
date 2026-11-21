@@ -1,8 +1,22 @@
-# btrpkg mirror of Omarchy's edge repository
+# btrpkg mirrors: Omarchy's edge repository, Arch's core and extra
 
-`repo-mirror.sh` (run for each line of `repos.conf` by `mirror-all.sh`) keeps `~/Work/btrpkg-repo/omarchy-mirror/x86_64/` in step with Omarchy's edge
-repository: upstream's database plus btrpkg data for the packages in `wanted.txt` (`ALL=1`: every
-package). The lab reaches it at `http://192.168.2.2:1764/omarchy-mirror/$arch`.
+`repo-mirror.sh` keeps one repository's mirror in step with its upstream (through pacoloco):
+upstream's database plus btrpkg data for the wanted packages (`ALL=1`: every package).
+`mirror-all.sh` runs it for every line of `repos.conf`:
+
+| repo | lab URL | wanted |
+|---|---|---|
+| omarchy | `http://192.168.2.2:1764/omarchy-mirror/$arch` | `wanted.txt`: installed on any lab machine, plus omarchy-iso's root image (58) |
+| core | `http://192.168.2.2:1764/arch-mirror/$repo/os/$arch` | `core.wanted`: omarchy-iso's root image (201) |
+| extra | `http://192.168.2.2:1764/arch-mirror/$repo/os/$arch` | `extra.wanted`: omarchy-iso's root image (627) |
+
+The root image's lists are the dependency closure of omarchy-iso's x86_64 edge image
+(`builder/archinstall.packages` without the per-machine firmware, `builder/image.packages`,
+Omarchy's `omarchy-base.packages`, omarchy-dev, omarchy-settings-dev and omarchy-nvim), 878
+packages, resolved with `pacman -Sp --print-format '%r %n'` against an empty database. Arch
+packages are checked against `/usr/share/pacman/keyrings/archlinux.gpg`, Omarchy's against
+`omarchy.gpg`. First run: core 201 packages in about 20 minutes, extra 627 in 18 minutes
+(1.89 GB of chunks); each package converts on about one core, which is what limits it.
 
 Each run:
 1. Fetches upstream's `omarchy.db` through pacoloco (conditional GET). If it hasn't changed and the
