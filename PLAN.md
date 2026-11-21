@@ -1,3 +1,56 @@
+# btrpkg: iteration 2 plan (2026-11-21)
+
+Goal: pacman itself installs and upgrades btrpkg packages, so everything pacman does (install
+scripts, backup files and `.pacnew`, conflicts, removals, NoExtract, the database) works as before,
+and the client gets the speed the lab measurements point at. Format version 1 stays (Jonny,
+2026-11-21): no format change in this iteration.
+
+Iteration 1 ended with `pacbtr` (metadata package + `pacman -U --dbonly`), which has to leave
+packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% none`.
+
+## Milestones
+
+1. **Client speed, same format.** Read back and hash installed files in parallel; one download
+   queue across all packages of an upgrade instead of one package at a time. A/B against `43ffda5`
+   in one run on t460s and x200 (where `pull` is 75-80% of the time).
+   Done when: `pull` time drops measurably on both, results identical.
+
+2. **libalpm: read side.** A branch `btrpkg` of pacman at `54d94116` (Arch's 7.1.0.r9 build):
+   `lib/libalpm/btrpkg.c` parses and checks a version-1 index (header, table, entries, blob; the
+   same checks as `src/format.rs`) and verifies its signify signature (Ed25519 through OpenSSL's
+   EVP, which libalpm already links; keys from `/etc/btrpkg/keys`, `/usr/share/btrpkg/keys`).
+   Done when: a C test program accepts the Rust-made indexes of the 315 set and rejects every
+   flipped bit and truncation of a sample index, as `cargo test` does.
+
+3. **libalpm: download.** For a sync package with `btrpkg.index`/`btrpkg.id` in `%DATA%` and a
+   btrfs cache directory, libalpm gets `NAME.pkg.btr` into the cache instead of `%FILENAME%`, by
+   running `btrpkg pull` (one HTTP and reuse implementation; pacman already runs external
+   downloaders through XferCommand). Validation: the index ID from the database and its signature.
+   Done when: `pacman -Sw` of a btrpkg package leaves a checked `.pkg.btr` in the cache; packages
+   without btrpkg data download as before.
+
+4. **libalpm: extraction.** `commit_single_pkg` takes its entries from the index instead of
+   libarchive and keeps `extract_single_file` (backup files, `.pacnew`, NoExtract, conflicts);
+   only the data path changes: FICLONERANGE from the cache file for large files, the blob for small
+   ones, then owner, mode, xattrs, mtime. `.PKGINFO`, `.MTREE`, `.INSTALL` come from the index.
+   Done when: `pacman -S`/`-Syu` of btrpkg packages, including ones with install scripts and backup
+   files, gives the same installed tree and database as stock pacman (`-Qkk` clean, `.pacnew`
+   where stock pacman makes one), in an Arch container and on p14s.
+
+5. **Package and measure.** A pacman package built from the branch for the lab; the iteration-1
+   upgrade runs again with three variants: stock pacman, patched pacman, `pacbtr`.
+
+## Out
+
+ISO and `adopt` (Jonny: wait), fs-verity, packs, an `undo` frontend, other filesystems, Arch's
+packages, a format change.
+
+## Open questions
+
+- Downloading in C (libcurl multi in `dload.c`) instead of the `btrpkg pull` helper: decide after
+  milestone 3, with numbers.
+
+
 # btrpkg: iteration 1 plan
 
 Goal: one real upgrade loop, end to end, on lab machines. Omarchy's own packages are published
