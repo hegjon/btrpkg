@@ -57,6 +57,9 @@ run() { # $1 scenario (stock|btr) $2 round
 }
 cleanup_round() { # $1 round
   for s in stock btr; do
+    # pacstrap -K's pacman-key --init leaves a gpg-agent per root, which keeps the deleted
+    # subvolume from being cleaned (omarchy-iso's stop_image_gpg_agents does the same)
+    [[ -d $TOP/@pstrap-$s-$1/etc/pacman.d/gnupg ]] && gpgconf --homedir "$TOP/@pstrap-$s-$1/etc/pacman.d/gnupg" --kill all 2>/dev/null
     umount -R "$TOP/@pstrap-$s-$1" 2>/dev/null
     btrfs subvolume delete -R "$TOP/@pstrap-$s-$1" >/dev/null 2>&1
     btrfs subvolume delete -R "$TOP/@pstrap-cache-$s-$1" >/dev/null 2>&1
