@@ -1,0 +1,9 @@
+rc=0
+btrpkg: converting 50 packages with 4 jobs
+btrpkg: 50 packages, 91 MiB of btrparts
+btrpkg: shipping 3 packages, 1095 btrparts, 32 MiB
+checksums ok: 1099 files
+after removing the cache: 10 encoded, 0 shared
+refused as expected: error: target not found: nano
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 1
+compare exit 0

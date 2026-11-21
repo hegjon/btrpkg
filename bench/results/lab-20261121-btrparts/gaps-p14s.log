@@ -1,0 +1,26 @@
+btrpkg.parts=../btrparts
+== -U with its signify signature
+ok   - -U of a signed .pkg.btr succeeds (rc 0)
+ok   - no GPGME involvement
+ok   - %VALIDATION% is none, not pgp: 'none'
+ok   - %XDATA% records the signer: 'pkgtype=pkg btrpkg-validation=signify:btrpkg-test.pub'
+ok   - stock pacman reads it without a warning
+   stock -Qi: Validated By : None
+ok   - -Qip: no GPGME error
+== -U without a signature (LocalFileSigLevel = Optional)
+ok   - installs (rc 0)
+ok   - validation none, no signer record: 'pkgtype=pkg'
+== -U without a signature, LocalFileSigLevel = Required
+ok   - refused (rc 1): loading packages...
+== -U with another package's signature
+ok   - refused (rc 1): error: /var/tmp/btrpkg-gaps/badsig/omarchy-local-ai-0.9.0-1-any.pkg.btr: btrpkg signature: bad signature (key 72a367394c5715ec)
+== -U of a file whose data was changed
+ok   - refused (rc 1): error: /var/tmp/btrpkg-gaps/bad/omarchy-local-ai-0.9.0-1-any.pkg.btr: chunk 0: data does not match the index
+== a package's own .PKGINFO can't claim a signature
+ok   - the claim is dropped: 'pkgtype=pkg'
+== -S from the repository (the cache file and its .sig)
+ok   - reinstalls (rc 0)
+ok   - %VALIDATION% is sha256 only: 'sha256'
+ok   - %XDATA% records the signer: 'pkgtype=pkg btrpkg-validation=signify:btrpkg-test.pub'
+ok   - files intact: omarchy-local-ai: 88 total files, 0 altered files
+passed 16, failed 0

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""One-off: move each repository's chunks/ and raw/ into the shared btrparts directory, leave a
-chunks -> btrparts symlink for clients from before the rename, rewrite every database with
+"""One-off: move each repository's chunks/ and raw/ into the shared btrparts directory, leave
+chunks -> ../btrparts (clients from before the rename) and btrparts -> ../btrparts (new clients
+with a database from before the move) symlinks, rewrite every database with
 btrpkg.parts, then check that every btrpart every index names is there."""
 import os, subprocess, sys
 R = os.path.expanduser("~/Work/btrpkg-repo")
@@ -38,6 +39,9 @@ for d, name, parts, mirror in REPOS:
         m, dup = merge(chunks, pdir)
         print(f"{d}: {m} btrparts moved to {os.path.relpath(pdir, R)}, {dup} already there")
         os.symlink(parts, chunks)
+    # a new client with a database from before the move (no btrpkg.parts) looks in btrparts/
+    if not os.path.lexists(f"{repo}/btrparts"):
+        os.symlink(parts, f"{repo}/btrparts")
     if os.path.isdir(raw):
         m, dup = merge(raw, f"{pdir}/.raw")
         print(f"{d}: {m} raw map entries moved, {dup} already there")

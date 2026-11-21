@@ -89,6 +89,57 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Shared btrparts directory beside the architectures (2026-11-21)
+
+A btrpart is one entry of an index's table: up to 128 KiB of one file's data, stored the way
+btrfs stores an extent (a zstd frame it takes as an *encoded extent*, or raw). Btrparts were
+called chunks before and were stored in each repository's `chunks/`. Btrparts are named by their
+content, so x86_64 and aarch64 can share them (38% of the aarch64 btrpart bytes are already in
+the x86_64 stores; see the next section). They now live in one directory beside the architecture
+directories:
+
+```
+omarchy-mirror/
+├── btrparts/xx/HASH           shared by x86_64/ and (later) aarch64/
+│   └── .raw/xx/HASH           raw map, build server only (dot directory, caddy hides it)
+└── x86_64/
+    ├── omarchy.db             btrpkg.parts=../btrparts in every btrpkg entry
+    ├── index/NAME.btridx(.sig)
+    └── chunks -> ../btrparts  for clients from before the rename
+arch-mirror/
+├── btrparts/                  shared by core/os/x86_64 and extra/os/x86_64
+├── core/os/x86_64/core.db     btrpkg.parts=../../../btrparts
+└── extra/os/x86_64/extra.db   btrpkg.parts=../../../btrparts
+```
+
+- Indexes stay per architecture and repository. The database names where the btrparts are, as a
+  path relative to the repository's URL (`btrpkg.parts`). pacman `Server = …/$repo/os/$arch`
+  lines keep working, and so do mirrors that copy the tree. The format and the signed index are
+  unchanged. Btrparts are checked against the index that names them, so the path is no matter of
+  trust. It has to be a plain relative path: `..` can't go above the host. Otherwise pacman
+  ignores that package's btrpkg data and downloads the `.pkg.tar.zst`.
+- `repo-update --parts REL`: default `../btrparts`. The ISO's offline repository uses
+  `btrparts`, inside it, because it carries one repository. `publish`, `pull`, `pull-ids` and
+  `fetch-ids` take `--parts` too; their default is `btrparts`. libalpm patch 7 groups downloads
+  per repository and btrparts path and passes `--parts`. pacman's download directory has
+  `btrparts/` inside it.
+- `mirror/migrate-btrparts.py` moved the live stores without a new conversion:
+
+  | | btrparts moved | already in the shared dir | db entries with btrpkg.parts |
+  |---|---|---|---|
+  | omarchy-mirror/x86_64 | 38,343 | 0 | 58/58 |
+  | arch-mirror/core | 23,089 | 0 | 201/201 |
+  | arch-mirror/extra | 66,600 | 14 (from core) | 627/627 |
+  | omarchy, btrtest, btrtest2 (test repos) | 23,236 / 935 / 6 | 0 | 51 / 9 / 1 |
+
+  Every repository checked out: 0 missing among the btrparts its indexes name (48,104 references
+  for omarchy-mirror, 23,176 core, 66,949 extra). No packages were converted again
+  (`converted: 0`). The mirror timer's next pass found nothing new to convert.
+- Old clients still work. pacman-btrpkg -4 on p14s fetched `x86_64/chunks/xx/HASH` through the
+  symlink, and `-Qkk` found 0 altered files. The symlink can go once every client has pkgrel 5.
+- With an aarch64 directory beside x86_64, the measured overlap means it would add 2.04 GB
+  instead of 3.29 GB of btrparts.
+
 ## Sharing btrparts between x86_64 and aarch64 (2026-11-21)
 
 Could one store serve both architectures? Measured with the aarch64 builds of the packages in the
@@ -909,13 +960,14 @@ Median index 11.4 KB, 90th percentile 124 KB, largest ansible at 4.2 MB (53,668 
 ```
 <repo root>/                                  (bucket, or a directory served over HTTP)
   x86_64/omarchy.db[.sig]                     repo database: the only object that changes
-  index/hyprland-0.57.2-2-x86_64.btridx        one per package version, immutable
-  index/hyprland-0.57.2-2-x86_64.btridx.sig    detached Ed25519 signature, immutable
-  chunks/ab/ab12…ef                            chunk bytes as stored on disk, named by their sha256;
-                                               shared by all packages, versions, repos and architectures
+  x86_64/index/hyprland-0.57.2-2-x86_64.btridx        one per package version, immutable
+  x86_64/index/hyprland-0.57.2-2-x86_64.btridx.sig    detached signature, immutable
+  btrparts/ab/ab12…ef                         btrpart bytes as stored on disk, named by their sha256;
+                                              shared by all packages, versions, repos and architectures
+                                              (the db's btrpkg.parts=../btrparts; was chunks/)
 (build server only, not published)
-  raw/ab/…                                     uncompressed-data hash → chunk; keeps chunks stable when
-                                               the compressor changes
+  btrparts/.raw/ab/…                          uncompressed-data hash → btrpart; keeps btrparts stable
+                                              when the compressor changes
 ```
 
 The database entry for a package names its index and the index's sha256 (`pull --sha256`), the

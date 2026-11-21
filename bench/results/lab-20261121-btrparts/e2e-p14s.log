@@ -1,0 +1,20 @@
+host p14s targets: mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros owe omarchy-settings-dev gliff omawrite signed ufw-docker
+mise-bin 2026.11.10-1 omarchy-dev 4.0.0.r8121.g52db1dd-1 omarchy-local-ai 0.9.0-1 omarchy-themes-intros 2026.11.21-1 owe 0.2.18-1 omarchy-settings-dev 4.0.0.r8121.g52db1dd-1 gliff 0.4.3-1 omawrite 0.7.6-1 signed 0.3.2-4 ufw-docker 251123-2 
+baseline snapshot 24
+scenario	round	exit	seconds	written	space	qkk_altered	btr_cache_files
+stock	1	0	6.46	751878144	689414144	0	6
+btr	1	0	3.00	59174912	-260829184	0	16
+btr	2	0	2.98	57569280	5185536	0	16
+stock	2	0	6.42	767238144	638017536	0	6
+stock	3	0	6.82	725483520	291438592	0	6
+btr	3	0	3.00	59551744	-260866048	0	16
+round 1 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256  %DEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %OPTDEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %DEPENDS% btrpkg-validation=si
+round 2 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256  %DEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %OPTDEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %DEPENDS% btrpkg-validation=si
+round 3 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256  %DEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %OPTDEPENDS% btrpkg-validation=signify:btrpkg-test.pub %VALIDATION% sha256  %DEPENDS% btrpkg-validation=si
+after reset: altered 0

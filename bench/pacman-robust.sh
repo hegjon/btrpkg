@@ -25,6 +25,9 @@ conf() { # $1: extra lines for [options], $2: server lines for [omarchy]
 }
 fail=0; ok() { echo "ok - $*"; }; no() { echo "NOT OK - $*"; fail=1; }
 cnt() { ls $CACHE | grep -c '\.pkg\.btr$'; }
+# $C's [omarchy] is the test repository, but in the system's DBPath: put the system's databases
+# back on exit (-Syy: the test db's mtime is newer, so a plain -Sy would keep it)
+trap 'pacman -Syy >/dev/null 2>&1' EXIT
 pacman --config $C -Syy >/dev/null 2>&1
 N=$(echo $T | wc -w)
 
