@@ -686,6 +686,7 @@ const USAGE: &str = "usage:
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
+NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
 
@@ -789,6 +790,7 @@ fn main() -> Result<()> {
     let mut jobs = 4usize;
     let mut parallel: Option<usize> = None;
     let mut installed: Option<PathBuf> = None;
+    let mut netopt = net::NetOptions::default();
     let mut trust = TrustArgs { id: None, sig: None, keys: vec![], unverified: false };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -810,6 +812,8 @@ fn main() -> Result<()> {
             "--jobs" => jobs = val("--jobs")?.parse()?,
             "--parallel" => parallel = Some(val("--parallel")?.parse()?),
             "--installed" => installed = Some(val("--installed")?.into()),
+            "--http" => netopt.version = Some(val("--http")?),
+            "--cacert" => netopt.cainfo = Some(val("--cacert")?),
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
@@ -818,6 +822,7 @@ fn main() -> Result<()> {
             s => pos.push(s),
         }
     }
+    net::set_options(netopt)?;
     match pos.as_slice() {
         // .pkg.btr: chunks framed at -l (default 19). .pkg.btr.zst: raw chunks (-l 0
         // by default) inside one solid zstd stream at --outer-level.

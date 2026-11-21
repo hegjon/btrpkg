@@ -56,6 +56,39 @@ only point at earlier files of the same package. For `.pkg.btr.zst` the outer zs
 compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
 trailing data, and on any failure removes its partial file.
 
+## HTTP/1.1 vs HTTP/2 vs HTTP/3 (2026-11-21)
+
+`bench/proto-bench.sh`: the 10 upgrades of the lab runs, downloaded three ways per protocol:
+btrpkg with reuse from the installed versions (a real upgrade), btrpkg without reuse (every
+chunk, 332 MB in 3,846 requests), and the `.pkg.tar.zst` files with `curl --parallel
+--parallel-max 5` (pacman's `ParallelDownloads = 5`, 335 MB in 10 requests). Server: caddy 2.11
+on the desktop, plain http (h1, h2c) and https (h1, h2, h3 over QUIC; caddy's internal CA).
+Client: libcurl 8.23 (nghttp2, ngtcp2, OpenSSL 4.1). Medians of 3 rounds, in seconds; the
+access log confirmed each protocol. btrpkg: 8 connections over HTTP/1.1, 64 requests in flight
+over HTTP/2 and 3.
+
+| link | protocol | btrpkg, real upgrade | btrpkg, every chunk | .pkg.tar.zst |
+|---|---|---:|---:|---:|
+| p14s wired, 0.4 ms RTT | http/1.1 · h2c · https/1.1 · h2 · h3 | 1.03 · 1.03 · 1.07 · 1.06 · 1.09 | 3.08 · 3.09 · 3.12 · 3.14 · 3.21 | 2.87 · 2.87 · 2.88 · 2.88 · 2.93 |
+| p14s + 30 ms (netem) | same | 9.11 · 3.26 · 9.75 · 3.92 · 3.31 | 21.57 · 5.97 · 21.92 · 6.62 · 17.96 | 3.35 · 3.95 · 3.44 · 3.96 · 4.68 |
+| t460s Wi-Fi, 1.8 ms | same | 4.94 · 3.89 · 5.14 · 4.05 · 8.26 | 7.23 · 5.03 · 7.42 · 5.25 · 13.90 | 4.48 · 4.36 · 4.47 · 4.40 · 12.05 |
+| x200 Wi-Fi, 3.0 ms | same | 17.40 · 16.46 · 17.08 · 15.93 · 21.07 | 22.42 · 21.15 · 22.64 · 21.98 · 31.10 | 19.63 · 20.31 · 20.04 · 19.88 · 28.34 |
+
+- At LAN latency the protocol doesn't matter (p14s), or the link does (x200 at ~16 MB/s).
+- With internet-like latency (30 ms) btrpkg needs a multiplexing protocol: over HTTP/1.1 its
+  thousands of chunk requests take 2.8-3.6x longer than over HTTP/2. Whole packages don't care
+  (few large requests; HTTP/1.1 is even a little faster). A btrpkg mirror must speak HTTP/2.
+- HTTP/3 (quic-go server, ngtcp2 client) is the slowest wherever there is much to download:
+  every chunk at 30 ms 18.0 s vs 6.6 s for HTTP/2 over TLS, and 2-3x slower on Wi-Fi even for
+  whole packages; it also costs the most CPU (x200: 20 s CPU for the full download vs 13 s for
+  h2). With more requests in flight it improves but stays behind (30 ms, every chunk: h3
+  26.3/20.2/18.3/12.6 s at 8/32/64/128 in flight, h2 19.7/7.1/6.6/5.7 s), so it is the QUIC
+  connection's throughput, not request concurrency. HTTP/2 stays btrpkg's default.
+- The Wi-Fi links have only 2-3 ms RTT: they show bandwidth and loss, not internet latency;
+  netem's delay is clean (no loss or reordering).
+- HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
+  far-away mirrors.
+
 ## Iteration 2: pacman installs btrpkg packages (2026-11-21)
 
 Two libalpm patches (`libalpm/`, pacman branch `btrpkg` on `54d94116`, Arch's 7.1.0.r9): an

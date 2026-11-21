@@ -15,6 +15,21 @@ pub enum Source {
     Http { base: String, h2c: bool, parallel: usize },
 }
 
+/// Process-wide HTTP settings from the command line (`--http`, `--cacert`).
+#[derive(Default, Debug, Clone)]
+pub struct NetOptions {
+    /// "h1", "h2" or "h3"; None: HTTP/2 over https, HTTP/1.1 over http (h2c with --h2c)
+    pub version: Option<String>,
+    /// CA certificates to trust instead of the system's
+    pub cainfo: Option<String>,
+}
+static OPTIONS: std::sync::OnceLock<NetOptions> = std::sync::OnceLock::new();
+pub fn set_options(o: NetOptions) -> Result<()> {
+    if let Some(v) = &o.version { ensure!(matches!(v.as_str(), "h1" | "h2" | "h3"), "--http wants h1, h2 or h3"); }
+    OPTIONS.set(o).map_err(|_| anyhow::anyhow!("network options set twice"))
+}
+fn options() -> &'static NetOptions { OPTIONS.get_or_init(NetOptions::default) }
+
 #[derive(Default, Debug, Clone)]
 pub struct NetStats { pub requests: u64, pub bytes: u64, pub retries: u64 }
 
@@ -33,8 +48,10 @@ const BATCH_BYTES: usize = 16 << 20;
 impl Source {
     pub fn parse(s: &str, h2c: bool, parallel: Option<usize>) -> Source {
         if s.starts_with("http://") || s.starts_with("https://") {
-            // HTTP/2 multiplexes; HTTP/1.1 opens a connection per request in flight
-            let h2 = h2c || s.starts_with("https://");
+            // HTTP/2 and 3 multiplex; HTTP/1.1 opens a connection per request in flight
+            let tls = s.starts_with("https://");
+            let h2c = h2c || (!tls && options().version.as_deref() == Some("h2"));
+            let h2 = match options().version.as_deref() { Some("h1") => false, Some(_) => true, None => h2c || tls };
             Source::Http { base: s.trim_end_matches('/').to_string(), h2c, parallel: parallel.unwrap_or(if h2 { 64 } else { 8 }) }
         } else {
             Source::Dir(PathBuf::from(s))
@@ -45,7 +62,15 @@ impl Source {
         let Source::Http { base, h2c, .. } = self else { unreachable!() };
         let mut e = Easy2::new(Collector { buf: Vec::new(), max });
         e.url(&format!("{base}/{rel}"))?;
-        e.http_version(if *h2c { HttpVersion::V2PriorKnowledge } else if base.starts_with("https://") { HttpVersion::V2TLS } else { HttpVersion::V11 })?;
+        let tls = base.starts_with("https://");
+        e.http_version(match (options().version.as_deref(), tls) {
+            (Some("h1"), _) => HttpVersion::V11,
+            (Some("h3"), true) => HttpVersion::V3,
+            _ if *h2c => HttpVersion::V2PriorKnowledge,
+            (_, true) => HttpVersion::V2TLS,
+            _ => HttpVersion::V11,
+        })?;
+        if let Some(ca) = &options().cainfo { e.cainfo(ca)?; }
         e.pipewait(true)?;
         e.connect_timeout(Duration::from_secs(10))?;
         // give up on a transfer slower than 1 KB/s for 30 s (pacman's own rule is 1 B/s for 10 s)
@@ -101,7 +126,12 @@ impl Source {
             Source::Http { parallel, .. } => {
                 let mut multi = Multi::new();
                 multi.pipelining(false, true)?;
-                multi.set_max_host_connections(if matches!(self, Source::Http { base, h2c, .. } if *h2c || base.starts_with("https://")) { 4 } else { *parallel })?;
+                let multiplexed = match options().version.as_deref() {
+                    Some("h1") => false,
+                    Some(_) => true,
+                    None => matches!(self, Source::Http { base, h2c, .. } if *h2c || base.starts_with("https://")),
+                };
+                multi.set_max_host_connections(if multiplexed { 4 } else { *parallel })?;
                 let mut next = 0usize;
                 let mut active: HashMap<usize, (Easy2Handle<Collector>, usize, u32)> = HashMap::new();
                 let mut retry: Vec<(usize, u32)> = Vec::new();

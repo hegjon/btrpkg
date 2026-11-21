@@ -1,16 +1,33 @@
 {
 	admin off
-	auto_https off
-	servers {
+	auto_https disable_redirects
+	local_certs
+	skip_install_trust
+	servers :8790 {
 		protocols h1 h2c
 	}
+	servers :1764 {
+		protocols h1 h2c
+	}
+	servers :1763 {
+		protocols h1 h2 h3
+	}
 }
-# 8790: local and ssh tunnels; 1764: the lab directly (inside ufw's KDE Connect range, 1714-1764)
-:8790, :1764 {
+# 8790: local; 1764: the lab, plain http (inside ufw's KDE Connect range, 1714-1764, tcp+udp);
+# 1763: the lab over TLS with HTTP/1.1, 2 and 3 (QUIC on udp 1763), certificate from caddy's
+# internal CA (~/.local/share/caddy/pki/authorities/local/root.crt)
+(repo) {
 	root * /home/jonny/Work/btrpkg-repo
 	file_server
 	log {
 		output file /home/jonny/Work/btrpkg-repo/access.log
 		format json
 	}
+}
+http://:8790, http://:1764 {
+	import repo
+}
+https://192.168.2.2:1763 {
+	tls internal
+	import repo
 }
