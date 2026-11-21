@@ -55,11 +55,20 @@ run() { # $1 scenario (stock|btr) $2 round
     $((w1 - w0)) $((n1 - n0)) "$rt" "$rx" "$(disk "$root")" "$ct" "$cx" "$(disk "$cdir")" "$nb" "$np" | tee -a "$OUT/results.tsv"
   [[ $rc == 0 ]] || tail -15 "$OUT/$s-$r.out"
 }
+# pacstrap -K starts a gpg-agent per root with a "ROOT//etc/pacman.d/gnupg" homedir (double
+# slash), so gpgconf --homedir ROOT/etc/... misses its socket; kill by command line instead.
+kill_root_agents() { # ROOT
+  local pid
+  for pid in $(pgrep -x gpg-agent); do
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "--homedir $1/" && kill "$pid"
+  done
+  return 0
+}
 cleanup_round() { # $1 round
   for s in stock btr; do
     # pacstrap -K's pacman-key --init leaves a gpg-agent per root, which keeps the deleted
     # subvolume from being cleaned (omarchy-iso's stop_image_gpg_agents does the same)
-    [[ -d $TOP/@pstrap-$s-$1/etc/pacman.d/gnupg ]] && gpgconf --homedir "$TOP/@pstrap-$s-$1/etc/pacman.d/gnupg" --kill all 2>/dev/null
+    kill_root_agents "$TOP/@pstrap-$s-$1"
     umount -R "$TOP/@pstrap-$s-$1" 2>/dev/null
     btrfs subvolume delete -R "$TOP/@pstrap-$s-$1" >/dev/null 2>&1
     btrfs subvolume delete -R "$TOP/@pstrap-cache-$s-$1" >/dev/null 2>&1
