@@ -1,0 +1,1429 @@
+From a02c75b8616479f79f449919ac5d26e6f70b427a Mon Sep 17 00:00:00 2001
+From: Jonny Heggheim <hegjon@gmail.com>
+Date: Sat, 21 Nov 2026 07:36:48 +0200
+Subject: [PATCH 2/2] libalpm: install btrpkg packages from sync repositories
+
+With BtrPkgHelper set (pacman.conf) and the cache directory on btrfs, a sync
+target whose database entry has btrpkg.index and btrpkg.id in %DATA% is
+downloaded as NAME.pkg.btr by the helper (btrpkg pull-ids: one download
+queue per repository, data reused from the installed versions) instead of
+%FILENAME%.
+
+Validation: the index must parse and have the header ID from the database
+(instead of %SHA256SUM%); with package signatures on, NAME.pkg.btr.sig must be
+a signify signature by a key in /etc/btrpkg/keys or /usr/share/btrpkg/keys
+(instead of the OpenPGP signature).
+
+_alpm_open_archive reads a btrpkg cache file as a tar stream made from its
+index (btrstream.c), so loading, file lists, .INSTALL, mtree and extraction
+with backup files, .pacnew and NoExtract work unchanged. perform_extraction
+reflinks large files from the cache file (FICLONERANGE, copy as fallback)
+into a new file next to the target, sets owner, mode, xattrs and mtime, and
+renames it into place; their data in the tar stream is skipped unread.
+
+Without BtrPkgHelper nothing changes. test/btrpkg/btrtar lists an archive as
+libalpm sees it: for 315 packages the stream from a btrpkg cache file matches
+the original .pkg.tar.zst entry for entry, data included.
+---
+ lib/libalpm/add.c        | 151 +++++++++++
+ lib/libalpm/alpm.h       |  12 +
+ lib/libalpm/btrstream.c  | 534 +++++++++++++++++++++++++++++++++++++++
+ lib/libalpm/btrstream.h  |  42 +++
+ lib/libalpm/handle.c     |  18 ++
+ lib/libalpm/handle.h     |   1 +
+ lib/libalpm/meson.build  |   2 +-
+ lib/libalpm/package.h    |   4 +
+ lib/libalpm/sync.c       | 277 +++++++++++++++++++-
+ lib/libalpm/util.c       |  16 ++
+ src/pacman/conf.c        |   8 +
+ src/pacman/conf.h        |   1 +
+ src/pacman/pacman-conf.c |   3 +
+ test/btrpkg/btrtar.c     | 104 ++++++++
+ 14 files changed, 1170 insertions(+), 3 deletions(-)
+ create mode 100644 lib/libalpm/btrstream.c
+ create mode 100644 lib/libalpm/btrstream.h
+ create mode 100644 test/btrpkg/btrtar.c
+
+diff --git a/lib/libalpm/add.c b/lib/libalpm/add.c
+index 1e4aaf1e..a8aa34e4 100644
+--- a/lib/libalpm/add.c
++++ b/lib/libalpm/add.c
+@@ -47,6 +47,144 @@
+ #include "remove.h"
+ #include "handle.h"
+ 
++#ifdef HAVE_BTRPKG
++#include <linux/fs.h>
++#include <linux/openat2.h>
++#include <sys/ioctl.h>
++#include <sys/syscall.h>
++#include <sys/xattr.h>
++#include "btrstream.h"
++
++/* Place a large file of a btrpkg package: a new file next to the target shares its extents
++ * with the cache file (FICLONERANGE; a copy where that fails), gets owner, mode, xattrs and
++ * mtime (in that order: writing data would drop security.capability, chown would drop setuid),
++ * and is renamed over the target, as ARCHIVE_EXTRACT_UNLINK would replace it. Parent
++ * directories are opened without following symlinks (ARCHIVE_EXTRACT_SECURE_SYMLINKS).
++ * Returns 0 on success, 1 on error (logged), -2 to leave the entry to libarchive. */
++static int btr_extract(alpm_handle_t *handle, struct archive_entry *entry, const char *filename,
++		int srcfd, uint64_t off, uint64_t size)
++{
++	size_t rl = strlen(handle->root);
++	if(strncmp(filename, handle->root, rl) != 0 || rl == 0 || handle->root[rl - 1] != '/') {
++		return -2;
++	}
++	const char *rel = filename + rl;
++	const char *slash = strrchr(rel, '/');
++	const char *base = slash ? slash + 1 : rel;
++	char dir[PATH_MAX], tmp[NAME_MAX + 1];
++	int rootfd = -1, dirfd = -1, fd = -1, ret = 1;
++	static unsigned counter;
++
++	if(slash) {
++		size_t dl = (size_t)(slash - rel);
++		if(dl >= sizeof(dir)) {
++			return -2;
++		}
++		memcpy(dir, rel, dl);
++		dir[dl] = '\0';
++	} else {
++		strcpy(dir, ".");
++	}
++	rootfd = open(handle->root, O_PATH | O_DIRECTORY | O_CLOEXEC);
++	if(rootfd < 0) {
++		return -2;
++	}
++	struct open_how how = {
++		.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
++		.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
++	};
++	dirfd = (int)syscall(SYS_openat2, rootfd, dir, &how, sizeof(how));
++	if(dirfd < 0) {
++		int e = errno;
++		close(rootfd);
++		if(e == ELOOP || e == EXDEV) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename,
++					"a parent directory is a symlink");
++			return 1;
++		}
++		return -2; /* missing parents, old kernel: libarchive handles these */
++	}
++	for(int tries = 0; tries < 100 && fd < 0; tries++) {
++		snprintf(tmp, sizeof(tmp), ".btrpkg.%d.%u", (int)getpid(), counter++);
++		fd = openat(dirfd, tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
++		if(fd < 0 && errno != EEXIST) {
++			break;
++		}
++	}
++	if(fd < 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	struct file_clone_range cr = {
++		.src_fd = srcfd,
++		.src_offset = off,
++		.src_length = (size + 4095) & ~(uint64_t)4095,
++		.dest_offset = 0,
++	};
++	if(ioctl(fd, FICLONERANGE, &cr) != 0) {
++		/* not btrfs, another filesystem than the cache, or unaligned: copy */
++		loff_t so = (loff_t)off, done = 0;
++		while((uint64_t)done < size) {
++			ssize_t n = copy_file_range(srcfd, &so, fd, NULL, size - (uint64_t)done, 0);
++			if(n <= 0) {
++				_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename,
++						n < 0 ? strerror(errno) : "cache file too short");
++				goto out;
++			}
++			done += n;
++		}
++	}
++	if(ftruncate(fd, (off_t)size) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	if(geteuid() == 0 && fchown(fd, archive_entry_uid(entry), archive_entry_gid(entry)) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	if(fchmod(fd, archive_entry_perm(entry)) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	const char *xn;
++	const void *xv;
++	size_t xs;
++	archive_entry_xattr_reset(entry);
++	while(archive_entry_xattr_next(entry, &xn, &xv, &xs) == ARCHIVE_OK) {
++		if(fsetxattr(fd, xn, xv, xs, 0) != 0) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (xattr %s: %s)\n"), filename, xn, strerror(errno));
++			goto out;
++		}
++	}
++	struct timespec ts[2];
++	ts[0].tv_sec = ts[1].tv_sec = archive_entry_mtime(entry);
++	ts[0].tv_nsec = ts[1].tv_nsec = archive_entry_mtime_nsec(entry);
++	if(futimens(fd, ts) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	if(renameat(dirfd, tmp, dirfd, base) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("could not extract %s (%s)\n"), filename, strerror(errno));
++		goto out;
++	}
++	tmp[0] = '\0';
++	ret = 0;
++out:
++	if(fd >= 0) {
++		close(fd);
++		if(tmp[0]) {
++			unlinkat(dirfd, tmp, 0);
++		}
++	}
++	close(dirfd);
++	close(rootfd);
++	if(ret) {
++		alpm_logaction(handle, ALPM_CALLER_PREFIX, "error: could not extract %s\n", filename);
++	}
++	return ret;
++}
++#endif /* HAVE_BTRPKG */
++
+ int SYMEXPORT alpm_add_pkg(alpm_handle_t *handle, alpm_pkg_t *pkg)
+ {
+ 	const char *pkgname, *pkgver;
+@@ -122,6 +260,19 @@ static int perform_extraction(alpm_handle_t *handle, struct archive *archive,
+ 	                          ARCHIVE_EXTRACT_XATTR |
+ 	                          ARCHIVE_EXTRACT_SECURE_SYMLINKS;
+ 
++#ifdef HAVE_BTRPKG
++	{
++		int srcfd;
++		uint64_t off, size;
++		if(_alpm_btr_large_file(archive, archive_entry_pathname(entry), &srcfd, &off, &size)) {
++			int r = btr_extract(handle, entry, filename, srcfd, off, size);
++			if(r != -2) {
++				return r;
++			}
++		}
++	}
++#endif
++
+ 	archive_entry_set_pathname(entry, filename);
+ 
+ 	archive_writer = archive_write_disk_new();
+diff --git a/lib/libalpm/alpm.h b/lib/libalpm/alpm.h
+index 5cd620ef..76e7e333 100644
+--- a/lib/libalpm/alpm.h
++++ b/lib/libalpm/alpm.h
+@@ -1884,6 +1884,18 @@ const char *alpm_option_get_sandboxuser(alpm_handle_t *handle);
+ int alpm_option_set_sandboxuser(alpm_handle_t *handle, const char *sandboxuser);
+ 
+ /* End of sandboxuser accessors */
++
++/** @name Accessors for the btrpkg helper
++ * The command libalpm runs to download packages whose sync database entry carries btrpkg data
++ * (`btrpkg.index`, `btrpkg.id` in %DATA%), split into words like XferCommand; libalpm appends
++ * `pull-ids --installed ROOT SERVER CACHEDIR NAME=ID...`. NULL (the default) downloads every
++ * package as usual. btrpkg packages are only used when the cache directory is on btrfs.
++ * @{
++ */
++const char *alpm_option_get_btrpkg_helper(alpm_handle_t *handle);
++int alpm_option_set_btrpkg_helper(alpm_handle_t *handle, const char *cmd);
++/* End of btrpkg helper accessors */
++/** @} */
+ /** @} */
+ 
+ 
+diff --git a/lib/libalpm/btrstream.c b/lib/libalpm/btrstream.c
+new file mode 100644
+index 00000000..3610c774
+--- /dev/null
++++ b/lib/libalpm/btrstream.c
+@@ -0,0 +1,534 @@
++/*
++ *  btrstream.c
++ *
++ *  A btrpkg cache file (index | padding | image, see btrpkg.h) read as a tar archive, so every
++ *  libalpm path that reads packages through libarchive (loading, file lists, .INSTALL, mtree,
++ *  changelog, extraction with backup files and .pacnew) works unchanged. The stream is made from
++ *  the index: a pax header per entry (path, link, size, mtime, owner, xattrs), file data from
++ *  the small-file blob or read from the image. Large files' data can be skipped without being
++ *  read; add.c reflinks those from the image instead (_alpm_btr_large_file).
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <archive.h>
++
++#include "btrpkg.h"
++#include "btrstream.h"
++
++#define BUFSZ (256 * 1024)
++#define BLK 512
++
++enum phase { P_HEADER, P_DATA, P_PAD, P_END, P_DONE };
++
++struct btr_stream {
++	struct archive *a;
++	int fd;
++	btr_index_t *idx;
++	uint64_t image_base;
++	size_t *by_path; /* large-file entries sorted by path */
++	size_t nlarge;
++	/* generator state */
++	size_t cur;            /* current entry */
++	enum phase ph;
++	unsigned char *hdr;    /* headers of the current entry */
++	size_t hdr_len, hdr_pos;
++	uint64_t data_pos;     /* bytes of the current entry's data handed out */
++	size_t pad_left;
++	size_t end_left;
++	unsigned char *buf;
++	struct btr_stream *next; /* registry */
++};
++
++static struct btr_stream *registry;
++
++
++/* ---- tar headers ---- */
++
++static void octal(char *f, size_t n, uint64_t v)
++{
++	/* n-1 octal digits and a NUL; 0 when it doesn't fit (the pax header has the real value) */
++	uint64_t max = 1;
++	for(size_t i = 0; i < n - 1; i++) {
++		max *= 8;
++	}
++	if(v >= max) {
++		v = 0;
++	}
++	f[n - 1] = '\0';
++	for(size_t i = n - 1; i-- > 0;) {
++		f[i] = (char)('0' + (v & 7));
++		v >>= 3;
++	}
++}
++
++/* append a pax record "LEN key=value\n" where LEN counts the whole record */
++static int pax_add(unsigned char **b, size_t *len, size_t *cap, const char *key,
++		const void *val, size_t vlen)
++{
++	size_t base = strlen(key) + vlen + 3; /* ' ' '=' '\n' */
++	size_t digits = 1, total;
++	for(;;) {
++		total = base + digits;
++		size_t d = 1;
++		for(size_t t = total; t >= 10; t /= 10) {
++			d++;
++		}
++		if(d == digits) {
++			break;
++		}
++		digits = d;
++	}
++	if(*len + total > *cap) {
++		size_t nc = (*cap ? *cap * 2 : 1024) + total;
++		unsigned char *nb = realloc(*b, nc);
++		if(!nb) {
++			return -1;
++		}
++		*b = nb;
++		*cap = nc;
++	}
++	int n = snprintf((char *)*b + *len, total + 1, "%zu %s=", total, key);
++	memcpy(*b + *len + n, val, vlen);
++	(*b)[*len + total - 1] = '\n';
++	*len += total;
++	return 0;
++}
++
++static int pax_num(unsigned char **b, size_t *len, size_t *cap, const char *key, long long v)
++{
++	char s[32];
++	int n = snprintf(s, sizeof(s), "%lld", v);
++	return pax_add(b, len, cap, key, s, (size_t)n);
++}
++
++static void ustar(unsigned char *h, const char *name, size_t nlen, char type, uint32_t mode,
++		uint32_t uid, uint32_t gid, uint64_t size, int64_t mtime, const char *link, size_t llen)
++{
++	memset(h, 0, BLK);
++	memcpy(h, name, nlen > 99 ? 99 : nlen);
++	octal((char *)h + 100, 8, mode & 07777);
++	octal((char *)h + 108, 8, uid);
++	octal((char *)h + 116, 8, gid);
++	octal((char *)h + 124, 12, size);
++	octal((char *)h + 136, 12, mtime < 0 ? 0 : (uint64_t)mtime);
++	h[156] = (unsigned char)type;
++	if(link) {
++		memcpy(h + 157, link, llen > 99 ? 99 : llen);
++	}
++	memcpy(h + 257, "ustar", 6);
++	memcpy(h + 263, "00", 2);
++	memcpy(h + 265, "root", 4);
++	memcpy(h + 297, "root", 4);
++	memset(h + 148, ' ', 8);
++	unsigned sum = 0;
++	for(int i = 0; i < BLK; i++) {
++		sum += h[i];
++	}
++	snprintf((char *)h + 148, 8, "%06o", sum);
++	h[155] = ' ';
++}
++
++/* Build the headers of entry i into s->hdr. */
++static int make_headers(struct btr_stream *s, size_t i)
++{
++	const btr_entry_t *e = &s->idx->entries[i];
++	unsigned char *pax = NULL;
++	size_t plen = 0, pcap = 0;
++	char type;
++	uint64_t size = 0;
++	char *path = NULL;
++	size_t path_len = e->path_len;
++
++	switch(e->kind) {
++		case BTR_K_FILE: type = '0'; size = e->size; break;
++		case BTR_K_DIR: type = '5'; break;
++		case BTR_K_SYMLINK: type = '2'; break;
++		case BTR_K_HARDLINK: type = '1'; break;
++		default: return -1;
++	}
++	/* tar names directories with a trailing slash; pacman's file lists do too */
++	path = malloc(path_len + 2);
++	if(!path) {
++		return -1;
++	}
++	memcpy(path, e->path, path_len);
++	if(e->kind == BTR_K_DIR) {
++		path[path_len++] = '/';
++	}
++	path[path_len] = '\0';
++
++	int bad = pax_add(&pax, &plen, &pcap, "path", path, path_len)
++		|| pax_num(&pax, &plen, &pcap, "mtime", (long long)e->mtime)
++		|| pax_num(&pax, &plen, &pcap, "uid", (long long)e->uid)
++		|| pax_num(&pax, &plen, &pcap, "gid", (long long)e->gid)
++		|| pax_num(&pax, &plen, &pcap, "size", (long long)size);
++	if(!bad && (e->kind == BTR_K_SYMLINK || e->kind == BTR_K_HARDLINK)) {
++		bad = pax_add(&pax, &plen, &pcap, "linkpath", e->target, e->target_len);
++	}
++	for(uint32_t k = 0; !bad && k < e->nxattrs; k++) {
++		char key[512];
++		if(e->xattrs[k].name_len > sizeof(key) - 14) {
++			bad = 1;
++			break;
++		}
++		snprintf(key, sizeof(key), "SCHILY.xattr.%s", (const char *)e->xattrs[k].name);
++		bad = pax_add(&pax, &plen, &pcap, key, e->xattrs[k].value, e->xattrs[k].value_len);
++	}
++	if(bad) {
++		free(pax);
++		free(path);
++		return -1;
++	}
++	size_t ppad = (BLK - plen % BLK) % BLK;
++	size_t total = BLK + plen + ppad + BLK;
++	unsigned char *h = calloc(1, total);
++	if(!h) {
++		free(pax);
++		free(path);
++		return -1;
++	}
++	ustar(h, "././@PaxHeader", 14, 'x', 0644, 0, 0, plen, 0, NULL, 0);
++	memcpy(h + BLK, pax, plen);
++	ustar(h + BLK + plen + ppad, path, path_len, type, e->mode, e->uid, e->gid, size,
++			e->mtime, (e->kind == BTR_K_SYMLINK || e->kind == BTR_K_HARDLINK) ? e->target : NULL,
++			e->target_len);
++	free(pax);
++	free(path);
++	free(s->hdr);
++	s->hdr = h;
++	s->hdr_len = total;
++	s->hdr_pos = 0;
++	return 0;
++}
++
++static int is_large(const btr_entry_t *e)
++{
++	return e->kind == BTR_K_FILE && !e->small && e->size > 0;
++}
++
++/* Move to the next entry (or the end blocks). */
++static int next_entry(struct btr_stream *s)
++{
++	if(s->cur >= s->idx->nentries) {
++		s->ph = P_END;
++		s->end_left = 2 * BLK;
++		return 0;
++	}
++	if(make_headers(s, s->cur)) {
++		archive_set_error(s->a, ENOMEM, "btrpkg: cannot make tar headers");
++		return -1;
++	}
++	s->ph = P_HEADER;
++	s->data_pos = 0;
++	return 0;
++}
++
++static void after_data(struct btr_stream *s)
++{
++	const btr_entry_t *e = &s->idx->entries[s->cur];
++	uint64_t size = e->kind == BTR_K_FILE ? e->size : 0;
++	s->pad_left = (size_t)((BLK - size % BLK) % BLK);
++	s->ph = P_PAD;
++}
++
++static la_ssize_t stream_read(struct archive *a, void *client, const void **out)
++{
++	struct btr_stream *s = client;
++	size_t n = 0;
++	(void)a;
++	while(n < BUFSZ) {
++		const btr_entry_t *e = s->cur < s->idx->nentries ? &s->idx->entries[s->cur] : NULL;
++		switch(s->ph) {
++			case P_HEADER: {
++				size_t k = s->hdr_len - s->hdr_pos;
++				if(k > BUFSZ - n) {
++					k = BUFSZ - n;
++				}
++				memcpy(s->buf + n, s->hdr + s->hdr_pos, k);
++				n += k;
++				s->hdr_pos += k;
++				if(s->hdr_pos == s->hdr_len) {
++					if(e->kind == BTR_K_FILE && e->size > 0) {
++						s->ph = P_DATA;
++						/* hand large data out in reads of its own, so it can be skipped */
++						if(is_large(e) && n > 0) {
++							goto out;
++						}
++					} else {
++						after_data(s);
++					}
++				}
++				break;
++			}
++			case P_DATA: {
++				uint64_t left = e->size - s->data_pos;
++				size_t k = left > BUFSZ - n ? BUFSZ - n : (size_t)left;
++				if(e->small) {
++					memcpy(s->buf + n, s->idx->small + e->data_off + s->data_pos, k);
++				} else {
++					ssize_t r = pread(s->fd, s->buf + n, k, (off_t)(s->image_base + e->data_off + s->data_pos));
++					if(r < 0 && errno == EINTR) {
++						continue;
++					}
++					if(r <= 0) {
++						archive_set_error(s->a, r < 0 ? errno : EIO, "btrpkg: reading %s: %s", e->path,
++								r < 0 ? strerror(errno) : "cache file too short");
++						return -1;
++					}
++					k = (size_t)r;
++				}
++				n += k;
++				s->data_pos += k;
++				if(s->data_pos == e->size) {
++					after_data(s);
++					if(is_large(e)) {
++						goto out;
++					}
++				}
++				break;
++			}
++			case P_PAD: {
++				size_t k = s->pad_left > BUFSZ - n ? BUFSZ - n : s->pad_left;
++				memset(s->buf + n, 0, k);
++				n += k;
++				s->pad_left -= k;
++				if(!s->pad_left) {
++					s->cur++;
++					if(next_entry(s)) {
++						return -1;
++					}
++					/* stop before a large file's headers too, so its data starts a read */
++					if(s->ph == P_HEADER && is_large(&s->idx->entries[s->cur]) && n > 0) {
++						goto out;
++					}
++				}
++				break;
++			}
++			case P_END: {
++				size_t k = s->end_left > BUFSZ - n ? BUFSZ - n : s->end_left;
++				memset(s->buf + n, 0, k);
++				n += k;
++				s->end_left -= k;
++				if(!s->end_left) {
++					s->ph = P_DONE;
++				}
++				break;
++			}
++			case P_DONE:
++				goto out;
++		}
++	}
++out:
++	*out = s->buf;
++	return (la_ssize_t)n;
++}
++
++/* Skip within the current entry's data (and its padding), never past it. */
++static la_int64_t stream_skip(struct archive *a, void *client, la_int64_t request)
++{
++	struct btr_stream *s = client;
++	(void)a;
++	if(request <= 0 || s->ph != P_DATA) {
++		return 0;
++	}
++	const btr_entry_t *e = &s->idx->entries[s->cur];
++	uint64_t left = e->size - s->data_pos;
++	if((uint64_t)request < left) {
++		s->data_pos += (uint64_t)request;
++		return request;
++	}
++	s->data_pos = e->size;
++	after_data(s);
++	return (la_int64_t)left;
++}
++
++static int stream_close(struct archive *a, void *client)
++{
++	struct btr_stream *s = client;
++	(void)a;
++	for(struct btr_stream **p = &registry; *p; p = &(*p)->next) {
++		if(*p == s) {
++			*p = s->next;
++			break;
++		}
++	}
++	btr_index_free(s->idx);
++	free(s->by_path);
++	free(s->hdr);
++	free(s->buf);
++	free(s);
++	return ARCHIVE_OK;
++}
++
++static const btr_entry_t *sort_base;
++
++static int cmp_path(const void *x, const void *y)
++{
++	const btr_entry_t *a = &sort_base[*(const size_t *)x], *b = &sort_base[*(const size_t *)y];
++	return strcmp(a->path, b->path);
++}
++
++int _alpm_btr_is_cache_file(int fd)
++{
++	unsigned char m[8];
++	return pread(fd, m, 8, 0) == 8 && memcmp(m, "BTRPKG\0\0", 8) == 0;
++}
++
++/* Read the index at the start of fd. */
++static btr_index_t *read_index(int fd, const unsigned char *expected_id, uint64_t file_size, char *err)
++{
++	unsigned char hb[BTR_HDR];
++	btr_header_t h;
++	btr_index_t *idx = NULL;
++	if(pread(fd, hb, BTR_HDR, 0) != BTR_HDR) {
++		snprintf(err, BTR_ERRLEN, "truncated header");
++		return NULL;
++	}
++	if(btr_header_decode(hb, BTR_HDR, &h, err)) {
++		return NULL;
++	}
++	uint64_t il = btr_index_len(&h);
++	if(btr_cache_len(&h) > file_size) {
++		snprintf(err, BTR_ERRLEN, "cache file shorter than its index says");
++		return NULL;
++	}
++	unsigned char *b = malloc(il);
++	if(!b) {
++		snprintf(err, BTR_ERRLEN, "out of memory");
++		return NULL;
++	}
++	uint64_t got = 0;
++	while(got < il) {
++		ssize_t r = pread(fd, b + got, il - got, (off_t)got);
++		if(r < 0 && errno == EINTR) {
++			continue;
++		}
++		if(r <= 0) {
++			free(b);
++			snprintf(err, BTR_ERRLEN, "reading the index: %s", r < 0 ? strerror(errno) : "short file");
++			return NULL;
++		}
++		got += (uint64_t)r;
++	}
++	if(btr_index_parse(b, il, expected_id, &idx, err)) {
++		idx = NULL;
++	}
++	free(b);
++	return idx;
++}
++
++int _alpm_btr_validate(int fd, const unsigned char *expected_id, uint64_t file_size, char *err)
++{
++	btr_index_t *idx = read_index(fd, expected_id, file_size, err);
++	if(!idx) {
++		return -1;
++	}
++	btr_index_free(idx);
++	return 0;
++}
++
++int _alpm_btr_archive_open(struct archive *a, int fd, uint64_t file_size, char *err)
++{
++	struct btr_stream *s = calloc(1, sizeof(*s));
++	if(!s) {
++		snprintf(err, BTR_ERRLEN, "out of memory");
++		return -1;
++	}
++	s->a = a;
++	s->fd = fd;
++	if(!(s->idx = read_index(fd, NULL, file_size, err)) || !(s->buf = malloc(BUFSZ))) {
++		if(s->idx) {
++			snprintf(err, BTR_ERRLEN, "out of memory");
++		}
++		btr_index_free(s->idx);
++		free(s);
++		return -1;
++	}
++	s->image_base = btr_image_base(&s->idx->hdr);
++	s->by_path = malloc((s->idx->nentries ? s->idx->nentries : 1) * sizeof(size_t));
++	if(!s->by_path) {
++		btr_index_free(s->idx);
++		free(s->buf);
++		free(s);
++		snprintf(err, BTR_ERRLEN, "out of memory");
++		return -1;
++	}
++	for(size_t i = 0; i < s->idx->nentries; i++) {
++		if(is_large(&s->idx->entries[i])) {
++			s->by_path[s->nlarge++] = i;
++		}
++	}
++	sort_base = s->idx->entries;
++	qsort(s->by_path, s->nlarge, sizeof(size_t), cmp_path);
++	if(next_entry(s)) {
++		btr_index_free(s->idx);
++		free(s->by_path);
++		free(s->buf);
++		free(s);
++		snprintf(err, BTR_ERRLEN, "out of memory");
++		return -1;
++	}
++	s->next = registry;
++	registry = s;
++	archive_read_set_callback_data(a, s);
++	archive_read_set_read_callback(a, stream_read);
++	archive_read_set_skip_callback(a, stream_skip);
++	archive_read_set_close_callback(a, stream_close);
++	if(archive_read_open1(a) != ARCHIVE_OK) {
++		/* libarchive calls the close callback on failure */
++		snprintf(err, BTR_ERRLEN, "%s", archive_error_string(a) ? archive_error_string(a) : "libarchive error");
++		return -1;
++	}
++	return 0;
++}
++
++int _alpm_btr_large_file(struct archive *a, const char *entryname, int *fd, uint64_t *off,
++		uint64_t *size)
++{
++	for(struct btr_stream *s = registry; s; s = s->next) {
++		if(s->a != a) {
++			continue;
++		}
++		size_t lo = 0, hi = s->nlarge;
++		while(lo < hi) {
++			size_t mid = lo + (hi - lo) / 2;
++			const btr_entry_t *e = &s->idx->entries[s->by_path[mid]];
++			int c = strcmp(e->path, entryname);
++			if(c == 0) {
++				/* only while the stream is at this entry's data, not read yet */
++				if(s->ph != P_DATA || s->cur != s->by_path[mid] || s->data_pos != 0) {
++					return 0;
++				}
++				*fd = s->fd;
++				*off = s->image_base + e->data_off;
++				*size = e->size;
++				return 1;
++			}
++			if(c < 0) {
++				lo = mid + 1;
++			} else {
++				hi = mid;
++			}
++		}
++		return 0;
++	}
++	return 0;
++}
+diff --git a/lib/libalpm/btrstream.h b/lib/libalpm/btrstream.h
+new file mode 100644
+index 00000000..54c66d58
+--- /dev/null
++++ b/lib/libalpm/btrstream.h
+@@ -0,0 +1,42 @@
++/*
++ *  btrstream.h
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++#ifndef ALPM_BTRSTREAM_H
++#define ALPM_BTRSTREAM_H
++
++#include <stdint.h>
++
++struct archive;
++
++/* Whether fd is a btrpkg file (index, transport or cache file). */
++int _alpm_btr_is_cache_file(int fd);
++
++/* Check the index at the start of a cache file: everything btr_index_parse checks, the header
++ * ID when expected_id is not NULL, and that the file is as long as the index says. err:
++ * BTR_ERRLEN bytes. */
++int _alpm_btr_validate(int fd, const unsigned char *expected_id, uint64_t file_size, char *err);
++
++/* Open archive `a` (formats already enabled) on the cache file fd as a tar stream. fd stays
++ * owned by the caller and must outlive the archive. */
++int _alpm_btr_archive_open(struct archive *a, int fd, uint64_t file_size, char *err);
++
++/* If the entry `a` is positioned at is a large file of a btrpkg archive whose data hasn't been
++ * read yet, its place in the cache file: 1 with fd, offset and size set; 0 otherwise. The data
++ * at off is block-aligned and zero-padded to a 4 KiB boundary. */
++int _alpm_btr_large_file(struct archive *a, const char *entryname, int *fd, uint64_t *off,
++		uint64_t *size);
++
++#endif /* ALPM_BTRSTREAM_H */
+diff --git a/lib/libalpm/handle.c b/lib/libalpm/handle.c
+index 93c163ea..9571499c 100644
+--- a/lib/libalpm/handle.c
++++ b/lib/libalpm/handle.c
+@@ -103,6 +103,7 @@ void _alpm_handle_free(alpm_handle_t *handle)
+ 	FREELIST(handle->architectures);
+ 	FREE(handle->gpgdir);
+ 	FREE(handle->sandboxuser);
++	FREE(handle->btrpkg_helper);
+ 	FREELIST(handle->noupgrade);
+ 	FREELIST(handle->noextract);
+ 	FREELIST(handle->ignorepkg);
+@@ -294,6 +295,23 @@ const char SYMEXPORT *alpm_option_get_gpgdir(alpm_handle_t *handle)
+ 	return handle->gpgdir;
+ }
+ 
++const char SYMEXPORT *alpm_option_get_btrpkg_helper(alpm_handle_t *handle)
++{
++	CHECK_HANDLE(handle, return NULL);
++	return handle->btrpkg_helper;
++}
++
++int SYMEXPORT alpm_option_set_btrpkg_helper(alpm_handle_t *handle, const char *cmd)
++{
++	CHECK_HANDLE(handle, return -1);
++	FREE(handle->btrpkg_helper);
++	if(cmd) {
++		STRDUP(handle->btrpkg_helper, cmd, RET_ERR(handle, ALPM_ERR_MEMORY, -1));
++	}
++	_alpm_log(handle, ALPM_LOG_DEBUG, "option 'btrpkg_helper' = %s\n", cmd ? cmd : "(none)");
++	return 0;
++}
++
+ const char SYMEXPORT *alpm_option_get_sandboxuser(alpm_handle_t *handle)
+ {
+ 	CHECK_HANDLE(handle, return NULL);
+diff --git a/lib/libalpm/handle.h b/lib/libalpm/handle.h
+index 88226d05..e93e9c61 100644
+--- a/lib/libalpm/handle.h
++++ b/lib/libalpm/handle.h
+@@ -96,6 +96,7 @@ struct _alpm_handle_t {
+ 	char *lockfile;          /* Name of the lock file */
+ 	char *gpgdir;            /* Directory where GnuPG files are stored */
+ 	char *sandboxuser;       /* User to switch to for sensitive operations */
++	char *btrpkg_helper;     /* command that pulls btrpkg packages (BtrPkgHelper); NULL: off */
+ 	alpm_list_t *cachedirs;  /* Paths to pacman cache directories */
+ 	alpm_list_t *hookdirs;   /* Paths to hook directories */
+ 	alpm_list_t *overwrite_files; /* Paths that may be overwritten */
+diff --git a/lib/libalpm/meson.build b/lib/libalpm/meson.build
+index f6acf058..f14119e1 100644
+--- a/lib/libalpm/meson.build
++++ b/lib/libalpm/meson.build
+@@ -35,5 +35,5 @@ libalpm_sources = files('''
+ '''.split())
+ 
+ if have_btrpkg
+-  libalpm_sources += files('btrpkg.h', 'btrpkg.c')
++  libalpm_sources += files('btrpkg.h', 'btrpkg.c', 'btrstream.h', 'btrstream.c')
+ endif
+diff --git a/lib/libalpm/package.h b/lib/libalpm/package.h
+index 0f8f9aa3..386365ae 100644
+--- a/lib/libalpm/package.h
++++ b/lib/libalpm/package.h
+@@ -144,6 +144,10 @@ struct _alpm_pkg_t {
+ 	int infolevel;
+ 	/* Bitfield from alpm_pkgvalidation_t */
+ 	int validation;
++
++	/* sync package downloaded as a btrpkg cache file (filename is NAME.pkg.btr) */
++	int btr;
++	unsigned char btr_id[32]; /* header ID from the database's btrpkg.id */
+ };
+ 
+ alpm_file_t *_alpm_file_copy(alpm_file_t *dest, const alpm_file_t *src);
+diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
+index c8db3b15..08722cfe 100644
+--- a/lib/libalpm/sync.c
++++ b/lib/libalpm/sync.c
+@@ -48,6 +48,259 @@
+ #include "diskspace.h"
+ #include "signing.h"
+ 
++#ifdef HAVE_BTRPKG
++#include <errno.h>
++#include <fcntl.h>
++#include <linux/magic.h>
++#include <sys/stat.h>
++#include <sys/vfs.h>
++#include <sys/wait.h>
++#include "btrpkg.h"
++#include "btrstream.h"
++#include "util-common.h"
++
++static const char *const btr_keydirs[] = { "/etc/btrpkg/keys", "/usr/share/btrpkg/keys", NULL };
++
++static const char *btr_xdata(alpm_pkg_t *pkg, const char *name)
++{
++	for(alpm_list_t *i = pkg->xdata; i; i = i->next) {
++		alpm_pkg_xdata_t *x = i->data;
++		if(strcmp(x->name, name) == 0) {
++			return x->value;
++		}
++	}
++	return NULL;
++}
++
++static int btr_unhex32(const char *s, unsigned char out[32])
++{
++	if(strlen(s) != 64) {
++		return -1;
++	}
++	for(int i = 0; i < 64; i++) {
++		char c = s[i];
++		int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
++		if(v < 0) {
++			return -1;
++		}
++		if(i % 2 == 0) {
++			out[i / 2] = (unsigned char)(v << 4);
++		} else {
++			out[i / 2] |= (unsigned char)v;
++		}
++	}
++	return 0;
++}
++
++/* Sync targets whose database entry carries btrpkg data come as NAME.pkg.btr cache files,
++ * when a helper is configured and the cache directory is on btrfs (their data is shared with
++ * the installed files by reflink). Everything else is downloaded as usual. */
++static void btr_select(alpm_handle_t *handle, const char *cachedir)
++{
++	struct statfs sf;
++	if(!handle->btrpkg_helper || !cachedir) {
++		return;
++	}
++	if(statfs(cachedir, &sf) != 0 || sf.f_type != BTRFS_SUPER_MAGIC) {
++		_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s is not on btrfs, not using btrpkg packages\n", cachedir);
++		return;
++	}
++	for(alpm_list_t *i = handle->trans->add; i; i = i->next) {
++		alpm_pkg_t *spkg = i->data;
++		const char *index, *id;
++		if(spkg->origin == ALPM_PKG_FROM_FILE || spkg->btr) {
++			continue;
++		}
++		index = btr_xdata(spkg, "btrpkg.index");
++		id = btr_xdata(spkg, "btrpkg.id");
++		if(!index || !id || strncmp(index, "index/", 6) != 0) {
++			continue;
++		}
++		const char *name = index + 6;
++		size_t len = strlen(name);
++		if(len <= 7 || strcmp(name + len - 7, ".btridx") != 0 || name[0] == '.'
++				|| memchr(name, '/', len - 7) || btr_unhex32(id, spkg->btr_id) != 0) {
++			_alpm_log(handle, ALPM_LOG_WARNING, _("%s: unusable btrpkg data in the database\n"), spkg->name);
++			continue;
++		}
++		char *fn = malloc(len - 7 + 9);
++		if(!fn) {
++			continue;
++		}
++		memcpy(fn, name, len - 7);
++		strcpy(fn + len - 7, ".pkg.btr");
++		FREE(spkg->filename);
++		spkg->filename = fn;
++		spkg->btr = 1;
++		_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s comes as %s\n", spkg->name, fn);
++	}
++}
++
++/* Download the btrpkg targets among `files` (removing them from it): one helper run per
++ * repository, so all its packages share one download queue and reuse data from the installed
++ * versions. */
++static int btr_download(alpm_handle_t *handle, const char *cachedir, alpm_list_t **files)
++{
++	alpm_list_t *btr = NULL, *rest = NULL;
++	int ret = 0;
++	for(alpm_list_t *i = *files; i; i = i->next) {
++		alpm_pkg_t *p = i->data;
++		if(p->btr) {
++			btr = alpm_list_add(btr, p);
++		} else {
++			rest = alpm_list_add(rest, p);
++		}
++	}
++	alpm_list_free(*files);
++	*files = rest;
++
++	while(btr && ret == 0) {
++		alpm_db_t *db = ((alpm_pkg_t *)btr->data)->origin_data.db;
++		alpm_list_t *mine = NULL, *others = NULL;
++		for(alpm_list_t *i = btr; i; i = i->next) {
++			alpm_pkg_t *p = i->data;
++			if(p->origin_data.db == db) {
++				mine = alpm_list_add(mine, p);
++			} else {
++				others = alpm_list_add(others, p);
++			}
++		}
++		alpm_list_free(btr);
++		btr = others;
++
++		char **cmd = wordsplit(handle->btrpkg_helper);
++		size_t ncmd = 0, n = alpm_list_count(mine), k = 0;
++		const char *server = db->servers ? db->servers->data : NULL;
++		char **argv = NULL;
++		char **ids = calloc(n, sizeof(char *));
++		if(!cmd || !server || !ids) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("btrpkg: cannot run '%s' for %s\n"), handle->btrpkg_helper, db->treename);
++			ret = -1;
++			goto next;
++		}
++		while(cmd[ncmd]) {
++			ncmd++;
++		}
++		argv = calloc(ncmd + 6 + n + 1, sizeof(char *));
++		if(!argv) {
++			ret = -1;
++			goto next;
++		}
++		for(size_t j = 0; j < ncmd; j++) {
++			argv[k++] = cmd[j];
++		}
++		argv[k++] = (char *)"pull-ids";
++		argv[k++] = (char *)"--installed";
++		argv[k++] = handle->root;
++		argv[k++] = (char *)server;
++		argv[k++] = (char *)cachedir;
++		size_t m = 0;
++		for(alpm_list_t *i = mine; i; i = i->next, m++) {
++			alpm_pkg_t *p = i->data;
++			char hex[65];
++			size_t fl = strlen(p->filename) - 8; /* without .pkg.btr */
++			btr_hex(p->btr_id, 32, hex);
++			ids[m] = malloc(fl + 1 + 64 + 1);
++			if(!ids[m]) {
++				ret = -1;
++				goto next;
++			}
++			memcpy(ids[m], p->filename, fl);
++			ids[m][fl] = '=';
++			memcpy(ids[m] + fl + 1, hex, 65);
++			argv[k++] = ids[m];
++		}
++		argv[k] = NULL;
++		_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: running %s pull-ids for %zu packages from %s\n", argv[0], n, server);
++		pid_t pid = fork();
++		if(pid < 0) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("btrpkg: fork failed: %s\n"), strerror(errno));
++			ret = -1;
++			goto next;
++		}
++		if(pid == 0) {
++			execvp(argv[0], argv);
++			fprintf(stderr, "btrpkg: cannot run %s: %s\n", argv[0], strerror(errno));
++			_exit(127);
++		}
++		int status;
++		while(waitpid(pid, &status, 0) < 0 && errno == EINTR) {
++		}
++		if(!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("failed retrieving btrpkg packages from %s\n"), db->treename);
++			ret = -1;
++		}
++next:
++		if(ids) {
++			for(size_t j = 0; j < n; j++) {
++				free(ids[j]);
++			}
++		}
++		free(ids);
++		free(argv);
++		wordsplit_free(cmd);
++		alpm_list_free(mine);
++	}
++	alpm_list_free(btr);
++	return ret;
++}
++
++/* The check of a btrpkg cache file that replaces the sha256sum and OpenPGP checks: the index
++ * must parse and have the header ID the database gives, and with package signatures on, a
++ * signify signature (NAME.pkg.btr.sig, from the server) by a key in btr_keydirs. */
++static int btr_validate(alpm_handle_t *handle, alpm_pkg_t *pkg, const char *path, int siglevel,
++		int *validation)
++{
++	char err[BTR_ERRLEN];
++	struct stat st;
++	int fd = open(path, O_RDONLY | O_CLOEXEC);
++	if(fd < 0 || fstat(fd, &st) != 0) {
++		if(fd >= 0) {
++			close(fd);
++		}
++		handle->pm_errno = ALPM_ERR_PKG_OPEN;
++		return -1;
++	}
++	if(_alpm_btr_validate(fd, pkg->btr_id, (uint64_t)st.st_size, err) != 0) {
++		_alpm_log(handle, ALPM_LOG_ERROR, _("%s: %s\n"), pkg->name, err);
++		close(fd);
++		handle->pm_errno = ALPM_ERR_PKG_INVALID_CHECKSUM;
++		return -1;
++	}
++	*validation = ALPM_PKG_VALIDATION_SHA256SUM;
++	if(siglevel & ALPM_SIG_PACKAGE) {
++		char sigpath[PATH_MAX], sig[4096], keypath[PATH_MAX];
++		unsigned char hdr[BTR_HDR];
++		ssize_t sl = -1;
++		snprintf(sigpath, sizeof(sigpath), "%s.sig", path);
++		int sfd = open(sigpath, O_RDONLY | O_CLOEXEC);
++		if(sfd >= 0) {
++			sl = read(sfd, sig, sizeof(sig));
++			close(sfd);
++		}
++		if(sl <= 0) {
++			close(fd);
++			if(siglevel & ALPM_SIG_PACKAGE_OPTIONAL) {
++				return 0;
++			}
++			handle->pm_errno = ALPM_ERR_PKG_MISSING_SIG;
++			return -1;
++		}
++		if(pread(fd, hdr, BTR_HDR, 0) != BTR_HDR
++				|| btr_sig_verify(hdr, sig, (size_t)sl, btr_keydirs, keypath, err) != 0) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("%s: btrpkg signature: %s\n"), pkg->name, err);
++			close(fd);
++			handle->pm_errno = ALPM_ERR_PKG_INVALID_CHECKSUM;
++			return -1;
++		}
++		_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s signed by %s\n", pkg->name, keypath);
++		*validation |= ALPM_PKG_VALIDATION_SIGNATURE;
++	}
++	close(fd);
++	return 0;
++}
++#endif /* HAVE_BTRPKG */
++
+ struct keyinfo_t {
+        char* uid;
+        char* keyid;
+@@ -792,6 +1045,13 @@ static int download_files(alpm_handle_t *handle)
+ 		goto finish;
+ 	}
+ 
++#ifdef HAVE_BTRPKG
++	ret = btr_download(handle, cachedir, &files);
++	if(ret != 0) {
++		goto finish;
++	}
++#endif
++
+ 	if(files) {
+ 		/* check for necessary disk space for download */
+ 		if(handle->checkspace) {
+@@ -919,6 +1179,9 @@ static int check_keyring(alpm_handle_t *handle)
+ 		if(pkg->origin == ALPM_PKG_FROM_FILE) {
+ 			continue; /* pkg_load() has been already called, this package is valid */
+ 		}
++		if(pkg->btr) {
++			continue; /* signify signature, checked in check_validity */
++		}
+ 
+ 		level = alpm_db_get_siglevel(alpm_pkg_get_db(pkg));
+ 		if((level & ALPM_SIG_PACKAGE)) {
+@@ -1024,8 +1287,15 @@ static int check_validity(alpm_handle_t *handle,
+ 
+ 		v.siglevel = alpm_db_get_siglevel(alpm_pkg_get_db(v.pkg));
+ 
+-		if(_alpm_pkg_validate_internal(handle, v.path, v.pkg,
+-					v.siglevel, &v.siglist, &v.validation) == -1) {
++		int invalid_pkg;
++#ifdef HAVE_BTRPKG
++		if(v.pkg->btr) {
++			invalid_pkg = btr_validate(handle, v.pkg, v.path, v.siglevel, &v.validation) == -1;
++		} else
++#endif
++		invalid_pkg = _alpm_pkg_validate_internal(handle, v.path, v.pkg,
++					v.siglevel, &v.siglist, &v.validation) == -1;
++		if(invalid_pkg) {
+ 			struct validity *invalid;
+ 			v.error = handle->pm_errno;
+ 			MALLOC(invalid, sizeof(struct validity), return -1);
+@@ -1249,6 +1519,9 @@ int _alpm_sync_load(alpm_handle_t *handle, alpm_list_t **data)
+ 	uint64_t total_bytes = 0;
+ 	alpm_trans_t *trans = handle->trans;
+ 
++#ifdef HAVE_BTRPKG
++	btr_select(handle, _alpm_filecache_setup(handle));
++#endif
+ 	if(download_files(handle) == -1) {
+ 		return -1;
+ 	}
+diff --git a/lib/libalpm/util.c b/lib/libalpm/util.c
+index 6739161b..ba25a53d 100644
+--- a/lib/libalpm/util.c
++++ b/lib/libalpm/util.c
+@@ -61,6 +61,10 @@
+ #include "handle.h"
+ #include "trans.h"
+ #include "sandbox.h"
++#ifdef HAVE_BTRPKG
++#include "btrpkg.h"
++#include "btrstream.h"
++#endif
+ 
+ #ifndef HAVE_STRSEP
+ /** Extracts tokens from a string.
+@@ -287,6 +291,18 @@ int _alpm_open_archive(alpm_handle_t *handle, const char *path,
+ 	}
+ #endif
+ 
++#ifdef HAVE_BTRPKG
++	/* a btrpkg cache file reads as a tar archive made from its index (btrstream.c) */
++	if(S_ISREG(buf->st_mode) && _alpm_btr_is_cache_file(fd)) {
++		char err[BTR_ERRLEN];
++		if(_alpm_btr_archive_open(*archive, fd, (uint64_t)buf->st_size, err) != 0) {
++			_alpm_log(handle, ALPM_LOG_ERROR, _("could not open file %s: %s\n"), path, err);
++			goto error;
++		}
++		return fd;
++	}
++#endif
++
+ 	if(archive_read_open_fd(*archive, fd, bufsize) != ARCHIVE_OK) {
+ 		_alpm_log(handle, ALPM_LOG_ERROR, _("could not open file %s: %s\n"),
+ 				path, archive_error_string(*archive));
+diff --git a/src/pacman/conf.c b/src/pacman/conf.c
+index e391735a..6bfca118 100644
+--- a/src/pacman/conf.c
++++ b/src/pacman/conf.c
+@@ -156,6 +156,7 @@ int config_free(config_t *oldconfig)
+ 	free(oldconfig->logfile);
+ 	free(oldconfig->gpgdir);
+ 	free(oldconfig->sandboxuser);
++	free(oldconfig->btrpkghelper);
+ 	FREELIST(oldconfig->hookdirs);
+ 	FREELIST(oldconfig->cachedirs);
+ 	free(oldconfig->xfercommand);
+@@ -722,6 +723,11 @@ static int _parse_options(const char *key, char *value,
+ 				config->sandboxuser = strdup(value);
+ 				pm_printf(ALPM_LOG_DEBUG, "config: sandboxuser: %s\n", value);
+ 			}
++		} else if(strcmp(key, "BtrPkgHelper") == 0) {
++			if(!config->btrpkghelper) {
++				config->btrpkghelper = strdup(value);
++				pm_printf(ALPM_LOG_DEBUG, "config: btrpkghelper: %s\n", value);
++			}
+ 		} else if(strcmp(key, "XferCommand") == 0) {
+ 			char **c;
+ 			if((config->xfercommand_argv = wordsplit(value)) == NULL) {
+@@ -975,6 +981,8 @@ static int setup_libalpm(void)
+ 	alpm_option_set_checkspace(handle, config->checkspace);
+ 	alpm_option_set_usesyslog(handle, config->usesyslog);
+ 
++	alpm_option_set_btrpkg_helper(handle, config->btrpkghelper);
++
+ 	if((ret = alpm_option_set_sandboxuser(handle, config->sandboxuser)) != 0) {
+ 		pm_printf(ALPM_LOG_ERROR, _("problem setting DownloadUser '%s' (user does not exist)\n"),
+ 					config->sandboxuser);
+diff --git a/src/pacman/conf.h b/src/pacman/conf.h
+index dab28a25..9d1ea421 100644
+--- a/src/pacman/conf.h
++++ b/src/pacman/conf.h
+@@ -71,6 +71,7 @@ typedef struct __config_t {
+ 	char *gpgdir;
+ 	char *sysroot;
+ 	char *sandboxuser;
++	char *btrpkghelper;
+ 	alpm_list_t *hookdirs;
+ 	alpm_list_t *cachedirs;
+ 	alpm_list_t *architectures;
+diff --git a/src/pacman/pacman-conf.c b/src/pacman/pacman-conf.c
+index de7fb17c..11905263 100644
+--- a/src/pacman/pacman-conf.c
++++ b/src/pacman/pacman-conf.c
+@@ -272,6 +272,7 @@ static void dump_config(void)
+ 
+ 	show_list_str("Architecture", config->architectures);
+ 	show_str("XferCommand", config->xfercommand);
++	show_str("BtrPkgHelper", config->btrpkghelper);
+ 
+ 	show_bool("UseSyslog", config->usesyslog);
+ 	show_bool("Color", config->color);
+@@ -384,6 +385,8 @@ static int list_directives(void)
+ 			show_list_str("Architecture", config->architectures);
+ 		} else if(strcasecmp(i->data, "XferCommand") == 0) {
+ 			show_str("XferCommand", config->xfercommand);
++		} else if(strcasecmp(i->data, "BtrPkgHelper") == 0) {
++			show_str("BtrPkgHelper", config->btrpkghelper);
+ 
+ 		} else if(strcasecmp(i->data, "UseSyslog") == 0) {
+ 			show_bool("UseSyslog", config->usesyslog);
+diff --git a/test/btrpkg/btrtar.c b/test/btrpkg/btrtar.c
+new file mode 100644
+index 00000000..ccfd8bd5
+--- /dev/null
++++ b/test/btrpkg/btrtar.c
+@@ -0,0 +1,104 @@
++/*
++ * btrtar: list an archive the way libalpm sees it, for comparing a btrpkg cache file (read
++ * through btrstream.c) with the original .pkg.tar.zst (read by libarchive).
++ *
++ *   btrtar FILE          one line per entry: path type mode uid gid size mtime link xattrs sha256
++ *   btrtar --skip FILE   the same without reading file data (exercises the skip path)
++ */
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <archive.h>
++#include <archive_entry.h>
++#include <openssl/evp.h>
++
++#include "btrpkg.h"
++#include "btrstream.h"
++
++int main(int argc, char **argv)
++{
++	int skip = argc == 3 && strcmp(argv[1], "--skip") == 0;
++	const char *path = argv[argc - 1];
++	if(argc < 2 || (argc == 3 && !skip)) {
++		fprintf(stderr, "usage: btrtar [--skip] FILE\n");
++		return 2;
++	}
++	int fd = open(path, O_RDONLY | O_CLOEXEC);
++	struct stat st;
++	if(fd < 0 || fstat(fd, &st)) {
++		perror(path);
++		return 2;
++	}
++	struct archive *a = archive_read_new();
++	archive_read_support_filter_all(a);
++	archive_read_support_format_all(a);
++	char err[BTR_ERRLEN];
++	if(_alpm_btr_is_cache_file(fd)) {
++		if(_alpm_btr_archive_open(a, fd, (uint64_t)st.st_size, err)) {
++			fprintf(stderr, "%s: %s\n", path, err);
++			return 1;
++		}
++	} else if(archive_read_open_fd(a, fd, 65536) != ARCHIVE_OK) {
++		fprintf(stderr, "%s: %s\n", path, archive_error_string(a));
++		return 1;
++	}
++	struct archive_entry *e;
++	int r;
++	static unsigned char buf[1 << 16];
++	while((r = archive_read_next_header(a, &e)) == ARCHIVE_OK) {
++		const char *link = archive_entry_hardlink(e);
++		char type = 'f';
++		if(link) {
++			type = 'h';
++		} else if(archive_entry_filetype(e) == AE_IFDIR) {
++			type = 'd';
++		} else if(archive_entry_filetype(e) == AE_IFLNK) {
++			type = 'l';
++			link = archive_entry_symlink(e);
++		}
++		printf("%s %c %o %lld %lld %lld %lld %s", archive_entry_pathname(e), type,
++				(unsigned)archive_entry_perm(e), (long long)archive_entry_uid(e),
++				(long long)archive_entry_gid(e), (long long)archive_entry_size(e),
++				(long long)archive_entry_mtime(e), link ? link : "-");
++		const char *xn;
++		const void *xv;
++		size_t xs;
++		archive_entry_xattr_reset(e);
++		while(archive_entry_xattr_next(e, &xn, &xv, &xs) == ARCHIVE_OK) {
++			printf(" x:%s=", xn);
++			for(size_t i = 0; i < xs; i++) {
++				printf("%02x", ((const unsigned char *)xv)[i]);
++			}
++		}
++		if(skip || type != 'f') {
++			printf("\n");
++			continue;
++		}
++		EVP_MD_CTX *c = EVP_MD_CTX_new();
++		EVP_DigestInit_ex(c, EVP_sha256(), NULL);
++		la_ssize_t n;
++		while((n = archive_read_data(a, buf, sizeof(buf))) > 0) {
++			EVP_DigestUpdate(c, buf, (size_t)n);
++		}
++		if(n < 0) {
++			fprintf(stderr, "%s: %s\n", path, archive_error_string(a));
++			return 1;
++		}
++		unsigned char h[32];
++		EVP_DigestFinal_ex(c, h, NULL);
++		EVP_MD_CTX_free(c);
++		char hx[65];
++		btr_hex(h, 32, hx);
++		printf(" %s\n", hx);
++	}
++	if(r != ARCHIVE_EOF) {
++		fprintf(stderr, "%s: %s\n", path, archive_error_string(a));
++		return 1;
++	}
++	archive_read_free(a);
++	close(fd);
++	return 0;
++}
+-- 
+2.56.1
+

@@ -10,6 +10,6 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
    indexes from `bench/craft_indexes.py`).
 
 Cross-checks run against this repo's reader (see PLAN, iteration 2 milestone 2): `btrpkg dump`
-and `btrdump` print identical text for all 366 real indexes (51 omarchy, 9 btrtest, the 315 set;
-69 + 315 minus overlap), the 315 transports' chunks pass `btr_check_chunk`, and 9,000 indexes from
+and `btrdump` print identical text for all 384 real indexes (51 in the omarchy test repo, 18 in
+btrtest, the 315 set), the 315 transports' chunks pass `btr_check_chunk`, and 9,000 indexes from
 `bench/fuzz_entries.py` get the same verdict and output, with no ASan/UBSan reports.

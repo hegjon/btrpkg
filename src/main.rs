@@ -679,11 +679,49 @@ const USAGE: &str = "usage:
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
   btrpkg publish [--key NAME.sec] IN.pkg.btr STORE
   btrpkg pull [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL NAME CACHE
+  btrpkg pull-ids [--h2c] [--parallel N] [--installed ROOT] [-l N] DIR|URL CACHEDIR NAME=IDHEX...
+      (for package managers: every NAME's index must have the header ID IDHEX; all packages share
+       one download queue; writes CACHEDIR/NAME.pkg.btr, and NAME.pkg.btr.sig when the server
+       has a signature; one syncfs at the end)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
+
+/// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
+/// header IDs in its database); signatures are saved for the caller to check.
+fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Option<usize>, installed: Option<&Path>, level: Option<i32>) -> Result<()> {
+    ensure!(!pkgs.is_empty(), "pull-ids needs at least one NAME=IDHEX");
+    let src = net::Source::parse(s, flags.contains(&"--h2c"), parallel);
+    let mut ns = net::NetStats::default();
+    let mut got: Vec<(String, Vec<u8>, Option<String>, PathBuf, sign::Trust)> = Vec::new();
+    for p in pkgs {
+        let (name, id) = p.split_once('=').with_context(|| format!("{p}: want NAME=IDHEX"))?;
+        ensure!(!name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\0']), "{name}: bad package file name");
+        let (ib, sig) = store::fetch_index(&src, name, &mut ns)?;
+        got.push((name.to_string(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(store::unhex(id)?)));
+    }
+    let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
+        verify_data: flags.contains(&"--verify-data"), fsync: false };
+    let items: Vec<store::PullItem> = got.iter().map(|(n, ib, _, c, t)| store::PullItem { name: n, ib, cache: c, trust: t }).collect();
+    let st = store::pull_many(&src, &items, &o, ns)?;
+    for ((n, _, sig, c, _), st) in got.iter().zip(&st) {
+        let sp = PathBuf::from(format!("{}.sig", c.display()));
+        match sig {
+            Some(text) => {
+                let tmp = PathBuf::from(format!("{}.part", sp.display()));
+                fs::write(&tmp, text.as_bytes())?;
+                fs::rename(&tmp, &sp)?;
+            }
+            None => { let _ = fs::remove_file(&sp); }
+        }
+        println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
+    }
+    let d = File::open(cdir)?;
+    ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
+    Ok(())
+}
 
 /// The parsed and checked index of FILE (an index, transport or cache file) as text: one line per
 /// chunk and entry, numbers in decimal, byte strings in hex. libalpm's reader prints the same.
@@ -825,6 +863,7 @@ fn main() -> Result<()> {
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
             })
         }
+        ["pull-ids", s, cdir, pkgs @ ..] => pull_ids(s, Path::new(cdir), pkgs, &flags, parallel, installed.as_deref(), level),
         ["repo-update", d, r] => {
             let k = sec_key(key.as_ref())?;
             let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),

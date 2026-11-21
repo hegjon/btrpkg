@@ -5,7 +5,7 @@ usage: fix-mtimes.py PKG...     (as root; for files whose content is right but w
                                  stamped by `snapper undochange`)
 Only files whose size matches the mtree get a new time, symlinks included (not followed).
 """
-import glob, gzip, os, sys
+import glob, gzip, os, re, sys
 
 n = skipped = 0
 for pkg in sys.argv[1:]:
@@ -19,8 +19,16 @@ for pkg in sys.argv[1:]:
         if f[0] == "/set":
             defaults.update(tuple(kv.split("=", 1)) for kv in f[1:] if "=" in kv); continue
         attrs = dict(defaults); attrs.update(tuple(kv.split("=", 1)) for kv in f[1:] if "=" in kv)
-        path = "/" + f[0].removeprefix("./")
-        if os.path.basename(path).startswith(".") and path.count("/") == 1: continue  # .PKGINFO etc.
+        # mtree escapes bytes outside printable ASCII, spaces included, as \NNN (octal)
+        rel = re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m.group(1), 8)]), f[0].encode()).decode("utf-8", "surrogateescape")
+        rel = rel.removeprefix("./")
+        if "/" not in rel and rel.startswith("."):
+            # package metadata; -Qkk checks .INSTALL and .CHANGELOG as the copies in the local db
+            dbname = {".INSTALL": "install", ".CHANGELOG": "changelog"}.get(rel)
+            if not dbname: continue
+            path = os.path.join(d[0], dbname)
+        else:
+            path = "/" + rel
         if "time" not in attrs: continue
         try:
             st = os.lstat(path)
