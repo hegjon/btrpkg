@@ -12,9 +12,12 @@
 #   pacman: pacman -S --needed TARGETS (download + extract + hooks)
 #   btrpkg: pacbtr --no-snapshot TARGETS (index + chunks, reuse from installed files, place,
 #           pacman -U --dbonly + hooks); its snapshot is timed separately (snapper create).
-# Both download from the same server; ordering alternates between rounds.
+# Both download from the same server; the order rotates between rounds.
 set -uo pipefail
 OUT=$1; ROUNDS=${2:-3}; CONF=/etc/btrpkg/pacman-test.conf
+# scenarios: pacman, or the name of a btrpkg binary in /usr/local/bin (A/B: SCEN="pacman btrpkg0 btrpkg")
+SCEN=${SCEN:-pacman btrpkg}
+for s in $SCEN; do [[ $s == pacman || -x /usr/local/bin/$s ]] || { echo "no /usr/local/bin/$s"; exit 1; }; done
 mkdir -p $OUT
 [[ $(stat -f -c %i $OUT) != $(stat -f -c %i /) || $(findmnt -no TARGET -T $OUT) != / ]] || { echo "$OUT is in the root subvolume; use /var/log/..."; exit 1; }
 exec > >(tee -a $OUT/log) 2>&1
@@ -52,7 +55,7 @@ run() { # $1 scenario, $2 round
     sync; b=$(now)
     dl=$(for f in $newfiles; do stat -c %s "$CACHE/$f" "$CACHE/$f.sig" 2>/dev/null; done | awk '{s+=$1} END{print s+0}')
   else
-    pacbtr --config $CONF --h2c --no-snapshot "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
+    /usr/local/bin/${1} upgrade --config $CONF --h2c --no-snapshot "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
     sync; b=$(now)
     dl=$(( $(grep -o 'fetched_bytes: [0-9]*' $OUT/$1-$2.out | grep -o '[0-9]*$' || echo 0) + $(grep -o 'index_bytes: [0-9]*' $OUT/$1-$2.out | grep -o '[0-9]*$' || echo 0) ))
   fi
@@ -63,8 +66,10 @@ run() { # $1 scenario, $2 round
   reset
 }
 printf 'scenario\tround\texit\tseconds\tdownloaded\twritten\tspace\tqkk_altered\tversions\n' | tee $OUT/results.tsv
+read -ra SC <<< "$SCEN"
 for r in $(seq 1 $ROUNDS); do
-  if (( r % 2 )); then run pacman $r; run btrpkg $r; else run btrpkg $r; run pacman $r; fi
+  # rotate the order each round
+  for k in $(seq 0 $(( ${#SC[@]} - 1 ))); do run ${SC[$(( (k + r - 1) % ${#SC[@]} ))]} $r; done
 done
 echo "load at end: $(cut -d' ' -f1-3 /proc/loadavg)"
 snapper -c root delete $S

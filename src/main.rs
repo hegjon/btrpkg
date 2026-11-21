@@ -1223,6 +1223,58 @@ mod tests {
 
 
     #[test]
+    fn pull_many_shares_a_queue_and_fails_as_a_whole() {
+        let t = TempDir::new("many");
+        let store = t.0.join("store");
+        let names = ["a-1-1-x86_64", "b-1-1-x86_64"];
+        for (n, s) in names.iter().zip([spec(3), spec(11)]) {
+            let src = make_pkg(&t.0, n, &s);
+            convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, None).unwrap();
+        }
+        let src = net::Source::Dir(store.clone());
+        let mut ns = net::NetStats::default();
+        let ibs: Vec<Vec<u8>> = names.iter().map(|n| store::fetch_index(&src, n, &mut ns).unwrap().0).collect();
+        let cdir = t.0.join("cache");
+        fs::create_dir_all(&cdir).unwrap();
+        let caches: Vec<PathBuf> = names.iter().map(|n| cdir.join(format!("{n}.pkg.btr"))).collect();
+        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true };
+        let items = |caches: &[PathBuf]| -> Vec<(String, Vec<u8>, PathBuf)> {
+            names.iter().zip(&ibs).zip(caches).map(|((n, ib), c)| (n.to_string(), ib.clone(), c.clone())).collect()
+        };
+        let run = |v: &[(String, Vec<u8>, PathBuf)]| {
+            let it: Vec<store::PullItem> = v.iter().map(|(n, ib, c)| store::PullItem { name: n, ib, cache: c, trust: &U }).collect();
+            store::pull_many(&src, &it, &o, net::NetStats::default())
+        };
+        // a chunk only b has, damaged on the server: nothing of either package is left behind
+        let idx_a = read_index_checked(&mut &ibs[0][..], &|h| U.check(h)).unwrap();
+        let idx_b = read_index_checked(&mut &ibs[1][..], &|h| U.check(h)).unwrap();
+        let only_b = idx_b.chunks.iter().find(|c| !idx_a.chunks.iter().any(|a| a.stored == c.stored)).unwrap();
+        let x = hex(&only_b.stored);
+        let cp = store.join(format!("chunks/{}/{x}", &x[..2]));
+        let good = fs::read(&cp).unwrap();
+        let mut bad = good.clone();
+        let k = bad.len() / 2;
+        bad[k] ^= 1;
+        fs::write(&cp, &bad).unwrap();
+        assert!(run(&items(&caches)).is_err());
+        assert_eq!(fs::read_dir(&cdir).unwrap().count(), 0, "cache dir must stay empty");
+        // repaired: both pulled in one call, and both install to the right trees
+        fs::write(&cp, &good).unwrap();
+        let st = run(&items(&caches)).unwrap();
+        assert_eq!(st.len(), 2);
+        assert_eq!(st.iter().map(|s| s.fetched_chunks).sum::<u64>(), (idx_a.chunks.len() + idx_b.chunks.len()) as u64);
+        for (c, s) in caches.iter().zip([spec(3), spec(11)]) {
+            let r = t.0.join(format!("root-{}", c.file_name().unwrap().to_str().unwrap()));
+            install(c, &r, false).unwrap();
+            check_tree(&r, &s);
+        }
+        // again: everything already in the cache
+        let st = run(&items(&caches)).unwrap();
+        assert!(st.iter().all(|s| s.fetched_chunks == 0 && s.reused_chunks == s.chunks), "{st:?}");
+    }
+
+    #[test]
     fn pull_reuses_installed_files() {
         let t = TempDir::new("installed");
         let store = t.0.join("store");

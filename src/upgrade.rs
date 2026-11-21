@@ -207,7 +207,7 @@ fn restore_mtimes(snap: &Path, root: &Path, paths: &[&str]) -> Result<u64> {
     Ok(n)
 }
 
-struct Target { name: String, repo: usize, old: DbEntry, new: DbEntry, file: String, idx: Index, sig: Option<String> }
+struct Target { name: String, repo: usize, old: DbEntry, new: DbEntry, file: String, idx: Index }
 
 #[derive(Default, Debug)]
 pub(crate) struct UpgradeStats { pub phases: Vec<(&'static str, f64)>, pub targets: u64, pub left_to_pacman: u64, pub fetched_bytes: u64, pub index_bytes: u64, pub reused_chunks: u64, pub installed_chunks: u64, pub fetched_chunks: u64, pub removed_files: u64, pub snapshot: Option<u32> }
@@ -278,7 +278,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
             st.left_to_pacman += 1;
             continue;
         }
-        targets.push(Target { name, repo: ri, old, new, file, idx, sig });
+        targets.push(Target { name, repo: ri, old, new, file, idx });
     }
     if targets.is_empty() { log("nothing to upgrade through btrpkg"); return Ok(st); }
     lap(&mut st, "databases+indexes");
@@ -328,17 +328,23 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         }
         lap(&mut st, "conflicts");
         // 6. pull
-        for t in &targets {
-            let cache = conf.cache_dir.join(format!("{}.pkg.btr", t.file));
-            let src = net::Source::parse(&conf.repos[t.repo].servers[0], o.h2c, o.parallel);
-            let trust = sign::Trust::Id(t.idx.hdr.id()); // already checked above; same bytes
-            let _ = &t.sig;
-            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false };
-            let ps = store::pull_index(&src, &t.file, &t.idx.bytes, &cache, &trust, &po, net::NetStats::default()).with_context(|| t.name.clone())?;
-            st.fetched_bytes += ps.fetched_bytes;
-            st.reused_chunks += ps.reused_chunks;
-            st.installed_chunks += ps.installed_chunks;
-            st.fetched_chunks += ps.fetched_chunks;
+        // one pull per repository: all its packages share one download queue
+        let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false };
+        let caches: Vec<PathBuf> = targets.iter().map(|t| conf.cache_dir.join(format!("{}.pkg.btr", t.file))).collect();
+        // already checked above against the database ID and a signature; same bytes
+        let trusts: Vec<sign::Trust> = targets.iter().map(|t| sign::Trust::Id(t.idx.hdr.id())).collect();
+        let mut repos: Vec<usize> = targets.iter().map(|t| t.repo).collect();
+        repos.sort(); repos.dedup();
+        for r in repos {
+            let src = net::Source::parse(&conf.repos[r].servers[0], o.h2c, o.parallel);
+            let items: Vec<store::PullItem> = targets.iter().enumerate().filter(|(_, t)| t.repo == r)
+                .map(|(k, t)| store::PullItem { name: &t.file, ib: &t.idx.bytes, cache: &caches[k], trust: &trusts[k] }).collect();
+            for ps in store::pull_many(&src, &items, &po, net::NetStats::default())? {
+                st.fetched_bytes += ps.fetched_bytes;
+                st.reused_chunks += ps.reused_chunks;
+                st.installed_chunks += ps.installed_chunks;
+                st.fetched_chunks += ps.fetched_chunks;
+            }
         }
         for (k, t) in targets.iter().enumerate() {
             if metas[k].as_os_str().is_empty() {

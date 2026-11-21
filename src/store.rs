@@ -180,8 +180,7 @@ fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
 
 /// Read a piece of an installed file (a regular file, not followed through a final symlink),
 /// zero-padded to `len`. Returns the open file too, for reflinking the piece.
-fn read_installed(root: &Path, path: &[u8], off: u64, data_len: u64, len: u32) -> Option<(File, Vec<u8>)> {
-    let p = root.join(std::ffi::OsStr::from_bytes(path));
+fn read_installed_path(p: &Path, off: u64, data_len: u64, len: u32) -> Option<(File, Vec<u8>)> {
     let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(p).ok()?;
     let md = f.metadata().ok()?;
     if !md.is_file() || md.len() < off + data_len { return None; }
@@ -216,120 +215,198 @@ pub(crate) fn pull(src: &net::Source, name: &str, cache: &Path, trust: &sign::Tr
     pull_index(src, name, &ib, cache, trust, o, ns)
 }
 
-pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path, trust: &sign::Trust, o: &PullOpts, mut ns: net::NetStats) -> Result<PullStats> {
-    let idx = read_index_checked(&mut &ib[..], &|h| trust.check(h))?;
-    ensure!(ib.len() as u64 == idx.hdr.index_len(), "trailing data after the index");
-    let mut st = PullStats { index_bytes: ib.len() as u64, chunks: idx.chunks.len() as u64, ..Default::default() };
-    // Already in the cache (cache files are checked when they are made).
-    if open_cache(cache).is_ok_and(|(c, _)| c.bytes == ib) {
-        st.reused_chunks = st.chunks;
-        return Ok(st);
-    }
+pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path, trust: &sign::Trust, o: &PullOpts, ns: net::NetStats) -> Result<PullStats> {
+    let mut v = pull_many(src, &[PullItem { name, ib, cache, trust }], o, ns)?;
+    Ok(v.pop().unwrap())
+}
 
-    // Older cache files of the same package: (unencoded hash, length) -> (cache file, offset).
-    // Keyed on the unencoded data, so a chunk framed locally (from a .pkg.btr.zst) is reused too.
-    let dir = cache.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let want = pkgname(name);
-    let mut srcs: Vec<File> = Vec::new();
-    let mut local: HashMap<(Hash, u32), (usize, u64)> = HashMap::new();
-    for ent in fs::read_dir(dir)? {
-        let p = ent?.path();
-        let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
-        if p == cache || pkgname(stem) != want { continue; }
-        let Some((f, h, chunks)) = cache_head(&p) else { continue };
-        srcs.push(f);
-        for c in &chunks {
-            local.entry((c.raw, c.unencoded_len)).or_insert((srcs.len() - 1, h.image_base() + c.image_off));
+pub(crate) struct PullItem<'a> { pub name: &'a str, pub ib: &'a [u8], pub cache: &'a Path, pub trust: &'a sign::Trust }
+
+/// Where a chunk's data will come from.
+enum From { Local(usize, u64), Installed(PathBuf, u64, u64), Download }
+
+/// One package being pulled.
+struct Job<'a> {
+    item: &'a PullItem<'a>,
+    idx: Index,
+    st: PullStats,
+    out: Option<File>,
+    tmp: PathBuf,
+    srcs: Vec<File>,
+}
+
+/// Pull several packages from one source. Each chunk comes from, in this order: an older cache
+/// file of the same package (reflinked), an installed file of the same path (whole pieces
+/// reflinked, tails compressed here), or the source. Reused data is read back and its unencoded
+/// hash checked first, in parallel. All packages' downloads share one queue, so the connection
+/// stays busy across package boundaries. Every index must pass its `trust` before anything is
+/// written. A failure leaves none of the packages' cache files behind.
+pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut ns: net::NetStats) -> Result<Vec<PullStats>> {
+    let mut jobs: Vec<Job> = Vec::new();
+    for it in items {
+        let idx = read_index_checked(&mut &it.ib[..], &|h| it.trust.check(h)).with_context(|| it.name.to_string())?;
+        ensure!(it.ib.len() as u64 == idx.hdr.index_len(), "{}: trailing data after the index", it.name);
+        let st = PullStats { index_bytes: it.ib.len() as u64, chunks: idx.chunks.len() as u64, ..Default::default() };
+        jobs.push(Job { item: it, idx, st, out: None, tmp: part_path(it.cache), srcs: vec![] });
+    }
+    let result = (|| -> Result<()> {
+        // 1. per package: where each chunk can come from (map lookups only)
+        let mut plans: Vec<Vec<From>> = Vec::new();
+        for j in jobs.iter_mut() {
+            // Already in the cache (cache files are checked when they are made).
+            if open_cache(j.item.cache).is_ok_and(|(c, _)| c.bytes == j.item.ib) {
+                j.st.reused_chunks = j.st.chunks;
+                plans.push(vec![]);
+                continue;
+            }
+            let dir = j.item.cache.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let want = pkgname(j.item.name);
+            let mut local: HashMap<(Hash, u32), (usize, u64)> = HashMap::new();
+            for ent in fs::read_dir(dir)? {
+                let p = ent?.path();
+                let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
+                if p == j.item.cache || pkgname(stem) != want { continue; }
+                let Some((f, h, chunks)) = cache_head(&p) else { continue };
+                j.srcs.push(f);
+                for c in &chunks {
+                    local.entry((c.raw, c.unencoded_len)).or_insert((j.srcs.len() - 1, h.image_base() + c.image_off));
+                }
+            }
+            let files = if o.installed.is_some() { chunk_files(&j.idx) } else { HashMap::new() };
+            let plan = j.idx.chunks.iter().map(|c| {
+                if let Some(&(s, off)) = local.get(&(c.raw, c.unencoded_len)) { return From::Local(s, off); }
+                if let (Some(root), Some((path, foff, dlen))) = (o.installed, files.get(&c.image_off)) {
+                    return From::Installed(root.join(std::ffi::OsStr::from_bytes(path)), *foff, *dlen);
+                }
+                From::Download
+            }).collect();
+            let _ = fs::remove_file(&j.tmp);
+            let out = OpenOptions::new().write(true).create_new(true).mode(0o644).open(&j.tmp)?;
+            if o.use_encoded { set_nocomp(&out); }
+            j.out = Some(out);
+            plans.push(plan);
         }
-    }
-    let files = if o.installed.is_some() { chunk_files(&idx) } else { HashMap::new() };
 
-    let tmp = part_path(cache);
-    let _ = fs::remove_file(&tmp);
-    let out = OpenOptions::new().write(true).create_new(true).mode(0o644).open(&tmp)?;
-    if o.use_encoded { set_nocomp(&out); }
-    let image_base = idx.hdr.image_base();
-
-    let mut run = || -> Result<()> {
-        let mut can_clone = true;
-        let mut w = ChunkWriter::new(o.use_encoded)?;
-        let mut missing = Vec::new();
-        let mut from_installed = Vec::new();
-        for (i, c) in idx.chunks.iter().enumerate() {
-            let off = image_base + c.image_off;
-            if can_clone {
-                if let Some(&(s, soff)) = local.get(&(c.raw, c.unencoded_len)) {
-                    // Another cache file says it has this data; read it back and check before
-                    // sharing it (the file may be damaged or older than the hash checks).
+        // 2. read back and check every reusable range, all packages at once, in parallel
+        struct Checked { job: usize, chunk: usize, ok: bool, data: Option<Vec<u8>>, file: Option<File> }
+        let todo: Vec<(usize, usize)> = plans.iter().enumerate()
+            .flat_map(|(j, p)| p.iter().enumerate().filter(|(_, f)| !matches!(f, From::Download)).map(move |(i, _)| (j, i))).collect();
+        let checked: Vec<Checked> = todo.par_iter().map(|&(j, i)| {
+            let c = &jobs[j].idx.chunks[i];
+            match &plans[j][i] {
+                From::Local(s, off) => {
                     let mut buf = vec![0u8; c.unencoded_len as usize];
-                    if srcs[s].read_exact_at(&mut buf, soff).is_err() || sha256(&buf) != c.raw {
-                        st.bad_local += 1;
+                    let ok = jobs[j].srcs[*s].read_exact_at(&mut buf, *off).is_ok() && sha256(&buf) == c.raw;
+                    Checked { job: j, chunk: i, ok, data: None, file: None }
+                }
+                From::Installed(p, foff, dlen) => match read_installed_path(p, *foff, *dlen, c.unencoded_len) {
+                    Some((f, buf)) if sha256(&buf) == c.raw => {
+                        let whole = *dlen == c.unencoded_len as u64;
+                        Checked { job: j, chunk: i, ok: true, data: (!whole).then_some(buf), file: Some(f) }
+                    }
+                    _ => Checked { job: j, chunk: i, ok: false, data: None, file: None },
+                },
+                From::Download => unreachable!(),
+            }
+        }).collect();
+
+        // 3. reflink what checked out; tails of installed files are compressed (in parallel)
+        let mut can_clone = true;
+        let mut missing: Vec<(usize, usize)> = Vec::new();
+        let mut tails: Vec<(usize, Chunk, Vec<u8>)> = Vec::new();
+        let mut ok_set: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        for ck in checked {
+            let (j, i) = (ck.job, ck.chunk);
+            let c = jobs[j].idx.chunks[i];
+            let off = jobs[j].idx.hdr.image_base() + c.image_off;
+            if !ck.ok {
+                if matches!(plans[j][i], From::Local(..)) { jobs[j].st.bad_local += 1; }
+                continue;
+            }
+            match &plans[j][i] {
+                From::Local(s, soff) if can_clone => {
+                    let r = clone_range_at(&jobs[j].srcs[*s], *soff, c.unencoded_len as u64, jobs[j].out.as_ref().unwrap(), off);
+                    match r {
+                        Ok(()) => { jobs[j].st.reused_chunks += 1; jobs[j].st.reused_bytes += c.encoded_len as u64; ok_set.insert((j, i)); }
+                        Err(e) => { eprintln!("btrpkg: reflink unavailable ({e}); downloading instead"); can_clone = false; }
+                    }
+                }
+                From::Installed(_, foff, dlen) => {
+                    let f = ck.file.as_ref().unwrap();
+                    if ck.data.is_none() && can_clone && clone_range_at(f, *foff, *dlen, jobs[j].out.as_ref().unwrap(), off).is_ok() {
+                        jobs[j].st.installed_chunks += 1;
+                        jobs[j].st.installed_bytes += c.unencoded_len as u64;
+                        jobs[j].st.installed_cloned += 1;
+                        ok_set.insert((j, i));
                     } else {
-                        match clone_range_at(&srcs[s], soff, c.unencoded_len as u64, &out, off) {
-                            Ok(()) => { st.reused_chunks += 1; st.reused_bytes += c.encoded_len as u64; continue; }
-                            Err(e) => { eprintln!("btrpkg: reflink unavailable ({e}); downloading instead"); can_clone = false; }
-                        }
+                        let data = match ck.data {
+                            Some(d) => d,
+                            None => { let mut b = vec![0u8; c.unencoded_len as usize]; f.read_exact_at(&mut b[..*dlen as usize], *foff)?; b }
+                        };
+                        tails.push((j, c, data));
+                        ok_set.insert((j, i));
                     }
                 }
+                _ => {}
             }
-            if let (Some(root), Some((path, foff, dlen))) = (o.installed, files.get(&c.image_off)) {
-                if let Some((f, buf)) = read_installed(root, path, *foff, *dlen, c.unencoded_len) {
-                    if sha256(&buf) == c.raw {
-                        // A whole piece (not a file's unaligned tail) is shared with the installed
-                        // file's extents instead of being compressed and written again.
-                        if can_clone && *dlen == c.unencoded_len as u64 && clone_range_at(&f, *foff, *dlen, &out, off).is_ok() {
-                            st.installed_chunks += 1;
-                            st.installed_bytes += c.unencoded_len as u64;
-                            st.installed_cloned += 1;
-                            continue;
-                        }
-                        from_installed.push((*c, buf));
-                        continue;
-                    }
-                }
-            }
-            missing.push((i, *c));
         }
-        // Unchanged data from installed files: compressed here, in parallel, like the raw chunks
-        // of a .pkg.btr.zst.
         let level = o.level;
-        let framed: Vec<(Chunk, Vec<u8>)> = from_installed.into_par_iter().map(|(c, d)| -> Result<(Chunk, Vec<u8>)> {
-            if !o.use_encoded { return Ok((Chunk { compression: COMP_NONE, encoded_len: c.unencoded_len, stored: c.raw, ..c }, d)); }
+        let framed: Vec<(usize, Chunk, Vec<u8>)> = tails.into_par_iter().map(|(j, c, d)| -> Result<(usize, Chunk, Vec<u8>)> {
+            if !o.use_encoded { return Ok((j, Chunk { compression: COMP_NONE, encoded_len: c.unencoded_len, stored: c.raw, ..c }, d)); }
             let (comp, b) = frame(level, d)?;
             let stored = if comp == COMP_NONE { c.raw } else { sha256(&b) };
-            Ok((Chunk { compression: comp, encoded_len: b.len() as u32, stored, ..c }, b))
+            Ok((j, Chunk { compression: comp, encoded_len: b.len() as u32, stored, ..c }, b))
         }).collect::<Result<_>>()?;
-        for (c, d) in framed {
-            st.installed_chunks += 1;
-            st.installed_bytes += c.unencoded_len as u64;
-            w.write(&out, image_base + c.image_off, &c, &d)?;
+        let mut w = ChunkWriter::new(o.use_encoded)?;
+        for (j, c, d) in framed {
+            jobs[j].st.installed_chunks += 1;
+            jobs[j].st.installed_bytes += c.unencoded_len as u64;
+            w.write(jobs[j].out.as_ref().unwrap(), jobs[j].idx.hdr.image_base() + c.image_off, &c, &d)?;
         }
-        // The rest from the source, checked in parallel as batches arrive.
-        let items: Vec<(String, usize)> = missing.iter().map(|(_, c)| { let x = hex(&c.stored); (format!("chunks/{}/{x}", &x[..2]), c.encoded_len as usize) }).collect();
+        for (j, plan) in plans.iter().enumerate() {
+            if jobs[j].out.is_none() { continue; }
+            for i in 0..plan.len() { if !ok_set.contains(&(j, i)) { missing.push((j, i)); } }
+        }
+
+        // 4. one download queue for everything still missing, checked in parallel as it arrives
+        let items: Vec<(String, usize)> = missing.iter().map(|&(j, i)| {
+            let c = &jobs[j].idx.chunks[i];
+            let x = hex(&c.stored);
+            (format!("chunks/{}/{x}", &x[..2]), c.encoded_len as usize)
+        }).collect();
         src.get_many(&items, &mut ns, |batch| {
-            batch.par_iter().try_for_each(|(k, d)| if o.verify_data { check_chunk_full(missing[*k].0, &missing[*k].1, d) } else { check_chunk(missing[*k].0, &missing[*k].1, d) })?;
+            batch.par_iter().try_for_each(|(k, d)| {
+                let (j, i) = missing[*k];
+                let c = &jobs[j].idx.chunks[i];
+                if o.verify_data { check_chunk_full(i, c, d) } else { check_chunk(i, c, d) }.with_context(|| jobs[j].item.name.to_string())
+            })?;
             for (k, d) in batch {
-                let c = missing[k].1;
-                st.fetched_chunks += 1;
-                st.fetched_bytes += d.len() as u64;
-                w.write(&out, image_base + c.image_off, &c, &d)?;
+                let (j, i) = missing[k];
+                let c = jobs[j].idx.chunks[i];
+                jobs[j].st.fetched_chunks += 1;
+                jobs[j].st.fetched_bytes += d.len() as u64;
+                w.write(jobs[j].out.as_ref().unwrap(), jobs[j].idx.hdr.image_base() + c.image_off, &c, &d)?;
             }
             Ok(())
         })?;
-        (st.encoded_chunks, st.raw_chunks, st.fallback_chunks) = (w.encoded_chunks, w.raw_chunks, w.fallback_chunks);
-        // Same cache-file layout as `fetch`, so `install` works unchanged.
-        out.write_all_at(ib, 0)?;
-        out.set_len(idx.hdr.cache_len())?;
-        if o.fsync { out.sync_all()?; }
+        // the writer is shared: its counts go on the first package, like the request counts
+        if let Some(j) = jobs.first_mut() { (j.st.encoded_chunks, j.st.raw_chunks, j.st.fallback_chunks) = (w.encoded_chunks, w.raw_chunks, w.fallback_chunks); }
+        for j in jobs.iter_mut() {
+            let Some(out) = j.out.as_ref() else { continue };
+            // Same cache-file layout as `fetch`, so `install` works unchanged.
+            out.write_all_at(j.item.ib, 0)?;
+            out.set_len(j.idx.hdr.cache_len())?;
+            if o.fsync { out.sync_all()?; }
+        }
         Ok(())
-    };
-    let r = run();
-    drop(out);
-    (st.requests, st.retries) = (ns.requests, ns.retries);
-    if let Err(e) = r {
-        let _ = fs::remove_file(&tmp);
+    })();
+    if let Err(e) = result {
+        for j in &jobs { if j.out.is_some() { let _ = fs::remove_file(&j.tmp); } }
         return Err(e);
     }
-    fs::rename(&tmp, cache)?;
-    Ok(st)
+    for j in jobs.iter_mut() {
+        if j.out.take().is_some() { fs::rename(&j.tmp, j.item.cache)?; }
+    }
+    if let Some(j) = jobs.first_mut() { (j.st.requests, j.st.retries) = (ns.requests, ns.retries); }
+    Ok(jobs.into_iter().map(|j| j.st).collect())
 }
