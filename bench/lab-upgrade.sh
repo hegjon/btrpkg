@@ -28,7 +28,8 @@ written() { awk '{print $7*512}' /sys/class/block/$part/stat; }
 used() { btrfs filesystem sync / >/dev/null; btrfs filesystem usage -b / 2>/dev/null | grep -m1 '^Data,' | grep -o 'Used:[0-9]*' | cut -d: -f2; }
 now() { date +%s.%N; }
 
-pacman --config $CONF -Sy >/dev/null 2>&1 || { echo "pacman -Sy failed"; exit 1; }
+# -Syy: a real omarchy.db synced later looks newer than the test repo's and would be kept
+pacman --config $CONF -Syy >/dev/null 2>&1 || { echo "pacman -Syy failed"; exit 1; }
 mapfile -t T < <(pacbtr --config $CONF --h2c --list 2>/dev/null)
 (( ${#T[@]} )) || { echo "nothing to upgrade through btrpkg"; exit 1; }
 echo "host $(hostname) part $part cpu '$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)' cache $CACHE"
