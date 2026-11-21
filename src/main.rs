@@ -699,7 +699,7 @@ const USAGE: &str = "usage:
       (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
-  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
+  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO
 NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
@@ -825,6 +825,7 @@ fn main() -> Result<()> {
     let mut small_max = 4096u64;
     let mut key: Option<PathBuf> = None;
     let mut gpg_keyring: Option<PathBuf> = Some("/etc/pacman.d/gnupg/pubring.gpg".into());
+    let mut db_in: Option<PathBuf> = None;
     let mut jobs = 4usize;
     let mut parallel: Option<usize> = None;
     let mut installed: Option<PathBuf> = None;
@@ -852,6 +853,7 @@ fn main() -> Result<()> {
             "--keys" => trust.keys.push(val("--keys")?.into()),
             "--unverified" => trust.unverified = true,
             "--gpg-keyring" => gpg_keyring = Some(val("--gpg-keyring")?.into()),
+            "--db-in" => db_in = Some(val("--db-in")?.into()),
             "--no-gpg" => gpg_keyring = None,
             "--jobs" => jobs = val("--jobs")?.parse()?,
             "--parallel" => parallel = Some(val("--parallel")?.parse()?),
@@ -953,7 +955,7 @@ fn main() -> Result<()> {
         ["repo-update", d, r] => {
             let k = sec_key(key.as_ref())?;
             let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),
-                level: level.unwrap_or(19), small: small_max, jobs };
+                level: level.unwrap_or(19), small: small_max, jobs, db_in: db_in.clone() };
             let st = repo::repo_update(Path::new(d), r, &o)?;
             eprintln!("repo-update: {st:?}");
             ensure!(st.failed == 0, "{} packages failed (left to pacman)", st.failed);
@@ -1341,7 +1343,7 @@ mod tests {
         std::os::unix::fs::symlink("t.db.tar.zst", d.join("t.db")).unwrap();
         sign::keygen(&t.0.join("k")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("k.sec")).unwrap();
-        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, level: 19, small: 4096, jobs: 2 };
+        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, level: 19, small: 4096, jobs: 2, db_in: None };
         let st = repo::repo_update(&d, "t", &o).unwrap();
         assert_eq!((st.packages, st.converted, st.missing, st.dropped, st.failed), (3, 2, 1, 1, 0), "{st:?}");
         // the database: same layout, fields added, other %DATA% kept, the missing package gone

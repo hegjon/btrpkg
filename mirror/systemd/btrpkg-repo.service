@@ -1,0 +1,12 @@
+[Unit]
+Description=btrpkg test repository and Omarchy mirror over HTTP (caddy: :8790 local, :1764 lab, :1763 TLS)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Work/btrpkg-repo
+ExecStart=/usr/bin/caddy run --config Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

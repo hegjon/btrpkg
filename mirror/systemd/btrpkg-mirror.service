@@ -1,0 +1,8 @@
+[Unit]
+Description=Update the btrpkg mirror of Omarchy's edge repository
+
+[Service]
+Type=oneshot
+ExecStart=%h/Work/btrpkg/mirror/omarchy-mirror.sh
+Nice=10
+IOSchedulingClass=idle

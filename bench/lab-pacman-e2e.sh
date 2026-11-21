@@ -4,7 +4,7 @@
 # OUTDIR must be outside the root subvolume (/var/log/...). Needs: the packages pacman-btrpkg and
 # btrpkg-git (packaging/), or a development build through PACBTR/BTRPKG (e.g.
 # PACBTR="env LD_LIBRARY_PATH=/opt/pacbtr /opt/pacbtr/pacman" BTRPKG=/usr/local/bin/btrpkg),
-# /etc/btrpkg/pacman-test.conf, /etc/btrpkg/keys,
+# /etc/btrpkg/pacman-test.conf (or CONF=FILE, e.g. /etc/pacman.conf for a real upgrade), /etc/btrpkg/keys,
 # /tmp/fix-mtimes.py, snapper config `root`.
 # Per round and scenario: empty the cache of the targets, drop caches, `pacman -S TARGETS`, sync,
 # then record time, bytes written to the root's partition, data space used, `pacman -Qkk`, a
@@ -17,7 +17,7 @@
 # EXTRA (paths whose whole tree goes into the manifest too, e.g. for .pacnew files).
 set -uo pipefail
 OUT=$1; read -ra T <<< "$2"; ROUNDS=${3:-1}
-CONF=/etc/btrpkg/pacman-test.conf; BCONF=/etc/btrpkg/pacman-btr.conf
+CONF=${CONF:-/etc/btrpkg/pacman-test.conf}; BCONF=/etc/btrpkg/pacman-btr.conf
 PACBTR=${PACBTR:-/usr/bin/pacman-btrpkg}; BTRPKG=${BTRPKG:-/usr/bin/btrpkg}
 mkdir -p $OUT
 [[ $(findmnt -no TARGET -T $OUT) != / ]] || { echo "$OUT is in the root subvolume; use /var/log/..."; exit 1; }
@@ -69,7 +69,7 @@ run() { # $1 scenario $2 round
   local w0 u0 a b ok
   w0=$(written); u0=$(used); a=$(now)
   if [[ $1 == stock ]]; then
-    pacman --config $CONF -S --noconfirm "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
+    /usr/bin/pacman --config $CONF -S --noconfirm "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
   elif [[ $1 == pacbtr ]]; then
     pacbtr --config $CONF --h2c --no-snapshot "${T[@]}" > $OUT/$1-$2.out 2>&1; ok=$?
   else

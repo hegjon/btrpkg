@@ -37,6 +37,17 @@ Install (on a lab machine):
     pacman-btrpkg -Syu                    # like pacman -Syu; btrpkg packages where the repo has them
     systemctl enable --now btrpkg-cache-clean.timer     # optional
 
+On Omarchy, system upgrades go through `omarchy update`. Its pre-transaction hook refuses a direct
+`pacman -Syu`, and the update flow (`omarchy-update-pacman`) runs `sudo ... pacman "$@"` with the
+name hardcoded. To put pacman-btrpkg into that flow, a symlink earlier in sudo's `secure_path`
+does it:
+
+    ln -s /usr/bin/pacman-btrpkg /usr/local/bin/pacman    # undo: rm /usr/local/bin/pacman
+
+Every `sudo pacman` then runs pacman-btrpkg: omarchy update, its migrations, and AUR helpers. A
+cleaner way would be a variable for the pacman command in `omarchy-update-pacman`, which is
+Omarchy's call to make.
+
 Repositories without btrpkg data (`btrpkg.index`/`btrpkg.id` in `%DATA%`) are handled exactly as by
 pacman. The repository's signify public key goes into `/etc/btrpkg/keys/NAME.pub`.
 

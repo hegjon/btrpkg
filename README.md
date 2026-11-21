@@ -89,6 +89,68 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## End to end: an Omarchy mirror and `omarchy update` on p14s (2026-11-21)
+
+**Mirror** (`mirror/`, details in `mirror/README.md`):
+- A user timer on the desktop runs every 10 minutes and keeps a btrpkg mirror of Omarchy's edge
+  repository: upstream's database plus btrpkg data for the packages the lab uses.
+- Every new file is checked against the database's SHA-256 and against Omarchy's OpenPGP
+  signature before the mirror converts it and signs its index, so the mirror never signs anything
+  Omarchy didn't sign.
+- Packages it hasn't converted keep their plain entries; pacman fetches those from the next
+  server.
+- It learns what to convert from the 404s in caddy's access log.
+- First run: 51 packages in 4 min 11 s (895 MB of chunks). An unchanged upstream costs 0.2 s.
+- caddy and the mirror now run as systemd user services. The server root also used to serve the
+  test key's secret half; it and the mirror's private files are hidden now.
+
+**p14s:**
+- `[omarchy]` lists the mirror first, then pacoloco and pkgs.omarchy.org.
+- `pacman-btrpkg` is installed, and `/usr/local/bin/pacman` points at it.
+
+1. **Comparison first.** p14s's real pending upgrade was 51 packages (6 core, 37 extra including
+   chromium, libreoffice-fresh, mesa and docker, 8 Omarchy). It was installed 3 times with stock
+   pacman and 3 times with pacman-btrpkg, with a snapper reset between runs (pacoloco warm,
+   p14s wired):
+
+   | | stock pacman | pacman-btrpkg |
+   |---|---|---|
+   | seconds (median of 3) | 25.08 | 22.76 |
+   | written to disk | 2.58 GB | 2.08 GB |
+
+   Installed files and database entries were identical in all 3 rounds, and `-Qkk` was clean
+   after every reset. The saving is smaller than in the Omarchy-only tests because 43 of the
+   51 packages are Arch's and install the normal way in both runs.
+
+2. **Direct `pacman-btrpkg -Syu`** is refused by Omarchy's guard hook ("Woah partner"). Omarchy
+   wants upgrades to go through `omarchy update` (snapshot, keyrings, migrations, restarts).
+   Nothing was installed.
+
+3. **`omarchy update -y`**, run as the desktop user `a`. sudo needs a password on the lab, so a
+   `NOPASSWD` drop-in was added for the run and removed right after.
+   - Omarchy's flow made its own snapshot and ran `/usr/local/bin/pacman -Syu`, which is
+     pacman-btrpkg. Its migrations then installed fantasi, omarchy-themes-loops and flowtunes and
+     removed hyprcursor, also through pacman-btrpkg.
+   - Exit 0, 57 package operations, 26 s (the files had already been downloaded by the refused
+     attempt).
+   - **All 8 Omarchy upgrades went through btrpkg** (`.pkg.btr` cache files), including versions
+     newer than the lab test repo had (omarchy-dev r8121, omarchy-local-ai 0.9.0). The 3 new
+     packages came as `.pkg.tar.zst` from Omarchy's servers through the fallback, and the mirror
+     converted them on its next run.
+   - Afterwards: `pacman -Dk` clean, `-Qkk` 0 altered over the 33,535 files of the upgraded
+     packages, nothing pending.
+
+4. **Reboot** through kvm2: disk unlocked, ssh up 10 s later, no failed units, Hypoland's
+   autologin session running, and a screenshot from inside the session shows both monitors
+   drawing normally.
+
+Still open:
+- An unattended daily update for the multi-day trial (step 6). That needs either a permanent
+  passwordless sudo for `a` (so `omarchy update -y` runs as designed) or a root timer that
+  bypasses Omarchy's flow.
+- Arch's own repositories aren't mirrored.
+- The mirror never deletes old files or chunks (step 7).
+
 ## Packages: `btrpkg-git` and `pacman-btrpkg` (2026-11-21)
 
 Step 5. `packaging/build.sh` builds both packages in a clean Arch container from the PKGBUILDs in

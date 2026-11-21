@@ -18,7 +18,10 @@
 # internal CA (~/.local/share/caddy/pki/authorities/local/root.crt)
 (repo) {
 	root * /home/jonny/Work/btrpkg-repo
-	file_server
+	# the mirror's lock, upstream copy and keyring, the keys directory and logs stay private
+	file_server {
+		hide .* /home/jonny/Work/btrpkg-repo/keys *.log *.log.gz Caddyfile
+	}
 	log {
 		output file /home/jonny/Work/btrpkg-repo/access.log
 		format json

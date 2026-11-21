@@ -11,7 +11,11 @@ Goal: make the patched pacman safe and unsurprising for someone else to run. For
 5. ~~A `btrpkg` package and a `pacman-btrpkg` build installed beside the system pacman~~:
    `packaging/` (btrpkg-git, pacman-btrpkg, `build.sh` in a clean container), installed on p14s,
    cache-clean timer enabled there.
-6. A trial on p14s: real `-Syu` runs over several days.
+6. A trial on p14s: real `-Syu` runs over several days. Started: the Omarchy mirror
+   (`mirror/`), p14s's `[omarchy]` repo pointed at it, `/usr/local/bin/pacman` -> pacman-btrpkg,
+   and the first `omarchy update` through btrpkg plus a reboot are done. Open: an unattended
+   daily update (needs a choice: passwordless sudo for `a`, or a root timer bypassing Omarchy's
+   flow).
 7. Repo pipeline (Omarchy publish step, R2/S3, chunk deletion, real key, keyring package): needs a
    decision from Jonny.
 8. Adopt existing installs.

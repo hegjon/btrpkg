@@ -99,12 +99,24 @@ pub(crate) struct RepoOpts<'a> {
     pub level: i32,
     pub small: u64,
     pub jobs: usize,
+    /// read the database from here instead of DIR/REPO.db (a newer upstream database: DIR/REPO.db
+    /// keeps serving the old one until the new one, with btrpkg data, replaces it)
+    pub db_in: Option<PathBuf>,
 }
 
 /// Update DIR/REPO.db (following the usual REPO.db -> REPO.db.tar.zst symlink).
 pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoStats> {
-    let dbp = fs::canonicalize(dir.join(format!("{repo}.db"))).with_context(|| format!("{repo}.db in {}", dir.display()))?;
-    let (comp, tarb) = read_db(&dbp)?;
+    let link = dir.join(format!("{repo}.db"));
+    let dbp = match (&o.db_in, fs::canonicalize(&link)) {
+        (_, Ok(p)) => p,
+        (Some(_), Err(_)) => {
+            // first run from an upstream database: REPO.db -> REPO.db.tar.zst, like repo-add
+            std::os::unix::fs::symlink(format!("{repo}.db.tar.zst"), &link)?;
+            dir.join(format!("{repo}.db.tar.zst"))
+        }
+        (None, Err(e)) => return Err(e).with_context(|| format!("{repo}.db in {}", dir.display())),
+    };
+    let (comp, tarb) = read_db(o.db_in.as_deref().unwrap_or(&dbp))?;
     // (header, data) in the database's order
     let mut ents: Vec<(tar::Header, Vec<u8>)> = Vec::new();
     for e in tar::Archive::new(&tarb[..]).entries()? {
