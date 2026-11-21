@@ -5,3 +5,7 @@ out/
 */btrpkg/
 *.pkg.tar.zst
 *.patch.orig
+# downloaded sources
+pacman-btrpkg/arch-*.patch
+pacman-btrpkg/patch-reproducible-builds.patch
+pacman-btrpkg/revertme-*.patch
