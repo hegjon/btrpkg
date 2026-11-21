@@ -73,7 +73,9 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
 - `pacman -U NAME.pkg.btr`, `-Sc` for `.pkg.btr` files, an `alpm_pkg_validation_t` value for
   signify instead of recording `pgp`.
 - Don't change the sync package's file name in place (long-running libalpm clients).
-- Measure without the ssh tunnels (needs the desktop's ufw rule for port 8790).
+- Measure without the ssh tunnels: the test repo is now served on port 1764 (inside ufw's open KDE
+  Connect range), reachable from the lab directly. x200 and t460s are on Wi-Fi (14 and 76 MB/s),
+  p14s wired (118 MB/s): rerun the iteration-2 tables that way.
 
 ## Out
 

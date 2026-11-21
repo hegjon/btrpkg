@@ -1,0 +1,16 @@
+{
+	admin off
+	auto_https off
+	servers {
+		protocols h1 h2c
+	}
+}
+# 8790: local and ssh tunnels; 1764: the lab directly (inside ufw's KDE Connect range, 1714-1764)
+:8790, :1764 {
+	root * /home/jonny/Work/btrpkg-repo
+	file_server
+	log {
+		output file /home/jonny/Work/btrpkg-repo/access.log
+		format json
+	}
+}
