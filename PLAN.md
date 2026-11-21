@@ -101,8 +101,8 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
 - ~~Run the helper inside pacman's download sandbox (DownloadUser)~~: done in iteration 3
   (fetch-ids as DownloadUser + Landlock, pull-ids as root without network).
 - ~~`-Sc` for `.pkg.btr` files~~ (worked already; leftovers now removed too), `btrpkg cache-clean`
-  for paccache's job. Still open: `pacman -U NAME.pkg.btr`, an `alpm_pkg_validation_t` value for
-  signify instead of recording `pgp`.
+  for paccache's job. ~~`pacman -U NAME.pkg.btr`, signify recorded as `pgp`~~: patch 6 (`-U` with
+  signify and a data check; `btrpkg-validation` extended data, `%VALIDATION%` sha256).
 - ~~Mirror failover, CacheServer, real download size, progress~~: done in iteration 3.
 - Don't change the sync package's file name in place (long-running libalpm clients).
 - Measure without the ssh tunnels: the test repo is now served on port 1764 (inside ufw's open KDE

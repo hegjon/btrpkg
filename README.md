@@ -89,6 +89,64 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Omarchy ISO with the btrpkg format (prepared, not built yet)
+
+omarchy-iso branch `btrpkg` (local, in `~/Work/omarchy-iso-btrpkg`, on `quattro` `12a5daf`):
+`bin/omarchy-iso-make --btrpkg DIR` with DIR holding one btrpkg-git and one pacman-btrpkg
+package.
+
+- **Offline mirror.** `builder/btrpkg-offline-mirror.sh convert` turns the build's `.pkg.tar.*`
+  mirror into a btrpkg repository (`repo-update --no-gpg`: pacman -Syw verified each package's
+  signature when it downloaded it). The ISO ships the whole repo db, plus indexes and chunks for
+  the packages the root image lacks (`ship`), instead of their `.pkg.tar.*` files. The medium's
+  checksum list covers them. No btrpkg signing key: the offline repo is `SigLevel = Never`, as
+  today; pacman-btrpkg checks each index against the header ID in the db, and the ISO's
+  signature covers both.
+- **Root image.** `pacstrap-btrpkg` from that mirror, with the CacheDir on the image's own btrfs
+  next to the root subvolume, so files are reflinks of the packages' zstd frames (encoded
+  extents) and the image keeps that compression once the cache is deleted.
+- **Live system and image.** pacman-btrpkg and btrpkg are installed in both; `pacman` (and in the
+  live system `pacstrap`, which archinstall runs by name) are the btrpkg ones; the offline
+  config gets `BtrPkgHelper`. The installer skips its trick of bind-mounting the mirror as the
+  target's cache in this mode: packages are assembled in the target's cache and reflinked.
+
+Checked without an ISO: `bench/iso-mirror-test.sh` runs the same steps on p14s (convert, an
+image with the cache on its own filesystem, ship a subset, per-machine pacstrap from it,
+archinstall's flags): package-owned files and local db identical to stock, encoded extents kept
+after the cache is deleted, 119 MB on disk vs 184 MB, a package outside the shipped mirror
+refused cleanly. omarchy-iso's own unit tests pass (245 checks under `LC_ALL=C`; `nightly-test.sh`
+fails in a UTF-8 locale on unmodified `quattro` too). Building it needs `mkfs` (the root image is
+a loop btrfs), so `bench/iso-ab-build.sh` builds the stock and `--btrpkg` ISOs for a person to
+run.
+
+## pacman -U, -Sp and the validation record (2026-11-21)
+
+Three gaps closed in libalpm patch 6, checked on p14s by `bench/pacman-gaps-test.sh` (16 checks;
+the packaged pacman-btrpkg before the patch failed 8 of them):
+
+- **`pacman -U NAME.pkg.btr`.** The install path already worked; the signature didn't: pacman
+  handed the signify `.sig` beside the file to GPGME ("signature format error"), so a cache file
+  with its signature couldn't be installed at all. Now the `.sig` is checked as signify against
+  `/etc/btrpkg/keys` and `/usr/share/btrpkg/keys`, as `LocalFileSigLevel` asks (Optional
+  installs an unsigned file, Required refuses it, a signature by another key is refused). The
+  test also found a worse gap: **a `.pkg.btr` with changed data installed silently**, because
+  libalpm checked the index's structure and only pull-ids ever checked chunk data. `-U` now
+  hashes every chunk against the index first ("chunk 0: data does not match the index"), at
+  about the cost of stock pacman decompressing a `.pkg.tar.zst` to load it.
+- **`-Sp`.** pacman's `--print` sets `NOLOCK`; such a transaction no longer selects or plans
+  btrpkg downloads. Before, as root, `-Sp` fetched indexes from the mirror and printed a
+  `.pkg.btr` URL that no server has (a btrpkg server holds indexes and chunks); as a normal user
+  it printed the stock URL. Now both print the repository's `.pkg.tar.zst` URL and size and make
+  no requests (counted in the mirror's access log). A real `-S` still plans: 2 requests and the
+  real size in the summary.
+- **The validation record.** `%VALIDATION%` said `pgp` for a signify check. A new token would
+  be the clean fix in pacman alone, but the system's stock pacman reads the same local database
+  and warns ("unknown validation type") about every such package. So `%VALIDATION%` keeps
+  `sha256` (the header-ID check is a SHA-256 over the header, which holds the hashes of
+  everything else), and the signature goes into extended data, which stock pacman reads silently
+  and `pacman -Qii` shows: `btrpkg-validation=signify:btrpkg-test.pub`. A `btrpkg-validation`
+  entry in a package's own `.PKGINFO` is dropped, so a package can't claim it.
+
 ## Faster repository conversion (2026-11-21)
 
 Converting the root image's packages for the mirrors took about 40 minutes for 828 packages
@@ -338,11 +396,12 @@ The sandbox costs about 0.3 s (three helper runs instead of one). The plan step 
 assembly. Logs: `bench/results/lab-20261121-i3/`.
 
 Known gaps:
-- The plan is run for `-Sp` and `-Sw` too, so pacman's prepare step now does network I/O for btrpkg
-  targets.
+- ~~The plan is run for `-Sp` and `-Sw` too~~: `-Sp` no longer touches btrpkg (see "pacman -U,
+  -Sp and the validation record" below); `-Sw` keeps the plan, whose index fetch the download
+  reuses.
 - Resume is per chunk, not per byte.
-- `pacman -U NAME.pkg.btr` still isn't supported.
-- The validation is still recorded as `pgp`.
+- ~~`pacman -U NAME.pkg.btr` still isn't supported~~, ~~the validation is still recorded as
+  `pgp`~~: both done, below.
 
 ## Iteration 2: pacman installs btrpkg packages (2026-11-21)
 

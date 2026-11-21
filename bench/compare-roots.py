@@ -5,7 +5,8 @@ Package-owned files (every path in A's local database) must be identical in type
 size, symlink target, xattrs, content (sha256) and mtime; for backup files (%BACKUP%, which
 scriptlets and hooks edit after install: passwd, shells...) everything but the mtime. Other files (made by hooks:
 ld.so.cache, font and icon caches, man-db, sysusers' passwd/shadow...) are compared without
-mtime and listed. The local databases must match apart from %INSTALLDATE% and %VALIDATION%.
+mtime and listed. The local databases must match apart from %INSTALLDATE%, %VALIDATION% and the
+btrpkg-validation extended data (pacman-btrpkg's record of a signify check).
 Exit 1 if a package-owned file or a database entry differs."""
 import hashlib, os, stat, sys
 
@@ -63,6 +64,8 @@ def db(root):
                         continue
                     if skip:
                         skip = l != b""
+                        continue
+                    if l.startswith(b"btrpkg-validation="):
                         continue
                     lines.append(l)
                 data = b"\n".join(lines)

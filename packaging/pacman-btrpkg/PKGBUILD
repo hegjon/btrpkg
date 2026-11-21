@@ -12,7 +12,7 @@ pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=3
+pkgrel=4
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64)
 url="https://github.com/hegjon/btrpkg"
@@ -35,6 +35,7 @@ source=("pacman::git+https://gitlab.archlinux.org/pacman/pacman.git#commit=$_com
         btrpkg-0003-libalpm-btrpkg-downloads-in-pacman-s-sandbox-with-re.patch
         btrpkg-0004-libalpm-btrpkg-use-a-package-file-that-is-already-in.patch
         btrpkg-0005-libalpm-btrpkg-one-root-process-when-downloads-aren-.patch
+        btrpkg-0006-libalpm-btrpkg-pacman-U-of-.pkg.btr-Sp-without-btrpk.patch
         pacman-btrpkg.conf
         pacstrap-btrpkg)
 sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
@@ -42,11 +43,12 @@ sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
             'de428b496a825772ef49ec5555a386a4b23ffa10b9dfd9907f0671d5c1dc2178'
             '9a734e5d75be603d58aa92e8d29a15466b3ac2af6b7d6f6728dd5c3e5ed8758d'
             '021893dd44ec23251cfc0f2b81c12d832927ea60095d4d2956d9760e8bbfaa58'
-            'cb70007bb1b656bf8b2f15f13cff3c9e025b8fc87dca129f091f3e2e56378c8c'
-            '02370b49df1b9adc3f2786d52d778ed008c0220530e10c7b323857da85369191'
-            '962cbe63697575a666152d080b6d0287dfb423be06d7b26eb1537c5053be01fa'
-            '15ceec4878e56daba89b36a3c52b4cc051df0440e0ab2b84fde34756fe6ec4ba'
-            '8dacb05711b9e35a8366fc7e5133e042a5a05d65b2e365121834881f43794e02'
+            'c67007cd3be1d5439aa79289f4e050c02c73a697ba687329efc7fedb54f1cf98'
+            '892949bd36fb8d7bc8de4dca53031d59826a0504a0085294ccbb9abe7548e8f4'
+            '4abe2ceeaffeeabe86f0baaad203f83e1c3553be9844afed566dc1edbe3d1358'
+            'cd0ed91bc9d138a0648c80dc548903405c46dc00f1870391c76cc47966741ba8'
+            '9912f95bfa0fa3186c3d644edd9a41546654de9604aa5a902bb1ad8aff582523'
+            '9063ec05efe20f2eecaec2ac2f72e582667ffe5df28ee0f8367a151d14173982'
             '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac'
             '9baa36c396fff615c46acbad513d9797bb9c9450deae0ffb29dce0ccc9b6f327')
 

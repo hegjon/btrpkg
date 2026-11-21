@@ -10,7 +10,7 @@
 # then record time, bytes written to the root's partition, data space used, `pacman -Qkk`, a
 # manifest of every file of the targets (type, mode, owner, size, mtime, xattrs, sha256; no mtime
 # for directories, which other packages share) and the targets' local database entries (desc
-# without %INSTALLDATE% and %VALIDATION%, files, mtree, install). Then `snapper undochange` back.
+# without %INSTALLDATE%, %VALIDATION% and btrpkg-validation extended data, files, mtree, install). Then `snapper undochange` back.
 # The manifests and database entries of the two scenarios must be identical.
 # Optional env: REPOS (extra repository sections, appended to both configs), PREP (a command run
 # before each scenario, untimed, e.g. installing an old version and changing a config file),
@@ -56,8 +56,8 @@ dbcopy() { # $1 out dir
   mkdir -p $1
   for p in "${T[@]}"; do
     d=$(ls -d /var/lib/pacman/local/$p-[0-9]* 2>/dev/null | head -1); [[ -n $d ]] || continue
-    awk '/^%(INSTALLDATE|VALIDATION)%/{skip=1; next} /^$/{skip=0} !skip' $d/desc > $1/$p.desc
-    grep -A3 '^%VALIDATION%' $d/desc | tr '\n' ' ' > $1/$p.validation
+    awk '/^%(INSTALLDATE|VALIDATION)%/{skip=1; next} /^$/{skip=0} /^btrpkg-validation=/{next} !skip' $d/desc > $1/$p.desc
+    { grep -A3 '^%VALIDATION%' $d/desc; grep '^btrpkg-validation=' $d/desc; } | tr '\n' ' ' > $1/$p.validation
     for x in files install; do [[ -f $d/$x ]] && cp $d/$x $1/$p.$x; done
     [[ -f $d/mtree ]] && zcat $d/mtree > $1/$p.mtree
   done

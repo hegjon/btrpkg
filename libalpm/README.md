@@ -34,6 +34,28 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
    summary and the download-space check show the real download size; fetch-ids' progress lines
    become pacman's download callbacks (progress bars).
 
+4. `libalpm: btrpkg: use a package file that is already in the cache`: a `.pkg.tar.*` file in a
+   cache directory wins over a btrpkg download (offline mirrors such as the Omarchy ISO's).
+
+5. `libalpm: btrpkg: one root process when downloads aren't sandboxed`: without a download user
+   (DisableSandbox, and pacstrap always disables the sandbox) one root `pull-ids` per server
+   fetches straight into the cache files, without the download directory's second write.
+
+6. `libalpm: btrpkg: pacman -U of .pkg.btr, -Sp without btrpkg, signify not recorded as pgp`:
+   - `pacman -U NAME.pkg.btr` (and `-Qp`): the `.sig` beside it is signify, checked against the
+     btrpkg keys as `LocalFileSigLevel` asks, never handed to GPGME. Every chunk's data is
+     checked against the index first: a cache file pull-ids didn't assemble has had no other
+     check, and before this a damaged `.pkg.btr` installed silently.
+   - A transaction that only prints (`NOLOCK`, which `pacman -Sp` sets) doesn't select or plan
+     btrpkg downloads: it shows the repository's file names and sizes, as stock pacman does, with
+     no network I/O, as root or not. Before, as root, it fetched indexes and printed a `.pkg.btr`
+     URL that no server has.
+   - The signify check is recorded as extended data, `btrpkg-validation=signify:KEYFILE`
+     (`pacman -Qii` shows it), and `%VALIDATION%` says `sha256` (the header-ID check), not
+     `pgp`. A new `%VALIDATION%` token would make the stock pacman that shares the local
+     database warn about every such package. A `btrpkg-validation` entry in a package's own
+     `.PKGINFO` is dropped, so a package can't claim a check it didn't get.
+
 How it was checked:
 - `test/btrpkg/btrtar` (libalpm's view of an archive): for all 315 packages of the set, the tar
   stream from the btrpkg cache file equals the original `.pkg.tar.zst`, entry for entry, data
@@ -48,10 +70,11 @@ How it was checked:
 - pacman's own test suite: the same 19 failures as unpatched `54d94116` on this machine
   (environment), plus the new `btrpkg` test.
 
-Known gaps: the helper runs as root, outside pacman's download sandbox; `-U` of a `.pkg.btr` file
-is not handled; `-Sc` doesn't know `.pkg.btr` files; the local database records the signify
-check as `pgp` (the format has no other name for a signature); libalpm changes the sync package's
-file name in place, which a long-running libalpm client would see after the transaction.
+Known gaps: libalpm changes the sync package's file name in place, which a long-running libalpm
+client would see after the transaction; `-U` takes cache files (what `-Sw` and `btrpkg pull`
+leave), not transport files; `-Sp` URLs are the repository's `.pkg.tar.*` ones, which a
+btrpkg-only server (the ISO's offline mirror) doesn't have. Patch 6 is checked by
+`bench/pacman-gaps-test.sh` on p14s (16 checks).
 
 Cross-checks run against this repo's reader (see PLAN, iteration 2 milestone 2): `btrpkg dump`
 and `btrdump` print identical text for all 384 real indexes (51 in the omarchy test repo, 18 in
