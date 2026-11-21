@@ -56,11 +56,14 @@ first=$(( (r1-r0)/1000000 )); second=$(( (r2-r1)/1000000 ))
 
 # 4. corrupt chunks on the first server must come from the next
 clean; conf "" ""
-# /var/tmp/robust-repo: index/ and chunks/ of the test repo; every chunk >100k damaged in the copy
-if [[ -d /var/tmp/robust-repo ]]; then
+# /var/tmp/robust-repo: a copy of the test repo's tree, x86_64/ and btrparts/ beside it (the
+# database's btrpkg.parts=../btrparts holds for every server of the repository, so a cache server
+# replicates the layout): scp -r desktop:Work/btrpkg-repo/omarchy/{x86_64,btrparts}
+# /var/tmp/robust-repo/. Every btrpart >100k is damaged in the copy.
+if [[ -d /var/tmp/robust-repo/btrparts ]]; then
   rm -rf /var/tmp/badrepo; cp -a --reflink=always /var/tmp/robust-repo /var/tmp/badrepo
-  find /var/tmp/badrepo/chunks -type f -size +100k | while read v; do printf 'XXXX' | dd of=$v bs=1 seek=1000 conv=notrunc 2>/dev/null; done
-  conf "" "CacheServer = file:///var/tmp/badrepo"
+  find /var/tmp/badrepo/btrparts -type f -size +100k | while read v; do printf 'XXXX' | dd of=$v bs=1 seek=1000 conv=notrunc 2>/dev/null; done
+  conf "" "CacheServer = file:///var/tmp/badrepo/x86_64"
   $PAC --config $BC -Sw --noconfirm $T >/tmp/r4.log 2>&1; rc=$?
   [[ $rc == 0 && $(cnt) -ge $N ]] && ok "corrupt chunk on the first server: taken from the next" || { no "corrupt chunk rc=$rc"; tail -5 /tmp/r4.log; }
   rm -rf /var/tmp/badrepo
@@ -72,7 +75,7 @@ $PAC --config $BC -Sw --noconfirm $T >/tmp/r5.log 2>&1; rc=$?
 [[ $rc == 0 && $(cnt) -ge $N ]] && ok "DisableSandbox: works without the download user" || { no "DisableSandbox rc=$rc"; tail -5 /tmp/r5.log; }
 
 # 6. -Sc removes leftovers (in a cache directory of its own: the real one keeps packages for rollbacks)
-SC=/var/tmp/robust-sc/; rm -rf $SC; mkdir -p $SC/download-btrpkg/chunks/aa; touch $SC/download-btrpkg/chunks/aa/x $SC/download-btrpkg.want $SC/keep.txt
+SC=/var/tmp/robust-sc/; rm -rf $SC; mkdir -p $SC/download-btrpkg/btrparts/aa; touch $SC/download-btrpkg/btrparts/aa/x $SC/download-btrpkg.want $SC/keep.txt
 conf "CacheDir = $SC" ""; $PAC --config $BC -Sc --noconfirm >/dev/null 2>&1
 [[ ! -e $SC/download-btrpkg && ! -e $SC/download-btrpkg.want && -e $SC/keep.txt ]] && ok "-Sc removes the leftover download directory (and keeps other files)" || no "-Sc: $(ls -A $SC | tr '\n' ' ')"
 rm -rf $SC

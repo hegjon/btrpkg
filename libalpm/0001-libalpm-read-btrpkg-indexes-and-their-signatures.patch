@@ -1,7 +1,7 @@
 From 223f54a0af93fd12865fa6bc2e16bbc7b1e47a6e Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 07:20:02 +0200
-Subject: [PATCH 1/6] libalpm: read btrpkg indexes and their signatures
+Subject: [PATCH 1/7] libalpm: read btrpkg indexes and their signatures
 
 btrpkg (https://github.com/hegjon/btrpkg) stores a package as an index (header,
 chunk table, entries, small-file blob) plus chunks that btrfs can take as

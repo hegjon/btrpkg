@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """How much of one architecture's btrpkg store is already in another's.
 
-  cross-arch-share.py STORE [OTHER_STORE...] --against X86_STORE...
+  cross-arch-share.py STORE [OTHER_STORE...] --against BTRPARTS_DIR...
 
-For every index in STORE/index, every chunk counts as shared when the other stores hold the same
-unencoded data (their raw map, raw/xx/HASH: what repo-update's publish reuses even when the
-compressed bytes differ), and as identical when they hold the same stored bytes (chunks/xx/HASH).
+For every index in STORE/index, every btrpart counts as shared when the other btrparts
+directories hold the same unencoded data (their raw map, .raw/xx/HASH: what repo-update's
+publish reuses even when the compressed bytes differ), and as identical when they hold the same
+stored bytes (xx/HASH).
 Prints totals in encoded (download/storage) bytes, per package kind (-any vs per-arch filename),
 and the packages with the most and least sharing. Small files (inside the index) are not chunks;
 index bytes are counted apart.
@@ -20,6 +21,7 @@ BTR = os.environ.get("BTRPKG", "btrpkg")
 
 def has(kind, h):
     return any(os.path.exists(os.path.join(s, kind, h[:2], h)) for s in against)
+# kinds: ".raw" (raw map) and "" (the btrparts themselves)
 
 tot = defaultdict(int)
 per = []
@@ -36,9 +38,9 @@ for store in stores:
                 continue
             n = int(p[3])
             enc += n
-            if has("raw", p[6]):
+            if has(".raw", p[6]):
                 shared += n
-            if has("chunks", p[5]):
+            if has("", p[5]):
                 ident += n
         ib = os.path.getsize(os.path.join(idir, f))
         for k in (kind, "all"):

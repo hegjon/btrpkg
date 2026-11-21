@@ -12,7 +12,7 @@ pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=4
+pkgrel=5
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64)
 url="https://github.com/hegjon/btrpkg"
@@ -36,6 +36,7 @@ source=("pacman::git+https://gitlab.archlinux.org/pacman/pacman.git#commit=$_com
         btrpkg-0004-libalpm-btrpkg-use-a-package-file-that-is-already-in.patch
         btrpkg-0005-libalpm-btrpkg-one-root-process-when-downloads-aren-.patch
         btrpkg-0006-libalpm-btrpkg-pacman-U-of-.pkg.btr-Sp-without-btrpk.patch
+        btrpkg-0007-libalpm-btrpkg-btrparts-where-the-database-says-btrp.patch
         pacman-btrpkg.conf
         pacstrap-btrpkg)
 sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
@@ -43,12 +44,13 @@ sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
             'de428b496a825772ef49ec5555a386a4b23ffa10b9dfd9907f0671d5c1dc2178'
             '9a734e5d75be603d58aa92e8d29a15466b3ac2af6b7d6f6728dd5c3e5ed8758d'
             '021893dd44ec23251cfc0f2b81c12d832927ea60095d4d2956d9760e8bbfaa58'
-            'c67007cd3be1d5439aa79289f4e050c02c73a697ba687329efc7fedb54f1cf98'
-            '892949bd36fb8d7bc8de4dca53031d59826a0504a0085294ccbb9abe7548e8f4'
-            '4abe2ceeaffeeabe86f0baaad203f83e1c3553be9844afed566dc1edbe3d1358'
-            'cd0ed91bc9d138a0648c80dc548903405c46dc00f1870391c76cc47966741ba8'
-            '9912f95bfa0fa3186c3d644edd9a41546654de9604aa5a902bb1ad8aff582523'
-            '9063ec05efe20f2eecaec2ac2f72e582667ffe5df28ee0f8367a151d14173982'
+            '616c2d797e4afb416432108792bc0c6fabbd20451b7bc29ab4f4b85bb71b59f8'
+            '75f3a5c7921b39c189ec92a0c16585ae41fb80668267c42ddfd778d24ba8e64e'
+            '01314152e4e818175e6fdd8831ccce0821ad62d04d82db720d4f818a83389776'
+            'd4d1fa1c2e6bf91015d225f6c35b73c7b9b7a761e5a11d5fbd4c78a9eab18f87'
+            '815897219fbc43272e968b973389acdd0940d24aa49bda07587257b5ad0eea0d'
+            'f64e185063ac1eeebbeb2c28fc2ebc5e299f362ff0401e333b6b37c7243b25f7'
+            'a177cfca6f0aa54c04a6e77839ea120bbbd96c59fd70d41660a9e2f8112f181b'
             '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac'
             '9baa36c396fff615c46acbad513d9797bb9c9450deae0ffb29dce0ccc9b6f327')
 

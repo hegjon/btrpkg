@@ -2,7 +2,8 @@
 //! DownloadUser, seccomp, and Landlock applied here: reads anywhere, writes only to DIR, no exec).
 //!
 //! It writes a directory store into DIR: `index/NAME.btridx` (+ `.sig`) and
-//! `chunks/xx/HASH` for every chunk that can't come from the machine. Whether a chunk can come
+//! `btrparts/xx/HASH` for every btrpart that can't come from the machine (read from each
+//! server's btrparts directory, `--parts`, which the repository's database names). Whether a chunk can come
 //! from the machine is only estimated here (an older cache file of the package lists it, or the
 //! installed file it belongs to is long enough); nothing local is hashed, because the privileged
 //! second half (`pull-ids DIR CACHEDIR`) has to check everything it reuses anyway. If that check
@@ -34,6 +35,8 @@ pub(crate) struct FetchOpts<'a> {
     pub progress: bool,
     /// only the indexes (and signatures)
     pub index_only: bool,
+    /// the servers' btrparts directory, relative to each (net::DEFAULT_PARTS by default)
+    pub parts: &'a str,
 }
 
 /// Restrict this process: read the whole filesystem, write and create only under `dir`, run
@@ -60,9 +63,10 @@ fn say(on: bool, line: String) {
     }
 }
 
+/// A btrpart's path in a btrparts directory (and its key in --want files).
 fn chunk_rel(stored: &Hash) -> String {
     let x = hex(stored);
-    format!("chunks/{}/{x}", &x[..2])
+    format!("{}/{x}", &x[..2])
 }
 
 pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Hash)], o: &FetchOpts) -> Result<()> {
@@ -97,7 +101,8 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
 
     if o.index_only { return Ok(()); }
 
-    // 2. which chunks to fetch: (store path, length, owning package)
+    // 2. which chunks to fetch: (path in a btrparts directory, length, owning package)
+    let parts = dir.join(net::DEFAULT_PARTS);
     let mut need: Vec<(String, usize, usize)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let want: Option<HashSet<&str>> = o.want.as_ref().map(|w| w.iter().map(|s| s.as_str()).collect());
@@ -118,7 +123,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
                 }
             }
             if !seen.insert(rel.clone()) { continue; }
-            if fs::symlink_metadata(dir.join(&rel)).is_ok_and(|m| m.is_file() && m.len() == c.encoded_len as u64) { continue; }
+            if fs::symlink_metadata(parts.join(&rel)).is_ok_and(|m| m.is_file() && m.len() == c.encoded_len as u64) { continue; }
             need.push((rel, c.encoded_len as usize, j));
         }
     }
@@ -135,12 +140,16 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
     for (k, s) in servers.iter().enumerate() {
         if left.is_empty() { break; }
         let items: Vec<(String, usize)> = left.iter().map(|(r, l, _)| (r.clone(), *l)).collect();
-        let r = s.get_many(&items, &mut ns, |batch| {
+        let ps = match s.parts(o.parts) {
+            Ok(ps) => ps,
+            Err(e) => { eprintln!("btrpkg: {}: {e:#}", s.describe()); continue; }
+        };
+        let r = ps.get_many(&items, &mut ns, |batch| {
             for (i, d) in batch {
                 let (rel, _, j) = &left[i];
                 let c = &by_rel[rel.as_str()];
-                check_chunk(0, c, &d).with_context(|| format!("{rel} from {}", s.describe()))?;
-                store::write_atomic_nosync(&dir.join(rel), &d)?;
+                check_chunk(0, c, &d).with_context(|| format!("{rel} from {}", ps.describe()))?;
+                store::write_atomic_nosync(&parts.join(rel), &d)?;
                 got[*j] += d.len() as u64;
                 done.insert(rel.clone());
             }

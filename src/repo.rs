@@ -2,9 +2,11 @@
 //!
 //! For every package of the repo database whose file is in the directory: check the file against
 //! the database's %SHA256SUM% and its OpenPGP signature (`gpgv` with pacman's keyring), convert it,
-//! publish chunks, signature and index into the same directory, then rewrite the database with
-//! three `%DATA%` lines per package:
-//!   btrpkg.index=index/NAME.btridx   btrpkg.id=<header hash>   btrpkg.size=<index + chunk bytes>
+//! publish its btrparts (into the btrparts directory, `../btrparts` by default: beside the
+//! architecture directories, which share it), signature and index (into the directory), then
+//! rewrite the database with four `%DATA%` lines per package:
+//!   btrpkg.index=index/NAME.btridx   btrpkg.id=<header hash>   btrpkg.size=<index + btrpart bytes>
+//!   btrpkg.parts=<the btrparts directory, relative to the repository's directory>
 //! pacman reads `%DATA%` silently, so the same database serves plain pacman unchanged. The
 //! `.pkg.tar.zst` files stay. Order: chunks, signatures and indexes first, the database last.
 //! Packages already converted from the same file (index/NAME.src holds its SHA-256) are skipped.
@@ -102,10 +104,17 @@ pub(crate) struct RepoOpts<'a> {
     /// read the database from here instead of DIR/REPO.db (a newer upstream database: DIR/REPO.db
     /// keeps serving the old one until the new one, with btrpkg data, replaces it)
     pub db_in: Option<PathBuf>,
+    /// the btrparts directory, relative to DIR (clients resolve it against the server URL)
+    pub parts: String,
 }
+
+/// Beside the architecture directories (`omarchy/x86_64`, `omarchy/aarch64` share
+/// `omarchy/btrparts`).
+pub(crate) const DEFAULT_REPO_PARTS: &str = "../btrparts";
 
 /// Update DIR/REPO.db (following the usual REPO.db -> REPO.db.tar.zst symlink).
 pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoStats> {
+    let parts = crate::parts_dir(dir, &o.parts)?;
     let link = dir.join(format!("{repo}.db"));
     let dbp = match (&o.db_in, fs::canonicalize(&link)) {
         (_, Ok(p)) => p,
@@ -165,7 +174,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             convert(&src, &tmp, o.level, 19, o.small, 1, 1 << 20)?;
             let (_, ps) = {
                 let _g = publish_lock.lock().unwrap();
-                store::publish(&tmp, dir, o.key)
+                store::publish(&tmp, dir, &parts, o.key)
             }?;
             let _ = fs::remove_file(&tmp);
             let ib = fs::read(&ip)?;
@@ -178,7 +187,8 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             Ok((id, size, converted)) => {
                 let mut s = st.lock().unwrap();
                 if converted { s.converted += 1 } else { s.unchanged += 1 }
-                d.set_btrpkg(&[format!("btrpkg.index=index/{name}.btridx"), format!("btrpkg.id={}", hex(&id)), format!("btrpkg.size={size}")]);
+                d.set_btrpkg(&[format!("btrpkg.index=index/{name}.btridx"), format!("btrpkg.id={}", hex(&id)), format!("btrpkg.size={size}"),
+                    format!("btrpkg.parts={}", o.parts)]);
             }
             Err(e) => {
                 eprintln!("btrpkg: {name}: {e:#} (left to pacman)");

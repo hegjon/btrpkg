@@ -69,7 +69,58 @@ fn read_local(d: &std::path::Path, rel: &str) -> std::io::Result<Vec<u8>> {
     Ok(v)
 }
 
+/// Where a store's btrparts are, relative to it, when nothing says otherwise: inside the store.
+/// A repository can put them elsewhere (`btrpkg.parts` in its database, e.g. `../btrparts`
+/// beside the architecture directories, shared by all of them). Directory stores written on
+/// the client (pacman's download directory) always use this.
+pub const DEFAULT_PARTS: &str = "btrparts";
+
 impl Source {
+    /// The btrparts of this store: REL resolved against it. REL is a relative path
+    /// (`btrparts`, `../btrparts`); `..` is resolved here and can't go above the URL's host or
+    /// the directory's root. Btrparts are checked against the signed index that names them, so
+    /// where they come from is no matter of trust.
+    pub fn parts(&self, rel: &str) -> Result<Source> {
+        ensure!(!rel.is_empty() && !rel.starts_with('/') && !rel.contains("://")
+            && rel.bytes().all(|b| b.is_ascii_graphic() && b != b'\\' && b != b'?' && b != b'#' && b != b'%'),
+            "bad btrparts path {rel:?}");
+        let resolve = |mut segs: Vec<String>| -> Result<Vec<String>> {
+            for c in rel.split('/') {
+                match c {
+                    "" | "." => {}
+                    ".." => { ensure!(segs.pop().is_some(), "btrparts path {rel:?} leaves the store's root"); }
+                    x => segs.push(x.to_string()),
+                }
+            }
+            Ok(segs)
+        };
+        Ok(match self {
+            Source::Dir(d) => {
+                // lexically, like the URL: relative to the working directory, `..` in the
+                // directory's own path resolved too
+                let d = if d.is_absolute() { d.clone() } else { std::env::current_dir()?.join(d) };
+                let mut segs: Vec<String> = Vec::new();
+                for c in d.components() {
+                    match c {
+                        std::path::Component::Normal(s) => segs.push(s.to_string_lossy().into_owned()),
+                        std::path::Component::ParentDir => { segs.pop(); }
+                        _ => {}
+                    }
+                }
+                let mut p = PathBuf::from("/");
+                for s in resolve(segs)? { p.push(s); }
+                Source::Dir(p)
+            }
+            Source::Http { base, h2c, parallel } => {
+                let after = base.find("://").map(|i| i + 3).unwrap_or(0);
+                let (origin, path) = match base[after..].find('/') { Some(i) => base.split_at(after + i), None => (base.as_str(), "") };
+                let segs = resolve(path.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect())?;
+                let base = if segs.is_empty() { origin.to_string() } else { format!("{origin}/{}", segs.join("/")) };
+                Source::Http { base, h2c: *h2c, parallel: *parallel }
+            }
+        })
+    }
+
     /// For messages: the base URL or directory.
     pub fn describe(&self) -> String {
         match self { Source::Dir(d) => d.display().to_string(), Source::Http { base, .. } => base.clone() }

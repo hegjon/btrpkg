@@ -1,7 +1,7 @@
 #!/bin/bash
 # Keep a btrpkg mirror of one pacman repository up to date (mirror-all.sh runs it for every line
 # of repos.conf; btrpkg-mirror.timer runs mirror-all.sh).
-#   REPO=omarchy UP=URL M=DIR KEYRING=ARMORED.gpg WANT=FILE mirror/repo-mirror.sh
+#   REPO=omarchy UP=URL M=DIR KEYRING=ARMORED.gpg WANT=FILE PARTS=REL mirror/repo-mirror.sh
 # Defaults: Omarchy's edge repository.
 # Each run:
 #   1. fetch upstream's REPO.db (conditional GET; nothing to do when it hasn't changed and the
@@ -10,11 +10,12 @@
 #      asked the mirror for and got a 404, learned from caddy's access log; ALL=1: every package)
 #      that the mirror doesn't have yet
 #   3. btrpkg repo-update --db-in: check each new file against the database's SHA-256 and Omarchy's
-#      OpenPGP signature (gpgv, Omarchy's keyring), convert, publish chunks and the index signed with
+#      OpenPGP signature (gpgv, Omarchy's keyring), convert, publish the btrparts (into PARTS,
+#      relative to M: shared by the mirror's repositories) and the index signed with
 #      the mirror's key, then replace the served REPO.db with upstream's plus btrpkg %DATA%.
 # Packages not converted keep their plain entry; pacman downloads them as usual, from the next
 # server when the mirror has no file. Old versions stay (clients with an older database can still
-# fetch them); removing unused files and chunks is the repo pipeline's job (PLAN step 7).
+# fetch them); removing unused files and btrparts is the repo pipeline's job (PLAN step 7).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 REPO=${REPO:-omarchy}
@@ -26,6 +27,7 @@ KEY=${KEY:-$HOME/Work/btrpkg-repo/keys/btrpkg-test.sec}
 B=${B:-$here/../target/release/btrpkg}
 WANT=${WANT:-$here/wanted.txt}
 LOG=${LOG:-$HOME/Work/btrpkg-repo/access.log}      # caddy's JSON access log: 404s teach the wanted list
+PARTS=${PARTS:-../btrparts}   # btrparts directory, relative to M (btrpkg.parts in the database)
 JOBS=${JOBS:-8}   # 8 measured best on the 32-core desktop (15.4 s for core; 16: 15.9 s)
 mkdir -p "$M"
 exec 9>"$M/.lock"
@@ -86,6 +88,6 @@ done < "$list"
 log "downloaded $got files ($failed failed)"
 
 # 3. convert and publish; the served database is replaced last
-"$B" repo-update --key "$KEY" --gpg-keyring "$KR" --db-in "$cur" --jobs "$JOBS" "$M" "$REPO"
+"$B" repo-update --key "$KEY" --gpg-keyring "$KR" --db-in "$cur" --jobs "$JOBS" --parts "$PARTS" "$M" "$REPO"
 touch "$M/.done"
 log "$REPO published: $(bsdtar -xOf "$M/$REPO.db" '*/desc' | grep -c '^btrpkg.id=') of $(wc -l < "$list") packages with btrpkg data"

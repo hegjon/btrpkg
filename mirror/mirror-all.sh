@@ -3,8 +3,8 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 rc=0
-while read -r repo up dir keyring want; do
+while read -r repo up dir keyring want parts; do
   [[ -z $repo || $repo == \#* ]] && continue
-  REPO=$repo UP=$up M=$HOME/Work/btrpkg-repo/$dir KEYRING=$keyring WANT=$here/$want "$here/repo-mirror.sh" || { echo "$repo: failed"; rc=1; }
+  REPO=$repo UP=$up M=$HOME/Work/btrpkg-repo/$dir KEYRING=$keyring WANT=$here/$want PARTS=${parts:-../btrparts} "$here/repo-mirror.sh" || { echo "$repo: failed"; rc=1; }
 done < "$here/repos.conf"
 exit $rc

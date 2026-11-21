@@ -329,15 +329,17 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         lap(&mut st, "conflicts");
         // 6. pull
         // one pull per repository: all its packages share one download queue
-        let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false, before_fetch: None, plan_only: false, progress: false };
         let caches: Vec<PathBuf> = targets.iter().map(|t| conf.cache_dir.join(format!("{}.pkg.btr", t.file))).collect();
         // already checked above against the database ID and a signature; same bytes
         let trusts: Vec<sign::Trust> = targets.iter().map(|t| sign::Trust::Id(t.idx.hdr.id())).collect();
-        let mut repos: Vec<usize> = targets.iter().map(|t| t.repo).collect();
-        repos.sort(); repos.dedup();
-        for r in repos {
-            let src = net::Source::parse(&conf.repos[r].servers[0], o.h2c, o.parallel);
-            let items: Vec<store::PullItem> = targets.iter().enumerate().filter(|(_, t)| t.repo == r)
+        // the database says where each package's btrparts are (btrpkg.parts)
+        let parts_of = |t: &Target| t.new.field("btrpkg.parts").unwrap_or(net::DEFAULT_PARTS).to_string();
+        let mut groups: Vec<(usize, String)> = targets.iter().map(|t| (t.repo, parts_of(t))).collect();
+        groups.sort(); groups.dedup();
+        for (r, parts) in groups {
+            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false, before_fetch: None, plan_only: false, progress: false, parts: &parts };
+            let src = net::Source::parse(&conf.repos[r].servers[0], o.h2c, o.parallel).parts(&parts)?;
+            let items: Vec<store::PullItem> = targets.iter().enumerate().filter(|(_, t)| t.repo == r && parts_of(t) == parts)
                 .map(|(k, t)| store::PullItem { name: &t.file, ib: &t.idx.bytes, cache: &caches[k], trust: &trusts[k] }).collect();
             for ps in store::pull_many(&src, &items, &po, net::NetStats::default())? {
                 st.fetched_bytes += ps.fetched_bytes;

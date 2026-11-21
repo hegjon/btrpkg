@@ -66,7 +66,7 @@ b = open(sys.argv[1], "rb").read()
 print(b[256 + 24:256 + 56].hex())   # format v1: stored hash of the first chunk in the table
 EOF
 )
-f=/exp/store-bad/chunks/${h:0:2}/$h
+f=/exp/store-bad/btrparts/${h:0:2}/$h
 printf '\xff' | dd of=$f bs=1 seek=100 conv=notrunc status=none
 mkdir -p $C/fresh
 if $B pull --unverified /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: corrupt chunk accepted"; exit 1; fi

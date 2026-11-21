@@ -721,7 +721,7 @@ TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.s
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
 /// header IDs in its database); signatures are saved for the caller to check.
-fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Option<usize>, installed: Option<&Path>, level: Option<i32>, fetch_via: Option<&Path>) -> Result<()> {
+fn pull_ids(s: &str, parts: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Option<usize>, installed: Option<&Path>, level: Option<i32>, fetch_via: Option<&Path>) -> Result<()> {
     ensure!(!pkgs.is_empty(), "pull-ids needs at least one NAME=IDHEX");
     let src = net::Source::parse(s, flags.contains(&"--h2c"), parallel);
     let mut ns = net::NetStats::default();
@@ -733,7 +733,7 @@ fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Optio
         got.push((name.to_string(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(store::unhex(id)?)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
-        verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress") };
+        verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress"), parts };
     // --fetch-via FILE: after all local reuse, list the chunks still missing in FILE, say
     // "fetch N BYTES" on stdout and wait for "go" on stdin while the caller has another
     // (unprivileged) process put them into the directory source
@@ -754,7 +754,7 @@ fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Optio
     };
     let o = store::PullOpts { before_fetch: if fetch_via.is_some() { Some(&hook) } else { None }, ..o };
     let items: Vec<store::PullItem> = got.iter().map(|(n, ib, _, c, t)| store::PullItem { name: n, ib, cache: c, trust: t }).collect();
-    let st = store::pull_many(&src, &items, &o, ns)?;
+    let st = store::pull_many(&src.parts(parts)?, &items, &o, ns)?;
     if o.plan_only {
         // what a real run would download: chunk bytes, then the index's size
         for ((n, ib, ..), st) in got.iter().zip(&st) { println!("need\t{n}\t{}\t{}", st.fetched_bytes, ib.len()); }
@@ -775,6 +775,12 @@ fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Optio
     let d = File::open(cdir)?;
     ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
     Ok(())
+}
+
+/// A btrparts directory REL (relative) resolved against store directory STORE, as clients
+/// resolve it (net::Source::parts).
+fn parts_dir(store: &Path, rel: &str) -> Result<PathBuf> {
+    match net::Source::Dir(store.to_path_buf()).parts(rel)? { net::Source::Dir(p) => Ok(p), _ => unreachable!() }
 }
 
 /// The parsed and checked index of FILE (an index, transport or cache file) as text: one line per
@@ -846,6 +852,7 @@ fn main() -> Result<()> {
     let mut installed: Option<PathBuf> = None;
     let mut netopt = net::NetOptions::default();
     let mut servers: Vec<String> = Vec::new();
+    let mut parts: Option<String> = None;
     let mut cachedir: Option<PathBuf> = None;
     let mut want: Option<PathBuf> = None;
     let mut missing_to: Option<PathBuf> = None;
@@ -875,6 +882,7 @@ fn main() -> Result<()> {
             "--installed" => installed = Some(val("--installed")?.into()),
             "--http" => netopt.version = Some(val("--http")?),
             "--server" => servers.push(val("--server")?),
+            "--parts" => parts = Some(val("--parts")?),
             "--keep" => keep = val("--keep")?.parse()?,
             "--fetch-via" => fetch_via = Some(val("--fetch-via")?.into()),
             "--cachedir" => cachedir = Some(val("--cachedir")?.into()),
@@ -918,7 +926,8 @@ fn main() -> Result<()> {
         }
         ["publish", i, s] => {
             let k = sec_key(key.as_ref())?;
-            store::publish(Path::new(i), Path::new(s), k.as_ref().map(|(k, n)| (k, n.as_str()))).map(|(name, st)| {
+            let pdir = parts_dir(Path::new(s), parts.as_deref().unwrap_or(net::DEFAULT_PARTS))?;
+            store::publish(Path::new(i), Path::new(s), &pdir, k.as_ref().map(|(k, n)| (k, n.as_str()))).map(|(name, st)| {
                 eprintln!("publish: {st:?}");
                 println!("upload\t{name}\t{}\t{}\t{}\t{}", st.new_chunks, st.new_bytes, st.index_bytes, st.raw_entries);
             })
@@ -929,13 +938,14 @@ fn main() -> Result<()> {
             let (ib, sig) = store::fetch_index(&src, n, &mut ns)?;
             let t = trust.resolve(sig)?;
             let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3),
-                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync"), before_fetch: None, plan_only: false, progress: false };
+                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync"), before_fetch: None, plan_only: false, progress: false,
+                parts: parts.as_deref().unwrap_or(net::DEFAULT_PARTS) };
             store::pull_index(&src, n, &ib, Path::new(c), &t, &o, ns).map(|st| {
                 eprintln!("pull: {st:?}");
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
             })
         }
-        ["pull-ids", s, cdir, pkgs @ ..] => match pull_ids(s, Path::new(cdir), pkgs, &flags, parallel, installed.as_deref(), level, fetch_via.as_deref()) {
+        ["pull-ids", s, cdir, pkgs @ ..] => match pull_ids(s, parts.as_deref().unwrap_or(net::DEFAULT_PARTS), Path::new(cdir), pkgs, &flags, parallel, installed.as_deref(), level, fetch_via.as_deref()) {
             Err(e) if missing_to.is_some() && e.downcast_ref::<net::AbsentChunks>().is_some() => {
                 let a = e.downcast_ref::<net::AbsentChunks>().unwrap();
                 fs::write(missing_to.as_ref().unwrap(), a.0.join("\n") + "\n")?;
@@ -964,13 +974,13 @@ fn main() -> Result<()> {
             }
             let w = match &want { Some(p) => Some(fs::read_to_string(p)?.lines().filter(|l| !l.is_empty()).map(String::from).collect()), None => None };
             let o = fetchids::FetchOpts { installed: installed.as_deref(), cachedir: cachedir.as_deref(), want: w, progress: flags.contains(&"--progress"),
-                index_only: flags.contains(&"--index-only") };
+                index_only: flags.contains(&"--index-only"), parts: parts.as_deref().unwrap_or(net::DEFAULT_PARTS) };
             fetchids::fetch_ids(&srcs, dir, &ids, &o)
         }
         ["repo-update", d, r] => {
             let k = sec_key(key.as_ref())?;
             let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),
-                level: level.unwrap_or(19), small: small_max, jobs, db_in: db_in.clone() };
+                level: level.unwrap_or(19), small: small_max, jobs, db_in: db_in.clone(), parts: parts.clone().unwrap_or_else(|| repo::DEFAULT_REPO_PARTS.to_string()) };
             let st = repo::repo_update(Path::new(d), r, &o)?;
             eprintln!("repo-update: {st:?}");
             ensure!(st.failed == 0, "{} packages failed (left to pacman)", st.failed);
@@ -997,7 +1007,7 @@ mod tests {
     const U: sign::Trust = sign::Trust::Unverified;
 
     fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
-        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false })
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS })
     }
 
     pub(crate) struct TempDir(pub PathBuf);
@@ -1087,6 +1097,50 @@ mod tests {
     fn convert_to(src: &Path, out: &Path, level: i32) {
         let zst = out.extension().is_some_and(|e| e == "zst");
         convert(src, out, level, 19, 4096, if zst { 2 } else { 1 }, 4096).unwrap();
+    }
+
+    #[test]
+    fn btrparts_paths() {
+        let base = |s: net::Source| match s { net::Source::Http { base, .. } => base, net::Source::Dir(d) => d.display().to_string() };
+        let h = net::Source::parse("http://h:1/omarchy/x86_64/", false, None);
+        assert_eq!(base(h.parts("../btrparts").unwrap()), "http://h:1/omarchy/btrparts");
+        assert_eq!(base(h.parts("btrparts").unwrap()), "http://h:1/omarchy/x86_64/btrparts");
+        assert_eq!(base(h.parts("./a/../btrparts/").unwrap()), "http://h:1/omarchy/x86_64/btrparts");
+        let a = net::Source::parse("https://m/arch/core/os/x86_64", false, None);
+        assert_eq!(base(a.parts("../../../btrparts").unwrap()), "https://m/arch/btrparts");
+        for bad in ["../../../x", "/abs", "http://evil/x", "", "a?b", "a#b", "a%2e", "a b", "a\\b"] {
+            assert!(h.parts(bad).is_err(), "{bad:?} accepted");
+        }
+        assert_eq!(base(net::Source::parse("file:///srv/repo/x86_64", false, None).parts("../btrparts").unwrap()), "/srv/repo/btrparts");
+    }
+
+    #[test]
+    fn shared_btrparts() {
+        // two architecture directories, one btrparts directory beside them: the second publish
+        // of the same package adds no btrpart, and both pull through ../btrparts
+        let t = TempDir::new("shared");
+        let src = make_pkg(&t.0, "s-1-1", &spec(3));
+        convert_to(&src, &t.0.join("s-1-1.pkg.btr"), 19);
+        let (x86, arm) = (t.0.join("repo/x86_64"), t.0.join("repo/aarch64"));
+        fs::create_dir_all(&x86).unwrap();
+        fs::create_dir_all(&arm).unwrap();
+        let parts = parts_dir(&x86, "../btrparts").unwrap();
+        assert_eq!(parts, t.0.join("repo/btrparts"));
+        let (_, a) = store::publish(&t.0.join("s-1-1.pkg.btr"), &x86, &parts, None).unwrap();
+        let (_, b) = store::publish(&t.0.join("s-1-1.pkg.btr"), &arm, &parts_dir(&arm, "../btrparts").unwrap(), None).unwrap();
+        assert!(a.new_chunks > 0 && b.new_chunks == 0, "{a:?} {b:?}");
+        assert!(!x86.join("btrparts").exists() && !arm.join("btrparts").exists());
+        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: "../btrparts" };
+        for d in [&x86, &arm] {
+            let c = t.0.join(format!("c-{}.pkg.btr", d.file_name().unwrap().to_string_lossy()));
+            let st = store::pull(&net::Source::Dir(d.to_path_buf()), "s-1-1", &c, &U, &o).unwrap();
+            assert!(st.fetched_chunks > 0, "{st:?}");
+            let root = t.0.join(format!("root-{}", d.file_name().unwrap().to_string_lossy()));
+            install(&c, &root, false).unwrap();
+        }
+        // without the field's path the btrparts aren't found
+        let o2 = store::PullOpts { parts: net::DEFAULT_PARTS, ..o };
+        assert!(store::pull(&net::Source::Dir(arm.clone()), "s-1-1", &t.0.join("x.pkg.btr"), &U, &o2).is_err());
     }
 
     #[test]
@@ -1273,7 +1327,7 @@ mod tests {
         assert!(format!("{e:#}").contains("unencoded hash"), "{e:#}");
         assert!(!cache.exists() && !part_path(&cache).exists());
         // publish refuses it too
-        assert!(store::publish(&bad, &t.0.join("store"), None).is_err());
+        assert!(store::publish(&bad, &t.0.join("store"), &t.0.join("store").join(net::DEFAULT_PARTS), None).is_err());
         // the default fetch checks what the signed stored hash covers, so it takes the chunk; the
         // wrong unencoded hash can't be used for reuse later: reuse reads the data back
         let cdir = t.0.join("cdir");
@@ -1282,7 +1336,7 @@ mod tests {
         let store = t.0.join("store");
         let src2 = make_pkg(&t.0, "w-1-2", &spec(10));
         convert_to(&src2, &t.0.join("w-1-2.pkg.btr"), 19);
-        store::publish(&t.0.join("w-1-2.pkg.btr"), &store, None).unwrap();
+        store::publish(&t.0.join("w-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         let p = pull_dir(&store, "w-1-2", &cdir.join("w-1-2.pkg.btr"), &U).unwrap();
         assert!(p.bad_local == 0 && p.reused_chunks == (idx.chunks.len() - 1) as u64, "{p:?}");
         let root = t.0.join("root");
@@ -1299,7 +1353,7 @@ mod tests {
         sign::keygen(&t.0.join("repo")).unwrap();
         sign::keygen(&t.0.join("other")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("repo.sec")).unwrap();
-        store::publish(&t.0.join("s-1-1.pkg.btr"), &store, Some((&k, "repo"))).unwrap();
+        store::publish(&t.0.join("s-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), Some((&k, "repo"))).unwrap();
         let keys = t.0.join("keys");
         fs::create_dir_all(&keys).unwrap();
         fs::copy(t.0.join("repo.pub"), keys.join("repo.pub")).unwrap();
@@ -1358,7 +1412,7 @@ mod tests {
         std::os::unix::fs::symlink("t.db.tar.zst", d.join("t.db")).unwrap();
         sign::keygen(&t.0.join("k")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("k.sec")).unwrap();
-        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, level: 19, small: 4096, jobs: 2, db_in: None };
+        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, level: 19, small: 4096, jobs: 2, db_in: None, parts: "btrparts".into() };
         let st = repo::repo_update(&d, "t", &o).unwrap();
         assert_eq!((st.packages, st.converted, st.missing, st.dropped, st.failed), (3, 2, 1, 1, 0), "{st:?}");
         // the database: same layout, fields added, other %DATA% kept, the missing package gone
@@ -1396,7 +1450,7 @@ mod tests {
         for (n, s) in names.iter().zip([spec(3), spec(11)]) {
             let src = make_pkg(&t.0, n, &s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         }
         let src = net::Source::Dir(store.clone());
         let mut ns = net::NetStats::default();
@@ -1404,20 +1458,20 @@ mod tests {
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
         let caches: Vec<PathBuf> = names.iter().map(|n| cdir.join(format!("{n}.pkg.btr"))).collect();
-        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false };
+        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS };
         let items = |caches: &[PathBuf]| -> Vec<(String, Vec<u8>, PathBuf)> {
             names.iter().zip(&ibs).zip(caches).map(|((n, ib), c)| (n.to_string(), ib.clone(), c.clone())).collect()
         };
         let run = |v: &[(String, Vec<u8>, PathBuf)]| {
             let it: Vec<store::PullItem> = v.iter().map(|(n, ib, c)| store::PullItem { name: n, ib, cache: c, trust: &U }).collect();
-            store::pull_many(&src, &it, &o, net::NetStats::default())
+            store::pull_many(&src.parts(net::DEFAULT_PARTS).unwrap(), &it, &o, net::NetStats::default())
         };
         // a chunk only b has, damaged on the server: nothing of either package is left behind
         let idx_a = read_index_checked(&mut &ibs[0][..], &|h| U.check(h)).unwrap();
         let idx_b = read_index_checked(&mut &ibs[1][..], &|h| U.check(h)).unwrap();
         let only_b = idx_b.chunks.iter().find(|c| !idx_a.chunks.iter().any(|a| a.stored == c.stored)).unwrap();
         let x = hex(&only_b.stored);
-        let cp = store.join(format!("chunks/{}/{x}", &x[..2]));
+        let cp = store.join(format!("btrparts/{}/{x}", &x[..2]));
         let good = fs::read(&cp).unwrap();
         let mut bad = good.clone();
         let k = bad.len() / 2;
@@ -1448,7 +1502,7 @@ mod tests {
         for (n, s) in [("q-1-1-x86_64", &s1), ("q-2-1-x86_64", &s2)] {
             let src = make_pkg(&t.0, n, s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         }
         // version 1 installed some other way (here: from a cache elsewhere, then that cache is gone)
         let root = t.0.join("root");
@@ -1459,7 +1513,7 @@ mod tests {
         fs::remove_dir_all(&other).unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false };
+        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS };
         let src = net::Source::Dir(store.clone());
         let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
         // tool (300 kB, 3 chunks) is unchanged and comes from the installed file
@@ -1489,7 +1543,7 @@ mod tests {
         for (n, s) in [("q-1-1", &s1), ("q-2-1", &s2)] {
             let src = make_pkg(&t.0, n, s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         }
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
@@ -1529,7 +1583,7 @@ mod tests {
         // a damaged chunk in the store: refused, nothing left behind
         let idx = parse_index(&ib).unwrap();
         let x = hex(&idx.chunks[3].stored);
-        let cp = store.join("chunks").join(&x[..2]).join(&x);
+        let cp = store.join("btrparts").join(&x[..2]).join(&x);
         let mut d = fs::read(&cp).unwrap();
         d[5] ^= 1;
         fs::write(&cp, &d).unwrap();
@@ -1552,12 +1606,12 @@ mod tests {
         let s = spec(5);
         let src = make_pkg(&t.0, "r-1-1", &s);
         convert_to(&src, &t.0.join("r-1-1.pkg.btr"), 19);
-        let (_, a) = store::publish(&t.0.join("r-1-1.pkg.btr"), &store, None).unwrap();
+        let (_, a) = store::publish(&t.0.join("r-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         assert_eq!(a.remapped, 0);
         // the same data, framed at another level: different bytes, same unencoded data
         let src2 = make_pkg(&t.0, "r-1-2", &s);
         convert_to(&src2, &t.0.join("r-1-2.pkg.btr"), 3);
-        let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, None).unwrap();
+        let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         assert!(b.remapped > 0, "{b:?}");
         assert_eq!(b.new_chunks, 0, "{b:?}");
         let i1 = parse_index(&fs::read(store.join("index/r-1-1.btridx")).unwrap()).unwrap();
@@ -1572,8 +1626,8 @@ mod tests {
         // a raw-map entry pointing at a chunk with other data: publish refuses
         let x = hex(&i1.chunks[0].raw);
         let y = &i1.chunks[i1.chunks.len() - 1];
-        fs::write(store.join("raw").join(&x[..2]).join(&x), format!("{} {} {}\n", y.compression, y.encoded_len, hex(&y.stored))).unwrap();
-        let e = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, None).unwrap_err();
+        fs::write(store.join("btrparts/.raw").join(&x[..2]).join(&x), format!("{} {} {}\n", y.compression, y.encoded_len, hex(&y.stored))).unwrap();
+        let e = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap_err();
         assert!(format!("{e:#}").contains("raw map"), "{e:#}");
     }
 }
