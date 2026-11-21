@@ -1,0 +1,22 @@
+host x200 part sda2 cpu 'Intel(R) Core(TM)2 Duo CPU P8400 @ 2.26GHz' cache /var/cache/pacman/pkg/
+targets (10): aether mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros omasnap owe owe-lockfeed qtengine quickshell
+aether 4.32.0-2 mise-bin 2026.11.7-1 omarchy-dev 4.0.0.r7840.gac6cb9c-1 omarchy-local-ai 0.6.4-1 omarchy-themes-intros 2026.10.25-1 omasnap 1.26.2-2 owe 0.2.15-1 owe-lockfeed 0.2.15-1 qtengine 0.2.4-5 quickshell 0.3.2.r7.g2b4501a-10 
+pacman would download: 334907812 bytes
+baseline snapshot 12 (0.29 s to create)
+scenario	round	exit	seconds	downloaded	written	space	qkk_altered	versions
+pacman	1	0	35.08	334909002	759230464	698875904	0	426ca57e
+btrpkg0	1	0	22.55	161764794	213266432	172101632	0	426ca57e
+btrpkg	1	0	21.89	161764794	218669056	143433728	0	426ca57e
+btrpkg0	2	0	22.62	161764794	212869120	142381056	0	426ca57e
+btrpkg	2	0	21.96	161764794	211771392	143204352	0	426ca57e
+pacman	2	0	34.89	334909002	737529856	497709056	0	426ca57e
+btrpkg	3	0	20.57	161764794	211267584	172101632	0	426ca57e
+pacman	3	0	36.79	334909002	739426304	499146752	0	426ca57e
+btrpkg0	3	0	22.41	161764794	212709376	172101632	0	426ca57e
+load at end: 1.36 1.48 0.88
+PH phases: [("databases+indexes", 3.5478360970000002), ("conflicts", 0.208693912), ("pull", 15.961673813), ("pacman-check", 0.179625463), ("place", 0.711130413), ("remove", 0.00150812), ("pacman-dbonly+hooks", 0.577798503)]
+PH phases: [("databases+indexes", 3.380582125), ("conflicts", 0.203592943), ("pull", 16.293597547), ("pacman-check", 0.179597749), ("place", 0.69646553), ("remove", 0.001242856), ("pacman-dbonly+hooks", 0.624008082)]
+PH phases: [("databases+indexes", 2.334030047), ("conflicts", 0.204457334), ("pull", 15.954197984), ("pacman-check", 0.178106543), ("place", 0.687512886), ("remove", 0.002319696), ("pacman-dbonly+hooks", 0.569253849)]
+PH phases: [("databases+indexes", 2.294558942), ("conflicts", 0.204043685), ("pull", 17.93177663), ("pacman-check", 0.181183723), ("place", 0.695527594), ("remove", 0.001522019), ("pacman-dbonly+hooks", 0.59798115)]
+PH phases: [("databases+indexes", 2.3273144), ("conflicts", 0.203590981), ("pull", 18.015636462), ("pacman-check", 0.180010236), ("place", 0.682937124), ("remove", 0.001465306), ("pacman-dbonly+hooks", 0.581605111)]
+PH phases: [("databases+indexes", 2.252975597), ("conflicts", 0.205363698), ("pull", 17.866713354), ("pacman-check", 0.180966903), ("place", 0.698143658), ("remove", 0.001380447), ("pacman-dbonly+hooks", 0.582157795)]

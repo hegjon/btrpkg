@@ -14,6 +14,11 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
    queue across all packages of an upgrade instead of one package at a time. A/B against `43ffda5`
    in one run on t460s and x200 (where `pull` is 75-80% of the time).
    Done when: `pull` time drops measurably on both, results identical.
+   **Done 2026-11-21** (`742894d`, `store::pull_many`): A/B against `43ffda5` in the same runs, 3
+   rounds, 10 upgrades each, same bytes downloaded and written, `-Qkk` clean. `pull` t460s
+   4.86 → 3.69 s (−24%), x200 17.9 → 16.0 s (−11%); whole upgrade t460s 6.54 → 5.48 s, x200
+   22.55 → 21.89 s. The x200 (2 cores, no SHA or AES instructions) also decrypts the ssh tunnel
+   (`bench/results/lab-20261121-i2/upgrade-*.log`).
 
 2. **libalpm: read side.** A branch `btrpkg` of pacman at `54d94116` (Arch's 7.1.0.r9 build):
    `lib/libalpm/btrpkg.c` parses and checks a version-1 index (header, table, entries, blob; the
@@ -21,6 +26,13 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
    EVP, which libalpm already links; keys from `/etc/btrpkg/keys`, `/usr/share/btrpkg/keys`).
    Done when: a C test program accepts the Rust-made indexes of the 315 set and rejects every
    flipped bit and truncation of a sample index, as `cargo test` does.
+   **Done 2026-11-21** (pacman `223f54a0`, `libalpm/0001-*.patch`): `btrpkg dump` and the C
+   `btrdump` print identical text for 384 real indexes; 63 crafted indexes with valid hashes and
+   bad contents (`bench/craft_indexes.py`) and 9,000 fuzzed ones (`bench/fuzz_entries.py`) get
+   the same verdict from both; ASan/UBSan clean after two fixes it found (a use-after-free in an
+   error message, a NULL dereference on a bad xattr count). It also found that the Rust reader
+   ignored data after the first zstd frame of a section: both refuse that now.
+   `meson test btrpkg`: 73 subtests. pacman's suite: same failures as unpatched.
 
 3. **libalpm: download.** For a sync package with `btrpkg.index`/`btrpkg.id` in `%DATA%` and a
    btrfs cache directory, libalpm gets `NAME.pkg.btr` into the cache instead of `%FILENAME%`, by
@@ -28,6 +40,9 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
    downloaders through XferCommand). Validation: the index ID from the database and its signature.
    Done when: `pacman -Sw` of a btrpkg package leaves a checked `.pkg.btr` in the cache; packages
    without btrpkg data download as before.
+   **Done 2026-11-21** (pacman `a02c75b8`): `BtrPkgHelper` in pacman.conf; `btrpkg pull-ids`
+   downloads all of a repository's btrpkg targets in one queue; validation by header ID and
+   signify signature (`%VALIDATION%` now `sha256 pgp` instead of iteration 1's `none`).
 
 4. **libalpm: extraction.** `commit_single_pkg` takes its entries from the index instead of
    libarchive and keeps `extract_single_file` (backup files, `.pacnew`, NoExtract, conflicts);
@@ -36,9 +51,29 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
    Done when: `pacman -S`/`-Syu` of btrpkg packages, including ones with install scripts and backup
    files, gives the same installed tree and database as stock pacman (`-Qkk` clean, `.pacnew`
    where stock pacman makes one), in an Arch container and on p14s.
+   **Done on p14s 2026-11-21** (pacman `a02c75b8`; the container part was dropped: the Arch image
+   has OpenSSL 3.6, the lab and desktop 4.1, and p14s is the real target). Not as planned: no
+   change to `commit_single_pkg`'s loop; `_alpm_open_archive` reads a cache file as a tar stream
+   made from the index, and only `perform_extraction` changes (reflink for large files). Same
+   installed files (type, mode, owner, size, mtime, xattrs, sha256) and database entries as stock
+   pacman for upgrades and reinstalls of 10 packages (7 with install scripts) and a test package
+   with backup files (`.pacnew` with a local change, none without), a `security.capability`
+   file, a hardlink and a symlink.
 
 5. **Package and measure.** A pacman package built from the branch for the lab; the iteration-1
    upgrade runs again with three variants: stock pacman, patched pacman, `pacbtr`.
+   **Done 2026-11-21**, with the build copied to `/opt/pacbtr` instead of a package (a package
+   would replace the lab machines' system pacman). Tables in the README ("Iteration 2"): patched
+   pacman 1.6-2.5x faster than stock, as fast as `pacbtr` on p14s, 0.5-0.7 s slower on t460s and
+   x200; identical installed files and database entries in all 39 runs.
+
+## After iteration 2
+
+- Run the helper inside pacman's download sandbox (DownloadUser), or download in C.
+- `pacman -U NAME.pkg.btr`, `-Sc` for `.pkg.btr` files, an `alpm_pkg_validation_t` value for
+  signify instead of recording `pgp`.
+- Don't change the sync package's file name in place (long-running libalpm clients).
+- Measure without the ssh tunnels (needs the desktop's ufw rule for port 8790).
 
 ## Out
 

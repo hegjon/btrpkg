@@ -1,0 +1,26 @@
+host t460s targets: aether mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros omasnap owe owe-lockfeed qtengine quickshell
+aether 4.32.0-2 mise-bin 2026.11.7-1 omarchy-dev 4.0.0.r7840.gac6cb9c-1 omarchy-local-ai 0.6.4-1 omarchy-themes-intros 2026.10.25-1 omasnap 1.26.2-2 owe 0.2.15-1 owe-lockfeed 0.2.15-1 qtengine 0.2.4-5 quickshell 0.3.2.r7.g2b4501a-10 
+baseline snapshot 16
+scenario	round	exit	seconds	written	space	qkk_altered	btr_cache_files
+stock	1	0	9.18	736759808	699236352	0	0
+btr	1	0	5.88	213745664	171831296	0	10
+pacbtr	1	0	5.28	205651968	140582912	0	10
+btr	2	0	5.83	213520384	141860864	0	10
+pacbtr	2	0	5.35	206999552	139796480	0	10
+stock	2	0	9.02	729239552	498401280	0	0
+pacbtr	3	0	5.72	205180928	172097536	0	10
+stock	3	0	9.01	727126016	499617792	0	0
+btr	3	0	5.69	212758528	171831296	0	10
+round 1 btr: installed files and database entries identical to stock
+round 1 pacbtr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+round 2 btr: installed files and database entries identical to stock
+round 2 pacbtr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+round 3 btr: installed files and database entries identical to stock
+round 3 pacbtr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+after reset: altered 0

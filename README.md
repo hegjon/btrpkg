@@ -56,6 +56,58 @@ only point at earlier files of the same package. For `.pkg.btr.zst` the outer zs
 compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
 trailing data, and on any failure removes its partial file.
 
+## Iteration 2: pacman installs btrpkg packages (2026-11-21)
+
+Two libalpm patches (`libalpm/`, pacman branch `btrpkg` on `54d94116`, Arch's 7.1.0.r9): an
+index and signature reader in C that agrees with this repo's reader on every real, crafted and
+fuzzed index tried, and the sync path: with `BtrPkgHelper = /usr/bin/btrpkg` in pacman.conf and
+the cache on btrfs, packages with btrpkg data in the database come as `NAME.pkg.btr` (`btrpkg
+pull-ids`, one download queue per repository, data reused from the installed versions), are
+checked by header ID and signify signature, are read through libalpm's normal archive code as a
+tar stream made from the index, and have their large files reflinked from the cache file. So
+install scripts, backup files and `.pacnew`, NoExtract, hooks and the local database all work as
+in stock pacman; `pacbtr` had to leave packages with install scripts or backup files to pacman.
+
+### Stock pacman, patched pacman and pacbtr on the lab
+
+`bench/lab-pacman-e2e.sh`: `pacman -S` of the same targets with stock pacman, with the patched
+pacman (`/opt/pacbtr`), and with `pacbtr --no-snapshot`; 3 rounds in rotating order, reset with
+`snapper undochange` between runs; same test repo and ssh tunnels as iteration 1. Medians; writes
+on the root's partition below LUKS2. After every run a manifest of every installed file of the
+targets (type, mode, owner, size, mtime, xattrs, sha256) and their local database entries were
+compared with stock pacman's: identical in all 39 btrpkg runs. `pacman -Qkk` clean in all.
+
+| host | targets | stock pacman | patched pacman | pacbtr | written stock / patched |
+|---|---|---:|---:|---:|---:|
+| p14s | 5 upgrades | 5.15 s | 2.07 s | 2.09 s | 685 / 113 MB |
+| p14s | 10 (6 upgrades, 4 reinstalls; 7 with install scripts) | 7.35 s | 4.18 s | (can't) | 726 / 130 MB |
+| t460s | 10 upgrades | 9.02 s | 5.83 s | 5.35 s | 729 / 213 MB |
+| x200 | 10 upgrades | 35.00 s | 21.12 s | 20.38 s | 758 / 212 MB |
+
+The patched pacman is as fast as `pacbtr` on p14s and 0.5-0.7 s slower on the older machines
+(pacman's own work around the same download and placement), 1.6-2.5x faster than stock pacman
+with a fifth to a third of its writes, and it handles the packages `pacbtr` couldn't.
+
+Backup files, checked with `bench/make-e2e-pkgs.sh`'s package (built by hand as root): a 200 KB
+backup file with a local change becomes `.pacnew` with both pacmans, without a local change it
+is replaced by both; a 300 KB binary keeps its `security.capability` after the reflink; hardlink,
+symlink and install-script output match.
+
+### Client speed (same format)
+
+`pull_many`: all packages of an upgrade share one download queue, and reused data is read back
+and hashed in parallel. A/B against iteration 1's client in the same runs: `pull` t460s 4.86 →
+3.69 s, x200 17.9 → 16.0 s (2 cores, no SHA or AES instructions, which also decrypt the tunnel).
+
+### Index readers agree
+
+`btrpkg dump` and libalpm's reader print identical text for 384 real indexes; 63 crafted indexes
+(valid hashes, bad contents: unsafe paths, gaps, bad hardlinks, oversized headers,
+`bench/craft_indexes.py`) and 9,000 fuzzed ones (`bench/fuzz_entries.py`) get the same verdict
+from both. That found one ambiguity: the Rust reader ignored data after the first zstd frame of
+the entries or blob section; both readers refuse it now (no published index had any). ASan/UBSan
+found two bugs in the C reader's error paths, fixed before the first commit.
+
 ## Iteration 1: repo, client and upgrades on the lab (2026-11-21)
 
 `PLAN.md` has the milestones. What exists now:
