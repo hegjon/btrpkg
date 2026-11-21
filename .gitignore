@@ -1,3 +1,4 @@
 target
 bench/out-*
 bench/btrpkg-v0
+__pycache__/
