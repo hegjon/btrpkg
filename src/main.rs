@@ -19,6 +19,8 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 mod format;
+mod cache;
+mod fetchids;
 mod fsx;
 mod net;
 mod repo;
@@ -683,6 +685,18 @@ const USAGE: &str = "usage:
       (for package managers: every NAME's index must have the header ID IDHEX; all packages share
        one download queue; writes CACHEDIR/NAME.pkg.btr, and NAME.pkg.btr.sig when the server
        has a signature; one syncfs at the end)
+  btrpkg fetch-ids [--landlock] [--progress] [--installed ROOT] [--cachedir DIR] [--want FILE] --server URL... DIR NAME=IDHEX...
+      (the unprivileged, network half of pull-ids: indexes and the chunks that can't come from
+       the machine into the directory store DIR; servers tried in order; --landlock: write only
+       to DIR, run nothing. The other half: pull-ids [--missing-to FILE] [--consume] ... DIR CACHEDIR ...,
+       which exits 3 and lists the chunks DIR lacks if a local file didn't check out, and with
+       --consume removes DIR after success. For package managers: fetch-ids --index-only, then
+       pull-ids --fetch-via FILE, which hashes and reuses local data, lists exactly the missing
+       chunks in FILE, prints fetch N BYTES and waits for go on stdin while the caller runs
+       fetch-ids --want FILE. pull-ids --plan checks local data the same way, writes nothing and
+       prints need NAME CHUNK_BYTES INDEX_BYTES per package: the download size)
+  btrpkg cache-clean [--keep N] [--dry-run] CACHEDIR
+      (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--jobs N] [-l N] [--small N] DIR REPO
@@ -692,7 +706,7 @@ TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.s
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
 /// header IDs in its database); signatures are saved for the caller to check.
-fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Option<usize>, installed: Option<&Path>, level: Option<i32>) -> Result<()> {
+fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Option<usize>, installed: Option<&Path>, level: Option<i32>, fetch_via: Option<&Path>) -> Result<()> {
     ensure!(!pkgs.is_empty(), "pull-ids needs at least one NAME=IDHEX");
     let src = net::Source::parse(s, flags.contains(&"--h2c"), parallel);
     let mut ns = net::NetStats::default();
@@ -704,9 +718,33 @@ fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Optio
         got.push((name.to_string(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(store::unhex(id)?)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
-        verify_data: flags.contains(&"--verify-data"), fsync: false };
+        verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan") };
+    // --fetch-via FILE: after all local reuse, list the chunks still missing in FILE, say
+    // "fetch N BYTES" on stdout and wait for "go" on stdin while the caller has another
+    // (unprivileged) process put them into the directory source
+    let hook = |items: &[(String, usize)]| -> Result<()> {
+        if items.is_empty() { return Ok(()); }
+        let p = fetch_via.unwrap();
+        let body: String = items.iter().map(|(r, _)| format!("{r}\n")).collect();
+        store::write_atomic_nosync(p, body.as_bytes())?;
+        let bytes: usize = items.iter().map(|(_, l)| l).sum();
+        let mut out = io::stdout().lock();
+        writeln!(out, "fetch\t{}\t{bytes}", items.len())?;
+        out.flush()?;
+        drop(out);
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        ensure!(line.trim() == "go", "the chunk download did not complete");
+        Ok(())
+    };
+    let o = store::PullOpts { before_fetch: if fetch_via.is_some() { Some(&hook) } else { None }, ..o };
     let items: Vec<store::PullItem> = got.iter().map(|(n, ib, _, c, t)| store::PullItem { name: n, ib, cache: c, trust: t }).collect();
     let st = store::pull_many(&src, &items, &o, ns)?;
+    if o.plan_only {
+        // what a real run would download: chunk bytes, then the index's size
+        for ((n, ib, ..), st) in got.iter().zip(&st) { println!("need\t{n}\t{}\t{}", st.fetched_bytes, ib.len()); }
+        return Ok(());
+    }
     for ((n, _, sig, c, _), st) in got.iter().zip(&st) {
         let sp = PathBuf::from(format!("{}.sig", c.display()));
         match sig {
@@ -791,6 +829,12 @@ fn main() -> Result<()> {
     let mut parallel: Option<usize> = None;
     let mut installed: Option<PathBuf> = None;
     let mut netopt = net::NetOptions::default();
+    let mut servers: Vec<String> = Vec::new();
+    let mut cachedir: Option<PathBuf> = None;
+    let mut want: Option<PathBuf> = None;
+    let mut missing_to: Option<PathBuf> = None;
+    let mut keep: usize = 3;
+    let mut fetch_via: Option<PathBuf> = None;
     let mut trust = TrustArgs { id: None, sig: None, keys: vec![], unverified: false };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -813,11 +857,17 @@ fn main() -> Result<()> {
             "--parallel" => parallel = Some(val("--parallel")?.parse()?),
             "--installed" => installed = Some(val("--installed")?.into()),
             "--http" => netopt.version = Some(val("--http")?),
+            "--server" => servers.push(val("--server")?),
+            "--keep" => keep = val("--keep")?.parse()?,
+            "--fetch-via" => fetch_via = Some(val("--fetch-via")?.into()),
+            "--cachedir" => cachedir = Some(val("--cachedir")?.into()),
+            "--want" => want = Some(val("--want")?.into()),
+            "--missing-to" => missing_to = Some(val("--missing-to")?.into()),
             "--cacert" => netopt.cainfo = Some(val("--cacert")?),
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
-            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" => flags.push(a.as_str()),
+            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" | "--progress" | "--landlock" | "--consume" | "--index-only" | "--plan" => flags.push(a.as_str()),
             s if s.starts_with('-') && s.len() > 1 => bail!("unknown option {s}\n{USAGE}"),
             s => pos.push(s),
         }
@@ -862,13 +912,44 @@ fn main() -> Result<()> {
             let (ib, sig) = store::fetch_index(&src, n, &mut ns)?;
             let t = trust.resolve(sig)?;
             let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3),
-                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync") };
+                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync"), before_fetch: None, plan_only: false };
             store::pull_index(&src, n, &ib, Path::new(c), &t, &o, ns).map(|st| {
                 eprintln!("pull: {st:?}");
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
             })
         }
-        ["pull-ids", s, cdir, pkgs @ ..] => pull_ids(s, Path::new(cdir), pkgs, &flags, parallel, installed.as_deref(), level),
+        ["pull-ids", s, cdir, pkgs @ ..] => match pull_ids(s, Path::new(cdir), pkgs, &flags, parallel, installed.as_deref(), level, fetch_via.as_deref()) {
+            Err(e) if missing_to.is_some() && e.downcast_ref::<net::AbsentChunks>().is_some() => {
+                let a = e.downcast_ref::<net::AbsentChunks>().unwrap();
+                fs::write(missing_to.as_ref().unwrap(), a.0.join("\n") + "\n")?;
+                eprintln!("btrpkg: {a}; listed in {}", missing_to.as_ref().unwrap().display());
+                std::process::exit(3);
+            }
+            Ok(()) if flags.contains(&"--consume") => {
+                // the download directory was only input; remove_dir_all doesn't follow symlinks
+                let d = Path::new(s);
+                ensure!(fs::symlink_metadata(d).is_ok_and(|m| m.is_dir()), "--consume needs a directory, not {s}");
+                fs::remove_dir_all(d).with_context(|| format!("remove {s}"))
+            }
+            r => r,
+        },
+        ["cache-clean", d] => cache::cache_clean(Path::new(d), keep, flags.contains(&"--dry-run")).map(|st| eprintln!("cache-clean: {st:?}")),
+        ["fetch-ids", dir, pkgs @ ..] => {
+            let dir = Path::new(dir);
+            if flags.contains(&"--landlock") { fetchids::landlock_writes_to(dir)?; }
+            ensure!(!servers.is_empty(), "fetch-ids needs --server URL (repeat for more, tried in order)");
+            let srcs: Vec<net::Source> = servers.iter().map(|s| net::Source::parse(s, flags.contains(&"--h2c"), parallel)).collect();
+            let mut ids = Vec::new();
+            for p in pkgs.iter() {
+                let (name, id) = p.split_once('=').with_context(|| format!("{p}: want NAME=IDHEX"))?;
+                ensure!(!name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\0']), "{name}: bad package file name");
+                ids.push((name.to_string(), store::unhex(id)?));
+            }
+            let w = match &want { Some(p) => Some(fs::read_to_string(p)?.lines().filter(|l| !l.is_empty()).map(String::from).collect()), None => None };
+            let o = fetchids::FetchOpts { installed: installed.as_deref(), cachedir: cachedir.as_deref(), want: w, progress: flags.contains(&"--progress"),
+                index_only: flags.contains(&"--index-only") };
+            fetchids::fetch_ids(&srcs, dir, &ids, &o)
+        }
         ["repo-update", d, r] => {
             let k = sec_key(key.as_ref())?;
             let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),
@@ -899,7 +980,7 @@ mod tests {
     const U: sign::Trust = sign::Trust::Unverified;
 
     fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
-        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true })
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false })
     }
 
     pub(crate) struct TempDir(pub PathBuf);
@@ -1306,7 +1387,7 @@ mod tests {
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
         let caches: Vec<PathBuf> = names.iter().map(|n| cdir.join(format!("{n}.pkg.btr"))).collect();
-        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true };
+        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false };
         let items = |caches: &[PathBuf]| -> Vec<(String, Vec<u8>, PathBuf)> {
             names.iter().zip(&ibs).zip(caches).map(|((n, ib), c)| (n.to_string(), ib.clone(), c.clone())).collect()
         };
@@ -1361,7 +1442,7 @@ mod tests {
         fs::remove_dir_all(&other).unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true };
+        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false };
         let src = net::Source::Dir(store.clone());
         let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
         // tool (300 kB, 3 chunks) is unchanged and comes from the installed file

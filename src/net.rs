@@ -45,7 +45,36 @@ impl Handler for Collector {
 const ATTEMPTS: u32 = 3;
 const BATCH_BYTES: usize = 16 << 20;
 
+/// Chunks a directory store doesn't have (store paths), from `get_many` on a directory.
+#[derive(Debug)]
+pub struct AbsentChunks(pub Vec<String>);
+impl std::fmt::Display for AbsentChunks {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} chunks missing from the directory (first: {})", self.0.len(), self.0.first().map(|s| s.as_str()).unwrap_or("-"))
+    }
+}
+impl std::error::Error for AbsentChunks {}
+
+/// Read REL from directory store D: no symlinks anywhere below D, regular files only (the
+/// directory may have been written by a less trusted process).
+fn read_local(d: &std::path::Path, rel: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    let dir = std::fs::File::open(d)?;
+    let fd = crate::fsx::open_beneath(dir.as_raw_fd(), rel.as_bytes(), libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC)?;
+    let mut f = std::fs::File::from(fd);
+    if !f.metadata()?.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not a regular file")); }
+    let mut v = Vec::new();
+    f.read_to_end(&mut v)?;
+    Ok(v)
+}
+
 impl Source {
+    /// For messages: the base URL or directory.
+    pub fn describe(&self) -> String {
+        match self { Source::Dir(d) => d.display().to_string(), Source::Http { base, .. } => base.clone() }
+    }
+
     pub fn parse(s: &str, h2c: bool, parallel: Option<usize>) -> Source {
         if s.starts_with("http://") || s.starts_with("https://") {
             // HTTP/2 and 3 multiplex; HTTP/1.1 opens a connection per request in flight
@@ -54,7 +83,8 @@ impl Source {
             let h2 = match options().version.as_deref() { Some("h1") => false, Some(_) => true, None => h2c || tls };
             Source::Http { base: s.trim_end_matches('/').to_string(), h2c, parallel: parallel.unwrap_or(if h2 { 64 } else { 8 }) }
         } else {
-            Source::Dir(PathBuf::from(s))
+            // pacman's Server lines use file:// for local repositories
+            Source::Dir(PathBuf::from(s.strip_prefix("file://").unwrap_or(s)))
         }
     }
 
@@ -83,7 +113,7 @@ impl Source {
     /// One object of at most `max` bytes; None if it doesn't exist.
     pub fn get(&self, rel: &str, max: usize, st: &mut NetStats) -> Result<Option<Vec<u8>>> {
         match self {
-            Source::Dir(d) => match std::fs::read(d.join(rel)) {
+            Source::Dir(d) => match read_local(d, rel) {
                 Ok(b) => { ensure!(b.len() <= max, "{rel}: too large"); Ok(Some(b)) }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e).with_context(|| format!("read {rel}")),
@@ -111,9 +141,13 @@ impl Source {
     pub fn get_many(&self, items: &[(String, usize)], st: &mut NetStats, mut f: impl FnMut(Vec<(usize, Vec<u8>)>) -> Result<()>) -> Result<()> {
         match self {
             Source::Dir(d) => {
+                let absent: Vec<String> = items.iter()
+                    .filter(|(rel, _)| std::fs::symlink_metadata(d.join(rel)).is_err())
+                    .map(|(rel, _)| rel.clone()).collect();
+                if !absent.is_empty() { return Err(AbsentChunks(absent).into()); }
                 for (b, chunk) in items.chunks(256).enumerate() {
                     let got = chunk.par_iter().enumerate().map(|(k, (rel, len))| -> Result<(usize, Vec<u8>)> {
-                        let v = std::fs::read(d.join(rel)).with_context(|| format!("read {rel}"))?;
+                        let v = read_local(d, rel).with_context(|| format!("read {rel}"))?;
                         ensure!(v.len() == *len, "{rel}: wrong length");
                         Ok((b * 256 + k, v))
                     }).collect::<Result<Vec<_>>>()?;

@@ -89,6 +89,82 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Iteration 3: pacman's sandbox, mirrors, cache cleaning, real sizes (2026-11-21)
+
+Steps 1-4 of the post-iteration-2 list: the parts a person other than us would trip over first.
+pacman patch 3 (`libalpm/0003-*.patch`), btrpkg `fetch-ids`, `pull-ids --fetch-via/--plan/--consume`,
+`cache-clean`.
+
+**Sandbox.** The helper no longer runs as root with network access. A download is now two
+processes:
+
+- `btrpkg fetch-ids` (network): runs as pacman's `DownloadUser` (`alpm`) under pacman's seccomp
+  filter and no-new-privileges, and puts itself under Landlock: read anywhere, write only to
+  `CACHEDIR/download-btrpkg/`, execute nothing. It fetches indexes and chunks into that directory,
+  each checked against its hash on arrival.
+- `btrpkg pull-ids` (root, no network): checks the indexes against the database's IDs, reuses
+  data from the installed versions and older cache files (read back and hashed, as before), lists
+  the chunks still missing (in a root-owned file outside the download directory), prints
+  `fetch N BYTES` and waits; libalpm runs `fetch-ids --want LIST` and says `go`; pull-ids reads the
+  chunks (only via `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, regular files only,
+  `O_NONBLOCK`), checks them again, writes `NAME.pkg.btr` and removes the directory.
+
+Root never writes into the download user's directory, and a compromised download process can't
+touch anything outside it (tested: a symlinked `index/` pointing outside is refused under
+`--landlock`, written without it).
+
+**Mirrors.** `CacheServer` entries first, then `Server`, in order. Every server is asked only for
+what the previous ones didn't deliver, missing or damaged. **Resume:** an interrupted download keeps
+its directory, so the next run fetches only what's missing. **`-Sc`/`-Scc`** already handled
+`.pkg.btr` files (libalpm loads them as packages through btrstream), and they now also remove an
+interrupted download's leftovers (`nftw` with `FTW_PHYS`, never following a symlink).
+`paccache` only knows `*.pkg.tar*`, so `btrpkg cache-clean [--keep N] [--dry-run] CACHEDIR`
+does the same for `.pkg.btr` (newest N per package by pacman's vercmp, ported line by line from
+libalpm and tested on pacman's own vercmp cases).
+
+**Real download size.** `_alpm_sync_prepare` fetches the indexes (as the download user) and runs
+`pull-ids --plan`, which does the local checks and writes nothing. pacman's summary and its
+download-space check show what will really be fetched. fetch-ids' progress lines become pacman's
+download callbacks, so the usual progress bars and Total line appear. On p14s, for the 10 lab
+targets:
+
+| | before | now |
+|---|---|---|
+| Total Download Size shown | 311.26 MiB (the `.pkg.tar.zst` sizes) | 68.93 MiB |
+| bytes received on the interface | 75 MB | 75 MB |
+
+Checks on p14s (`bench/pacman-robust.sh`, `bench/two-phase-test.sh`, all passing):
+
+- `fetch-ids` was seen only as `alpm`, `pull-ids` only as root.
+- A dead `CacheServer` before the real server: same 75 MB, no error.
+- Every chunk over 100 KB damaged on the first server: fetched from the next one, and the
+  install was correct.
+- Interrupted (SIGINT) after 36 MB: 435 chunks were kept, and the second run fetched 50 MB.
+  That's 11 MB more than one clean run, because chunks still in flight are lost.
+- `DisableSandbox`: works, running as root.
+- `-Sc` removes the leftovers and keeps other files.
+- A locally changed installed file: pull-ids lists the extra chunks it needs and they are
+  fetched.
+
+Speed, the same e2e run as iteration 2 (p14s wired, 10 targets with 7 install scripts,
+3 rounds; installed files and database entries identical to stock in every round, `-Qkk` clean
+after every reset):
+
+| | stock pacman | iteration 2 (helper as root) | sandboxed | sandboxed + `--plan` |
+|---|---|---|---|---|
+| p14s, median | 7.36 s | 4.18 s | 4.48 s | 4.71 s |
+
+The sandbox costs about 0.3 s (three helper runs instead of one). The plan step costs about
+0.25 s, because the local data is read and hashed twice: once for the plan and once for the real
+assembly. Logs: `bench/results/lab-20261121-i3/`.
+
+Known gaps:
+- The plan is run for `-Sp` and `-Sw` too, so pacman's prepare step now does network I/O for btrpkg
+  targets.
+- Resume is per chunk, not per byte.
+- `pacman -U NAME.pkg.btr` still isn't supported.
+- The validation is still recorded as `pgp`.
+
 ## Iteration 2: pacman installs btrpkg packages (2026-11-21)
 
 Two libalpm patches (`libalpm/`, pacman branch `btrpkg` on `54d94116`, Arch's 7.1.0.r9): an

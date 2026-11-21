@@ -15,7 +15,7 @@
 use super::*;
 use std::os::unix::ffi::OsStrExt;
 
-fn hpath(store: &Path, kind: &str, h: &[u8]) -> PathBuf {
+pub(crate) fn hpath(store: &Path, kind: &str, h: &[u8]) -> PathBuf {
     let x = hex(h);
     store.join(kind).join(&x[..2]).join(x)
 }
@@ -33,6 +33,16 @@ pub(crate) fn write_atomic(p: &Path, data: &[u8]) -> Result<()> {
     let mut f = File::create(&tmp)?;
     f.write_all(data)?;
     f.sync_all()?;
+    fs::rename(&tmp, p)?;
+    Ok(())
+}
+
+/// Like `write_atomic` without the fsync (for many small files that are synced together later,
+/// or not at all: a download directory that is checked before use).
+pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
+    if let Some(d) = p.parent() { fs::create_dir_all(d)?; }
+    let tmp = { let mut t = p.as_os_str().to_owned(); t.push(format!(".tmp{}", std::process::id())); PathBuf::from(t) };
+    fs::write(&tmp, data)?;
     fs::rename(&tmp, p)?;
     Ok(())
 }
@@ -130,7 +140,7 @@ pub(crate) struct PullStats {
 }
 
 /// Header and chunk table of a cache file, if it is one.
-fn cache_head(p: &Path) -> Option<(File, Header, Vec<Chunk>)> {
+pub(crate) fn cache_head(p: &Path) -> Option<(File, Header, Vec<Chunk>)> {
     let f = File::open(p).ok()?;
     let len = f.metadata().ok()?.len();
     let mut r = BufReader::new(&f);
@@ -163,7 +173,7 @@ pub(crate) fn fetch_index(src: &net::Source, name: &str, ns: &mut net::NetStats)
 }
 
 /// Where a chunk's data sits in an installed file: (path, offset in the file, bytes of file data).
-fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
+pub(crate) fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
     let mut m = HashMap::new();
     for e in &idx.entries {
         if e.kind != K_FILE || e.small || e.size == 0 { continue; }
@@ -201,6 +211,12 @@ pub(crate) struct PullOpts<'a> {
     /// fsync the cache file before renaming it into place (a caller placing many packages syncs
     /// the filesystem once instead)
     pub fsync: bool,
+    /// called with the chunks still missing (store path, length) after all local reuse, before
+    /// they are read from the source: lets another process fetch them into a directory source
+    pub before_fetch: Option<&'a (dyn Fn(&[(String, usize)]) -> Result<()> + Sync)>,
+    /// stop after checking local data: nothing is written; `fetched_*` in the stats say what
+    /// would be downloaded (a chunk two packages need counts once, on the first)
+    pub plan_only: bool,
 }
 
 /// Pull NAME from a source into CACHE. The index must pass `trust` before anything is written.
@@ -224,6 +240,11 @@ pub(crate) struct PullItem<'a> { pub name: &'a str, pub ib: &'a [u8], pub cache:
 
 /// Where a chunk's data will come from.
 enum From { Local(usize, u64), Installed(PathBuf, u64, u64), Download }
+
+#[derive(Debug)]
+struct Planned;
+impl std::fmt::Display for Planned { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "planned") } }
+impl std::error::Error for Planned {}
 
 /// One package being pulled.
 struct Job<'a> {
@@ -280,6 +301,12 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 }
                 From::Download
             }).collect();
+            if o.plan_only {
+                // a File standing for "needs work"; nothing is written in plan mode
+                j.out = Some(File::open("/dev/null")?);
+                plans.push(plan);
+                continue;
+            }
             let _ = fs::remove_file(&j.tmp);
             let out = OpenOptions::new().write(true).create_new(true).mode(0o644).open(&j.tmp)?;
             if o.use_encoded { set_nocomp(&out); }
@@ -309,6 +336,22 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 From::Download => unreachable!(),
             }
         }).collect();
+
+        if o.plan_only {
+            let ok: std::collections::HashSet<(usize, usize)> = checked.iter().filter(|c| c.ok).map(|c| (c.job, c.chunk)).collect();
+            let mut seen: std::collections::HashSet<Hash> = std::collections::HashSet::new();
+            for (j, plan) in plans.iter().enumerate() {
+                if jobs[j].out.is_none() { continue; }
+                for i in 0..plan.len() {
+                    let c = jobs[j].idx.chunks[i];
+                    if ok.contains(&(j, i)) { jobs[j].st.installed_chunks += 1; continue; }
+                    if !seen.insert(c.stored) { continue; }
+                    jobs[j].st.fetched_chunks += 1;
+                    jobs[j].st.fetched_bytes += c.encoded_len as u64;
+                }
+            }
+            return Err(Planned.into());
+        }
 
         // 3. reflink what checked out; tails of installed files are compressed (in parallel)
         let mut can_clone = true;
@@ -374,6 +417,12 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
             let x = hex(&c.stored);
             (format!("chunks/{}/{x}", &x[..2]), c.encoded_len as usize)
         }).collect();
+        if let Some(hook) = o.before_fetch {
+            // the same chunk can be missing for two packages; ask for it once
+            let mut seen = std::collections::HashSet::new();
+            let uniq: Vec<(String, usize)> = items.iter().filter(|(r, _)| seen.insert(r.clone())).cloned().collect();
+            hook(&uniq)?;
+        }
         src.get_many(&items, &mut ns, |batch| {
             batch.par_iter().try_for_each(|(k, d)| {
                 let (j, i) = missing[*k];
@@ -401,6 +450,9 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
         Ok(())
     })();
     if let Err(e) = result {
+        if o.plan_only && e.downcast_ref::<Planned>().is_some() {
+            return Ok(jobs.into_iter().map(|j| j.st).collect());
+        }
         for j in &jobs { if j.out.is_some() { let _ = fs::remove_file(&j.tmp); } }
         return Err(e);
     }

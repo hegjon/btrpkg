@@ -1,0 +1,20 @@
+host p14s targets: mise-bin omarchy-dev omarchy-local-ai omarchy-themes-intros owe omarchy-settings-dev gliff omawrite signed ufw-docker
+mise-bin 2026.11.9-1 omarchy-dev 4.0.0.r8025.gb972bd8-1 omarchy-local-ai 0.6.5-1 omarchy-themes-intros 2026.11.18-1 owe 0.2.16-1 omarchy-settings-dev 4.0.0.r8025.gb972bd8-1 gliff 0.4.3-1 omawrite 0.7.6-1 signed 0.3.2-4 ufw-docker 251123-2 
+baseline snapshot 16
+scenario	round	exit	seconds	written	space	qkk_altered	btr_cache_files
+stock	1	0	7.36	761647104	695889920	0	0
+btr	1	0	4.46	214999040	82669568	0	10
+btr	2	0	4.52	210632704	75452416	0	10
+stock	2	0	7.24	721473536	420503552	0	0
+stock	3	0	7.48	723070976	428154880	0	0
+btr	3	0	4.48	208715776	82636800	0	10
+round 1 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+round 2 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+round 3 btr: installed files and database entries identical to stock
+validation stock: %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+validation btr:   %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  %VALIDATION% sha256 pgp  
+after reset: altered 0

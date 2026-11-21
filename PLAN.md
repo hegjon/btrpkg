@@ -1,3 +1,23 @@
+# btrpkg: iteration 3 plan (2026-11-21)
+
+Goal: make the patched pacman safe and unsurprising for someone else to run. Format version 1 stays.
+
+1. ~~Sandbox the helper~~: two processes, fetch-ids as DownloadUser (seccomp + Landlock), pull-ids
+   as root without network; root never writes into the download directory.
+2. ~~Mirror failover and CacheServer~~, resume after an interrupt.
+3. ~~`-Sc`/`-Scc` and old `.pkg.btr` files~~: `-Sc` works and removes leftovers; `btrpkg cache-clean`.
+4. ~~Real download size and progress~~: `pull-ids --plan` in `_alpm_sync_prepare`, fetch-ids
+   progress lines as download callbacks.
+5. A `btrpkg` package and a `pacman-btrpkg` build installed beside the system pacman (with a
+   pacman hook or timer for `cache-clean`).
+6. A trial on p14s: real `-Syu` runs over several days.
+7. Repo pipeline (Omarchy publish step, R2/S3, chunk deletion, real key, keyring package): needs a
+   decision from Jonny.
+8. Adopt existing installs.
+
+Results of 1-4: README, "Iteration 3".
+
+
 # btrpkg: iteration 2 plan (2026-11-21)
 
 Goal: pacman itself installs and upgrades btrpkg packages, so everything pacman does (install
@@ -69,9 +89,12 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
 
 ## After iteration 2
 
-- Run the helper inside pacman's download sandbox (DownloadUser), or download in C.
-- `pacman -U NAME.pkg.btr`, `-Sc` for `.pkg.btr` files, an `alpm_pkg_validation_t` value for
+- ~~Run the helper inside pacman's download sandbox (DownloadUser)~~: done in iteration 3
+  (fetch-ids as DownloadUser + Landlock, pull-ids as root without network).
+- ~~`-Sc` for `.pkg.btr` files~~ (worked already; leftovers now removed too), `btrpkg cache-clean`
+  for paccache's job. Still open: `pacman -U NAME.pkg.btr`, an `alpm_pkg_validation_t` value for
   signify instead of recording `pgp`.
+- ~~Mirror failover, CacheServer, real download size, progress~~: done in iteration 3.
 - Don't change the sync package's file name in place (long-running libalpm clients).
 - Measure without the ssh tunnels: the test repo is now served on port 1764 (inside ufw's open KDE
   Connect range), reachable from the lab directly. x200 and t460s are on Wi-Fi (14 and 76 MB/s),

@@ -19,6 +19,21 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
    pacman's usual code, except that large files are reflinked from the cache file (new file next
    to the target, owner, mode, xattrs, mtime, rename). Without `BtrPkgHelper` nothing changes.
 
+3. `libalpm: btrpkg downloads in pacman's sandbox, with real sizes and progress`: the download
+   is split in two processes. `btrpkg fetch-ids` (network) runs as `DownloadUser` under pacman's
+   seccomp filter and its own Landlock ruleset (read anywhere, write only to
+   `CACHEDIR/download-btrpkg/`, execute nothing); `btrpkg pull-ids` (root, no network) checks
+   every index against the database's ID, reuses data from the installed versions and older
+   cache files (read back and hashed), names the chunks still missing, and assembles the cache
+   files when fetch-ids has them. Root reads the download directory only through
+   `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`, regular files only, and never writes there.
+   CacheServer entries are tried before Server entries; whatever one server lacks or delivers
+   damaged is asked from the next. An interrupted download keeps the directory and the next run
+   fetches only the rest; `-Sc`/`-Scc` remove the leftovers. In `_alpm_sync_prepare` the
+   indexes are fetched and `pull-ids --plan` reports what is really missing, so the transaction
+   summary and the download-space check show the real download size; fetch-ids' progress lines
+   become pacman's download callbacks (progress bars).
+
 How it was checked:
 - `test/btrpkg/btrtar` (libalpm's view of an archive): for all 315 packages of the set, the tar
   stream from the btrpkg cache file equals the original `.pkg.tar.zst`, entry for entry, data
