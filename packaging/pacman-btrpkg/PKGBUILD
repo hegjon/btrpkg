@@ -5,13 +5,14 @@
 #   /usr/bin/pacman-btrpkg           -> /usr/lib/pacman-btrpkg/pacman (RUNPATH to its own libalpm)
 #   /usr/bin/pacman-btrpkg-conf      pacman-conf of this build
 #   /etc/pacman-btrpkg.conf          default config: BtrPkgHelper + Include = /etc/pacman.conf
+#   /usr/bin/pacstrap-btrpkg         Arch's pacstrap with pacman-btrpkg (needs arch-install-scripts)
 # It shares the database, lock, cache, hooks and keyring with the system pacman, which stays
 # untouched and can be used at any time.
 pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=1
+pkgrel=3
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64)
 url="https://github.com/hegjon/btrpkg"
@@ -19,6 +20,7 @@ license=(GPL-2.0-or-later)
 depends=(pacman btrpkg
          bash curl libcurl.so glibc gpgme libgpgme.so libarchive libarchive.so
          openssl libcrypto.so zstd libzstd.so)
+optdepends=('arch-install-scripts: pacstrap-btrpkg')
 makedepends=(git meson)
 checkdepends=(fakechroot python)
 backup=(etc/pacman-btrpkg.conf)
@@ -31,16 +33,22 @@ source=("pacman::git+https://gitlab.archlinux.org/pacman/pacman.git#commit=$_com
         btrpkg-0001-libalpm-read-btrpkg-indexes-and-their-signatures.patch
         btrpkg-0002-libalpm-install-btrpkg-packages-from-sync-repositori.patch
         btrpkg-0003-libalpm-btrpkg-downloads-in-pacman-s-sandbox-with-re.patch
-        pacman-btrpkg.conf)
+        btrpkg-0004-libalpm-btrpkg-use-a-package-file-that-is-already-in.patch
+        btrpkg-0005-libalpm-btrpkg-one-root-process-when-downloads-aren-.patch
+        pacman-btrpkg.conf
+        pacstrap-btrpkg)
 sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
             'b3bce9d662e189e8e49013b818f255d08494a57e13fc264625f852f087d3def2'
             'de428b496a825772ef49ec5555a386a4b23ffa10b9dfd9907f0671d5c1dc2178'
             '9a734e5d75be603d58aa92e8d29a15466b3ac2af6b7d6f6728dd5c3e5ed8758d'
             '021893dd44ec23251cfc0f2b81c12d832927ea60095d4d2956d9760e8bbfaa58'
-            '75aaaed4ebadbf8af348a3a46abbf8e98ae508d06e2e4a57e0eef5ea6bc2ca4d'
-            '02781c2b9f4e1712457ce661ef2dfbc6853db80c280f0639517d507c0d5d2b9b'
-            'b16a9de6c144b23f761f484351e5440bd2ab3a775a181c03ff9e922ce80a009e'
-            '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac')
+            'cb70007bb1b656bf8b2f15f13cff3c9e025b8fc87dca129f091f3e2e56378c8c'
+            '02370b49df1b9adc3f2786d52d778ed008c0220530e10c7b323857da85369191'
+            '962cbe63697575a666152d080b6d0287dfb423be06d7b26eb1537c5053be01fa'
+            '15ceec4878e56daba89b36a3c52b4cc051df0440e0ab2b84fde34756fe6ec4ba'
+            '8dacb05711b9e35a8366fc7e5133e042a5a05d65b2e365121834881f43794e02'
+            '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac'
+            '9baa36c396fff615c46acbad513d9797bb9c9450deae0ffb29dce0ccc9b6f327')
 
 prepare() {
   cd pacman
@@ -88,4 +96,5 @@ package() {
   ln -s ../lib/$pkgname/pacman "$pkgdir/usr/bin/pacman-btrpkg"
   ln -s ../lib/$pkgname/pacman-conf "$pkgdir/usr/bin/pacman-btrpkg-conf"
   install -Dm644 "$srcdir/pacman-btrpkg.conf" "$pkgdir/etc/pacman-btrpkg.conf"
+  install -Dm755 "$srcdir/pacstrap-btrpkg" "$pkgdir/usr/bin/pacstrap-btrpkg"
 }

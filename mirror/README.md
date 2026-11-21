@@ -1,6 +1,6 @@
 # btrpkg mirror of Omarchy's edge repository
 
-`omarchy-mirror.sh` keeps `~/Work/btrpkg-repo/omarchy-mirror/x86_64/` in step with Omarchy's edge
+`repo-mirror.sh` (run for each line of `repos.conf` by `mirror-all.sh`) keeps `~/Work/btrpkg-repo/omarchy-mirror/x86_64/` in step with Omarchy's edge
 repository: upstream's database plus btrpkg data for the packages in `wanted.txt` (`ALL=1`: every
 package). The lab reaches it at `http://192.168.2.2:1764/omarchy-mirror/$arch`.
 

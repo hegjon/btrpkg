@@ -1,0 +1,58 @@
+#!/bin/bash
+# pacstrap-btrpkg: Arch's pacstrap (arch-install-scripts, run unchanged), installing with
+# pacman-btrpkg, so sync packages that have btrpkg data in their repository's database are
+# downloaded and installed as btrpkg packages (reflinked or encoded btrfs extents, reuse of local
+# data); all other packages exactly as pacstrap installs them.
+#
+# Same options and arguments as pacstrap(8), e.g. omarchy-iso's
+#   pacstrap-btrpkg -C pacman.conf -c -G -M /mnt/root PKGS...        (root image, live system)
+#   pacstrap-btrpkg -C /etc/pacman.conf -K /mnt PKGS --noconfirm --needed   (archinstall)
+# Differences:
+#   - `pacman` (and `pacman-conf`) inside pacstrap are pacman-btrpkg's, through a PATH entry
+#     ahead of /usr/bin; pacstrap itself is the system's /usr/bin/pacstrap.
+#   - The config (-C, default /etc/pacman.conf) gets `BtrPkgHelper = $BTRPKG_HELPER` (default
+#     /usr/bin/btrpkg) when it has none. With -P the target still gets the config as given.
+#   - pacstrap disables pacman's download sandbox (--disable-sandbox, DownloadUser commented
+#     out), so btrpkg's network half runs as root here too, like pacman's own downloads.
+# Packages already in a cache directory (-c with an offline mirror) are used as they are.
+set -euo pipefail
+PACSTRAP=${PACSTRAP:-/usr/bin/pacstrap}
+PACMAN_BTRPKG=${PACMAN_BTRPKG:-/usr/bin/pacman-btrpkg}
+HELPER=${BTRPKG_HELPER:-/usr/bin/btrpkg}
+die() { echo "pacstrap-btrpkg: $*" >&2; exit 1; }
+[[ -x $PACSTRAP ]] || die "$PACSTRAP not found (install arch-install-scripts)"
+[[ -x $PACMAN_BTRPKG ]] || die "$PACMAN_BTRPKG not found (install pacman-btrpkg)"
+if [[ -z ${1:-} || $1 == @(-h|--help) ]]; then exec "$PACSTRAP" "$@"; fi
+
+# pacstrap's own options (its getopts string): -C is replaced, the others are passed on as given
+conf=/etc/pacman.conf; copyconf=0; opts=()
+OPTIND=1
+while getopts ':C:cDGiKMNPU' flag; do
+  case $flag in
+    C) conf=$OPTARG ;;
+    P) copyconf=1; opts+=(-P) ;;
+    :) die "option requires an argument -- '$OPTARG'" ;;
+    \?) die "invalid option -- '$OPTARG'" ;;
+    *) opts+=("-$flag") ;;
+  esac
+done
+shift $((OPTIND - 1))
+newroot=${1:-}
+[[ -r $conf ]] || die "cannot read $conf"
+
+work=$(mktemp -d -t pacstrap-btrpkg.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/bin"
+ln -s "$PACMAN_BTRPKG" "$work/bin/pacman"
+[[ -x ${PACMAN_BTRPKG}-conf ]] && ln -s "${PACMAN_BTRPKG}-conf" "$work/bin/pacman-conf"
+if grep -q '^[[:space:]]*BtrPkgHelper' "$conf"; then
+  cp "$conf" "$work/pacman.conf"
+else
+  sed "0,/^\[options\]/s||[options]\nBtrPkgHelper = $HELPER|" "$conf" > "$work/pacman.conf"
+  grep -q '^BtrPkgHelper' "$work/pacman.conf" || die "$conf has no [options] section"
+fi
+
+PATH="$work/bin:$PATH" "$PACSTRAP" "${opts[@]}" -C "$work/pacman.conf" "$@"
+if (( copyconf )) && [[ -n $newroot && -d $newroot/etc ]]; then
+  cp -a "$conf" "$newroot/etc/pacman.conf"
+fi

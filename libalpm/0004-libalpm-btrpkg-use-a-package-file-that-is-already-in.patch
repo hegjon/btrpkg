@@ -1,0 +1,37 @@
+From 04fddb082bb819fcc4b3a5969833f05412807901 Mon Sep 17 00:00:00 2001
+From: Jonny Heggheim <hegjon@gmail.com>
+Date: Sat, 21 Nov 2026 17:34:00 +0200
+Subject: [PATCH 4/5] libalpm: btrpkg: use a package file that is already in
+ the cache
+
+A sync target with btrpkg data whose .pkg.tar.* is already in a cache
+directory (an offline mirror such as omarchy-iso's, or an earlier
+download) is installed from that file instead of being downloaded again
+as a btrpkg package, which fails offline.
+---
+ lib/libalpm/sync.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
+index f643b69c..2640b8a9 100644
+--- a/lib/libalpm/sync.c
++++ b/lib/libalpm/sync.c
+@@ -125,6 +125,15 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)
+ 			_alpm_log(handle, ALPM_LOG_WARNING, _("%s: unusable btrpkg data in the database\n"), spkg->name);
+ 			continue;
+ 		}
++		/* the package file is already in a cache directory (an offline mirror such as the
++		 * ISO's, or an earlier download): use it, never download it again as btrpkg */
++		char *have = _alpm_filecache_find(handle, spkg->filename);
++		if(have) {
++			_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s is in the cache as %s, not using btrpkg\n",
++					spkg->name, have);
++			free(have);
++			continue;
++		}
+ 		char *fn = malloc(len - 7 + 9);
+ 		if(!fn) {
+ 			continue;
+-- 
+2.56.1
+

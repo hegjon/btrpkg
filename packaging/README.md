@@ -37,6 +37,31 @@ Install (on a lab machine):
     pacman-btrpkg -Syu                    # like pacman -Syu; btrpkg packages where the repo has them
     systemctl enable --now btrpkg-cache-clean.timer     # optional
 
+## pacstrap-btrpkg
+
+`/usr/bin/pacstrap-btrpkg` (in `pacman-btrpkg`, needs `arch-install-scripts`) is Arch's pacstrap,
+run unchanged, with pacman-btrpkg as its pacman. It takes the same options as pacstrap(8),
+including the ones omarchy-iso uses:
+
+    pacstrap-btrpkg -C pacman.conf -c -G -M /mnt/root PKGS...                # root image, live system
+    pacstrap-btrpkg -C /etc/pacman.conf -K /mnt PKGS --noconfirm --needed   # archinstall
+
+- A PATH entry ahead of `/usr/bin` makes pacstrap's `pacman` and `pacman-conf` the btrpkg ones.
+- The config (`-C`, default `/etc/pacman.conf`) is copied with `BtrPkgHelper = /usr/bin/btrpkg`
+  added unless it already has one.
+- With `-P`, the target still gets the config as given, so its stock pacman never sees the
+  BtrPkgHelper line.
+- Packages already in a cache directory are installed from there and not downloaded again as
+  btrpkg packages (`-c` with an offline mirror). That needs libalpm patch 4.
+- pacstrap disables pacman's download sandbox, so btrpkg's network half runs as root there, like
+  pacman's own downloads.
+- With the cache on the target's filesystem, large files are reflinked from the cache files, so
+  the new root's extents are the packages' compressed frames. pacstrap's default cache inside the
+  new root does that. With `-c` and a cache on another filesystem, files are copied instead (the
+  target recompresses them at its own level).
+
+## Omarchy
+
 On Omarchy, system upgrades go through `omarchy update`. Its pre-transaction hook refuses a direct
 `pacman -Syu`, and the update flow (`omarchy-update-pacman`) runs `sudo ... pacman "$@"` with the
 name hardcoded. To put pacman-btrpkg into that flow, a symlink earlier in sudo's `secure_path`

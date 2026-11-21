@@ -329,7 +329,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         lap(&mut st, "conflicts");
         // 6. pull
         // one pull per repository: all its packages share one download queue
-        let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false, before_fetch: None, plan_only: false };
+        let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false, before_fetch: None, plan_only: false, progress: false };
         let caches: Vec<PathBuf> = targets.iter().map(|t| conf.cache_dir.join(format!("{}.pkg.btr", t.file))).collect();
         // already checked above against the database ID and a signature; same bytes
         let trusts: Vec<sign::Trust> = targets.iter().map(|t| sign::Trust::Id(t.idx.hdr.id())).collect();

@@ -718,7 +718,7 @@ fn pull_ids(s: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], parallel: Optio
         got.push((name.to_string(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(store::unhex(id)?)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
-        verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan") };
+        verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress") };
     // --fetch-via FILE: after all local reuse, list the chunks still missing in FILE, say
     // "fetch N BYTES" on stdout and wait for "go" on stdin while the caller has another
     // (unprivileged) process put them into the directory source
@@ -914,7 +914,7 @@ fn main() -> Result<()> {
             let (ib, sig) = store::fetch_index(&src, n, &mut ns)?;
             let t = trust.resolve(sig)?;
             let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed: installed.as_deref(), level: level.unwrap_or(3),
-                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync"), before_fetch: None, plan_only: false };
+                verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync"), before_fetch: None, plan_only: false, progress: false };
             store::pull_index(&src, n, &ib, Path::new(c), &t, &o, ns).map(|st| {
                 eprintln!("pull: {st:?}");
                 println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
@@ -982,7 +982,7 @@ mod tests {
     const U: sign::Trust = sign::Trust::Unverified;
 
     fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
-        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false })
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false })
     }
 
     pub(crate) struct TempDir(pub PathBuf);
@@ -1389,7 +1389,7 @@ mod tests {
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
         let caches: Vec<PathBuf> = names.iter().map(|n| cdir.join(format!("{n}.pkg.btr"))).collect();
-        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false };
+        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false };
         let items = |caches: &[PathBuf]| -> Vec<(String, Vec<u8>, PathBuf)> {
             names.iter().zip(&ibs).zip(caches).map(|((n, ib), c)| (n.to_string(), ib.clone(), c.clone())).collect()
         };
@@ -1444,7 +1444,7 @@ mod tests {
         fs::remove_dir_all(&other).unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false };
+        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false };
         let src = net::Source::Dir(store.clone());
         let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
         // tool (300 kB, 3 chunks) is unchanged and comes from the installed file

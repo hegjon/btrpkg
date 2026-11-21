@@ -1,9 +1,0 @@
-[Unit]
-Description=Update the btrpkg mirror of Omarchy's edge repository every 10 minutes
-
-[Timer]
-OnBootSec=2min
-OnUnitInactiveSec=10min
-
-[Install]
-WantedBy=timers.target

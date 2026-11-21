@@ -217,6 +217,8 @@ pub(crate) struct PullOpts<'a> {
     /// stop after checking local data: nothing is written; `fetched_*` in the stats say what
     /// would be downloaded (a chunk two packages need counts once, on the first)
     pub plan_only: bool,
+    /// progress lines on stdout, as fetch-ids prints them (total/got/done NAME BYTES)
+    pub progress: bool,
 }
 
 /// Pull NAME from a source into CACHE. The index must pass `trust` before anything is written.
@@ -417,6 +419,14 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
             let x = hex(&c.stored);
             (format!("chunks/{}/{x}", &x[..2]), c.encoded_len as usize)
         }).collect();
+        // progress: bytes each package still needs from the source
+        let mut need = vec![0u64; jobs.len()];
+        for &(j, i) in &missing { need[j] += jobs[j].idx.chunks[i].encoded_len as u64; }
+        let say = |line: String| {
+            if o.progress { let mut out = std::io::stdout().lock(); let _ = writeln!(out, "{line}"); let _ = out.flush(); }
+        };
+        for (j, n) in need.iter().enumerate() { say(format!("total\t{}\t{n}", jobs[j].item.name)); }
+        let mut got = vec![0u64; jobs.len()];
         if let Some(hook) = o.before_fetch {
             // the same chunk can be missing for two packages; ask for it once
             let mut seen = std::collections::HashSet::new();
@@ -434,10 +444,13 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 let c = jobs[j].idx.chunks[i];
                 jobs[j].st.fetched_chunks += 1;
                 jobs[j].st.fetched_bytes += d.len() as u64;
+                got[j] += d.len() as u64;
                 w.write(jobs[j].out.as_ref().unwrap(), jobs[j].idx.hdr.image_base() + c.image_off, &c, &d)?;
             }
+            for (j, g) in got.iter().enumerate() { if need[j] > 0 { say(format!("got\t{}\t{g}", jobs[j].item.name)); } }
             Ok(())
         })?;
+        for j in jobs.iter() { say(format!("done\t{}", j.item.name)); }
         // the writer is shared: its counts go on the first package, like the request counts
         if let Some(j) = jobs.first_mut() { (j.st.encoded_chunks, j.st.raw_chunks, j.st.fallback_chunks) = (w.encoded_chunks, w.raw_chunks, w.fallback_chunks); }
         for j in jobs.iter_mut() {
