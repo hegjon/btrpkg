@@ -89,6 +89,45 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Packages from CI: the `[btrpkg]` repository (2026-11-22)
+
+Every push to master builds and tests btrpkg-git and pacman-btrpkg for x86_64 and aarch64
+(`.github/workflows/packages.yml`) and publishes them as a pacman repository on GitHub releases
+(one release per architecture, tag = `$arch`, the way asahi-alarm serves its repository):
+
+```
+[btrpkg]
+SigLevel = Optional
+Server = https://github.com/hegjon/btrpkg/releases/download/$arch
+```
+
+- **x86_64:** `archlinux:latest` on ubuntu-24.04, about 2 min.
+- **aarch64:** an Arch Linux ARM container (`packaging/alarm-image.sh`: the official rootfs, its
+  signature checked against `mirror/keyrings/archlinuxarm.gpg`) on GitHub's arm64 runner, about
+  3 min.
+- Both build against the mirrors Omarchy machines use (`mirror.omarchy.org`,
+  `arm-mirror.omarchy.org`), so the libraries match the machines (checked: openssl 4.1.0,
+  libarchive 3.8.11, curl 8.23.0, gpgme 2.2.0, glibc 2.44 / 2.43 as on p14s and macmini-m1).
+- **Tests on both architectures:** btrpkg 21/21; pacman's suite 339 ok, 6 expected failures,
+  0 failed, btrpkg's 73 subtests included. CI has fakechroot, so this covers the 19 tests m1
+  couldn't run. The runners have no btrfs and making one would need mkfs, so the two
+  btrfs-only btrpkg tests skip there with a note. They run in local builds (container on btrfs,
+  m1).
+- **Publishing** (`packaging/publish-release-repo.sh`): only package files whose name isn't in the
+  db yet are added. pacman-btrpkg with the same version is not replaced, since clients may
+  have that file cached. The db, the files db and the new packages are uploaded. Package files
+  that neither the new nor the previous db names are deleted, so current + previous stay. The
+  second run showed it: btrpkg-git r63 added, r62 kept, pacman-btrpkg unchanged.
+- **p14s** has `[btrpkg]` in its pacman.conf and upgrades with pacman like any package: r55 → r62
+  → r63, `Packager: btrpkg CI <…/actions/runs/45001738351>`. With the CI packages the option
+  tests pass 16/16 and downloads through the shared btrparts directories work.
+- **Not signed yet**, hence `SigLevel = Optional`: the packages come over HTTPS from the repo's
+  releases, but there is no signature. That waits for the signing-key decision. Then the key
+  goes into an Actions secret, or signing moves to a machine that keeps the key.
+- Locally: `ARCH=x86_64|aarch64 packaging/build.sh`. aarch64 on an x86_64 host runs through qemu
+  and took 9m33s; the container needs `DisableSandbox`, since qemu-user has no Landlock or user
+  switch.
+
 ## aarch64 beside x86_64 (2026-11-22)
 
 The mirror now has `omarchy-mirror/aarch64` (Omarchy's edge aarch64 repo) and
