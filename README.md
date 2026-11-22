@@ -55,7 +55,7 @@ btrpkg.parts=../btrparts       where the btrparts are, relative to the repositor
 ```
 
 - Btrpart names stay stable when the compression changes (another zstd level or version):
-  `publish` looks up each btrpart's unencoded hash in a map built from the indexes of the
+  `convert` looks up each btrpart's unencoded hash in a map built from the indexes of the
   repositories sharing the btrparts directory and reuses the btrpart already stored for that data,
   after checking it.
 - `btrpkg.parts` lets architectures (and Arch's `$repo/os/$arch` repositories, with
@@ -66,16 +66,17 @@ btrpkg.parts=../btrparts       where the btrparts are, relative to the repositor
 
 ## File forms
 
-The same index starts all three forms; they are told apart by their length (the header records
-the index length and the image length):
+A package exists in two forms, both starting with the same index; they are told apart by their
+length (the header records the index length and the image length):
 
 | form | where | layout | length |
 |---|---|---|---|
-| thin (index) | repository `NAME.pkg.btr` | header, btrpart table, entries, small-file blob | index length |
-| transport | `btrpkg convert` output, `publish` and `fetch` input | index, then every btrpart's stored bytes | index + stored lengths |
+| thin (index) | repository `NAME.pkg.btr`, its btrparts in `btrparts/xx/HASH` | header, btrpart table, entries, small-file blob | index length |
 | cache | pacman cache `NAME.pkg.btr` | index, zeros up to 4 KiB, then the image (each large file 4 KiB-aligned, as encoded extents) | `align(index) + image length` |
 
-Reading an index parses only its first bytes, so any form works as an index. Whatever needs a cache
+`btrpkg convert` writes a package file straight into a repository (index and btrparts); `pull` and
+`pull-ids` make cache files from a repository. Reading an index parses only its first bytes, so a
+cache file works as an index too. Whatever needs a cache
 file checks the length: `open_cache()`/`cache_head()` in Rust (exact), libalpm's `read_index` (at
 least that long: "cache file shorter than its index says"). Details: "Format (version 1)" below
 and `src/format.rs`.
@@ -134,7 +135,7 @@ cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a stand
 - `btrpkg repo-update [--db-in UPSTREAM.db] DIR REPO`: converts and publishes every new package
   file in DIR (checked against the database's SHA-256 and, unless `--no-gpg`, its OpenPGP
   signature), signs the indexes (`--key`), and writes REPO.db last with the btrpkg fields.
-  Unchanged packages are recognised by `PKGFILE.sha256sum` (written after a publish, sha256sum's
+  Unchanged packages are recognised by `PKGFILE.sha256sum` (written after a conversion, sha256sum's
   format, so `sha256sum -c` checks the package file too).
 - `mirror/` (details in `mirror/README.md`): `mirror-all.sh` runs `repo-mirror.sh` for each line of
   `repos.conf` every 10 minutes (systemd user timer): upstream database through pacoloco, the
@@ -151,9 +152,9 @@ cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a stand
 | | commands |
 |---|---|
 | package files | `convert`, `info`, `dump`, `keygen`, `sign` |
-| client, by hand | `fetch` (transport → cache), `pull` (store → cache), `install` (cache → root), `cache-clean`, `upgrade` (= `pacbtr`) |
+| client, by hand | `pull` (repository → cache), `install` (cache → root), `cache-clean`, `upgrade` (= `pacbtr`) |
 | client, for pacman | `fetch-ids` (unprivileged network half), `pull-ids` (root half; `--plan`, `--fetch-via`) |
-| repository | `publish`, `repo-update`, `gc` |
+| repository | `convert` (package file → repository), `repo-update`, `gc` |
 
 Trust options (`--id`, `--sig`, `--unverified`) and network options (`--http h1|h2|h3`, `--h2c`,
 `--cacert`) are in the usage text.
@@ -180,21 +181,22 @@ index is header, btrpart table, entries and small-file blob, in that order.
 | btrpart table | per btrpart 88 B: image offset, unencoded length (4 KiB multiple, ≤128 KiB), stored length, compression (0 raw, 2 zstd), SHA-256 of the stored bytes, SHA-256 of the unencoded bytes. In image order, no gaps |
 | entries | one zstd frame (level 19): kind, mode, uid, gid, mtime, size, data offset, small flag, path, link target, xattrs |
 | small-file blob | one zstd frame (level 19): the contents of all small files |
-| btrpart data (transport, store) | zstd frames with window ≤128 KiB, no checksum, no dictionary ID; or raw data |
+| btrpart (repository `btrparts/xx/HASH`) | a zstd frame with window ≤128 KiB, no checksum, no dictionary ID; or raw data |
 
 Reading checks each section before the next is read, so the btrpart table can be used (downloads
 started) before the rest arrives. Readers also check what `install` relies on: safe
 relative paths, known entry kinds, file data inside the image or blob, btrparts that tile the
 image. Lengths in the header are capped and nothing is allocated from them before the data has
-arrived. Tests: `cargo test` (every flipped bit and every truncation of an index is rejected,
-corrupt transports and stores leave no files behind).
+arrived. Tests: `cargo test` (flipped bits and truncations of an index or a btrpart are rejected
+and leave no files behind).
 
 Converter rules:
 - Files of `--small` bytes or less go in the blob.
 - Identical file contents are stored once and reflinked more than once (dedup).
-- Btrparts are zstd level 12 by default (`-l`): the highest level that decodes as fast as level 3 in
-  btrfs on every lab machine; 13 is 5–10% slower and 15–19 about 20% slower, for 1–5% less size
-  (`bench/results/zstd-level-read-20261122/`). Entries and blob stay level 19 (metadata, read once).
+- Btrparts are zstd level 12, fixed (also for those `pull` makes from installed files): the
+  highest level that decodes as fast as level 3 in btrfs on every lab machine; 13 is 5–10% slower
+  and 15–19 about 20% slower, for 1–5% less size (`bench/results/zstd-level-read-20261122/`).
+  Entries and blob are level 19 (metadata, read once).
 - A btrpart stays raw when compressing it doesn't save at least one 4 KiB block.
 - Root-level dotfiles (`.PKGINFO`, `.MTREE`, …) are kept in the entries and not installed.
 
@@ -235,11 +237,11 @@ file 644     1,443  blob  @ 4657        usr/share/licenses/gliff/NOTICE
   16.6 MB of data stored as 6.15 MB).
 - Root-level dotfiles (`.PKGINFO`, `.MTREE`, `.BUILDINFO`) are kept for pacman, not installed.
 
-The three forms of this package:
+This package in the repository and in the cache:
 
 ```
 thin (repository)  [index]                                                      15,648 B
-transport          [index][131 btrparts' stored bytes, in table order]        6,169,373 B = btrpkg.size
+btrparts           131 files, 6,153,725 B: a full download is 6,169,373 B = btrpkg.size
 cache (pacman)     [index][zeros up to 16,384][image, 16,588,800 B]           16,605,184 B
 ```
 
@@ -250,8 +252,9 @@ extents; its data is never decompressed, copied or written again.
 
 ## Tests
 
-- `cargo test`: 22 tests (format: every bit flip and truncation rejected; convert/fetch/install;
-  publish/pull with reuse; repo-update; gc; HTTP Range). Two need btrfs and skip elsewhere.
+- `cargo test`: 22 tests (format: bit flips and truncations rejected; convert/pull/install; reuse
+  from cache files, installed files and across compressor changes; repo-update; gc; HTTP Range).
+  Two need btrfs and skip elsewhere.
 - libalpm: `meson test -C build pacman:btrpkg` (73 subtests on real and crafted indexes), pacman's
   own suite.
 - On p14s: `bench/pacman-robust.sh` (sandbox roles, resume, dead and corrupt servers,

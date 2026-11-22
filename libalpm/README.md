@@ -93,7 +93,7 @@ How it was checked:
 
 Known gaps: libalpm changes the sync package's file name in place, which a long-running libalpm
 client would see after the transaction; `-U` takes cache files (what `-Sw` and `btrpkg pull`
-leave), not transport files; `-Sp` URLs are the repository's `.pkg.tar.*` ones, which a
+leave); `-Sp` URLs are the repository's `.pkg.tar.*` ones, which a
 btrpkg-only server (the ISO's offline mirror) doesn't have; "already in the cache" checks only
 that `NAME.pkg.btr` exists, so a thin index in a CacheDir is caught later, by the length check
 ("cache file shorter than its index says"), instead of being downloaded again.

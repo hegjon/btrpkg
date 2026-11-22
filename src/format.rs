@@ -1,11 +1,11 @@
 //! btrpkg format version 1.
 //!
-//! One index describes a package. The other two forms only append to it, so the header (and
-//! later its signature) is the same in all three:
+//! One index describes a package. In a repository it is NAME.pkg.btr on its own, its btrparts
+//! (chunks) are files named by their stored hash; the cache file only appends to it, so the
+//! header (and its signature) is the same in both:
 //!
-//!   index      (repository: NAME.pkg.btr without data)   header | chunk table | entries | small-file blob
-//!   transport  (.pkg.btr)  index | chunk data, in table order
-//!   cache file             index | zero padding up to image_base | image
+//!   index      (repository NAME.pkg.btr)   header | chunk table | entries | small-file blob
+//!   cache file (pacman's cache)            index | zero padding up to image_base | image
 //!
 //! `image_base = align(index_len)`. In the cache file each chunk sits at `image_base + image_off`,
 //! as a btrfs compressed extent when it is zstd, and every large file is a 4 KiB-aligned range of
@@ -188,8 +188,8 @@ impl Header {
     pub fn image_base(&self) -> u64 {
         align(self.index_len())
     }
-    /// Total length of the transport form (index plus chunk data).
-    pub fn transport_len(&self, chunks: &[Chunk]) -> u64 {
+    /// A full download: the index plus every chunk's stored bytes (`btrpkg.size`).
+    pub fn download_len(&self, chunks: &[Chunk]) -> u64 {
         self.index_len() + chunks.iter().map(|c| c.encoded_len as u64).sum::<u64>()
     }
     pub fn cache_len(&self) -> u64 {

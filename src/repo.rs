@@ -118,7 +118,6 @@ pub(crate) struct RepoOpts<'a> {
     /// OpenPGP keyring for the packages' signatures; None skips the check.
     pub gpg_keyring: Option<PathBuf>,
     pub drop_missing: bool,
-    pub level: i32,
     pub small: u64,
     pub jobs: usize,
     /// read the database from here instead of DIR/REPO.db (a newer upstream database: DIR/REPO.db
@@ -154,8 +153,6 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
         e.read_to_end(&mut d)?;
         ents.push((e.header().clone(), d));
     }
-    let tmpdir = dir.join(".btrpkg-tmp");
-    fs::create_dir_all(&tmpdir)?;
     let st = Mutex::new(RepoStats::default());
     let publish_lock = Mutex::new(());
     // built on the first publish only (a run with nothing new reads no indexes)
@@ -187,23 +184,22 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             if fs::read_to_string(&sump).is_ok_and(|s| s.split_whitespace().next() == Some(want.as_str())) && ip.exists() {
                 let ib = fs::read(&ip)?;
                 let idx = parse_index(&ib)?;
-                return Ok((idx.hdr.id(), idx.hdr.transport_len(&idx.chunks), false));
+                return Ok((idx.hdr.id(), idx.hdr.download_len(&idx.chunks), false));
             }
             let got = hex(&sha256(&fs::read(&src)?));
             ensure!(got == want, "{fname}: sha256 {got} doesn't match the database's {want}");
             if let Some(k) = &o.gpg_keyring { gpgv(k, &src)?; }
-            let tmp = tmpdir.join(format!("{name}.pkg.btr"));
-            convert(&src, &tmp, o.level, o.small)?;
-            let (_, ps) = {
+            // converting runs in parallel; publishing (reuse decisions, writes) one at a time
+            let (index, items) = build(&src, o.small)?;
+            let ps = {
                 let _g = publish_lock.lock().unwrap();
-                store::publish(&tmp, dir, &parts, o.key, reuse.get_or_init(|| store::raw_map(&parts)))
+                store::publish(&index, items, &name, dir, &parts, o.key, reuse.get_or_init(|| store::raw_map(&parts)))
             }?;
-            let _ = fs::remove_file(&tmp);
             let ib = fs::read(&ip)?;
             let idx = parse_index(&ib)?;
             store::write_atomic(&sump, format!("{want}  {fname}\n").as_bytes())?;
             st.lock().unwrap().new_chunk_bytes += ps.new_bytes;
-            Ok((idx.hdr.id(), idx.hdr.transport_len(&idx.chunks), true))
+            Ok((idx.hdr.id(), idx.hdr.download_len(&idx.chunks), true))
         })();
         match r {
             Ok((id, size, converted)) => {
@@ -231,7 +227,6 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
         }
     });
     let results = results.into_inner().unwrap();
-    let _ = fs::remove_dir(&tmpdir);
 
     // rewrite the database: same entries and order, changed descs, dropped packages left out
     let mut drop_dirs = std::collections::HashSet::new();

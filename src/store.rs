@@ -87,9 +87,9 @@ pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
 #[derive(Default, Debug)]
 pub(crate) struct PublishStats { pub chunks: u64, pub new_chunks: u64, pub new_bytes: u64, pub reused_chunks: u64, pub reused_bytes: u64, pub remapped: u64, pub index_bytes: u64 }
 
-/// Publish a transport file (.pkg.btr) into STORE as NAME.pkg.btr (the index) plus chunks, signed with
-/// `key` (secret key, key name) when given. Signing happens here, after any remapping, because
-/// remapping rewrites the table and so the header.
+/// Publish a converted package (its index and its btrparts, from `build`) into STORE as
+/// NAME.pkg.btr plus btrparts, signed with `key` (secret key, key name) when given. Signing
+/// happens here, after any remapping, because remapping rewrites the table and so the header.
 /// What `publish` reuses when the same data comes framed differently (another zstd level or
 /// version): the unencoded hash of every btrpart named by an index of the repositories that
 /// share the btrparts directory `parts` (found under its parent, like gc finds them), mapped to
@@ -121,25 +121,17 @@ pub(crate) fn raw_map(parts: &Path) -> RawMap {
 /// Publish into STORE with the btrparts in `parts` (absolute, or relative to the
 /// working directory: a caller resolves a repository's relative path first). `reuse`: see
 /// `raw_map` (an empty map reuses only identical btrparts).
-pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>, reuse: &RawMap) -> Result<(String, PublishStats)> {
-    let b = fs::read(input).with_context(|| format!("open {}", input.display()))?;
-    let idx = parse_index(&b)?;
-    ensure!(b.len() as u64 == idx.hdr.transport_len(&idx.chunks), "publish takes a .pkg.btr transport file (btrpkg convert)");
-    let mut pos = idx.bytes.len();
-    let mut items = Vec::with_capacity(idx.chunks.len());
-    for c in &idx.chunks {
-        let e = c.encoded_len as usize;
-        items.push((*c, &b[pos..pos + e]));
-        pos += e;
-    }
-    // Check every chunk, and the raw hash too: it is what reuse across builds relies on.
-    items.par_iter().enumerate().try_for_each(|(i, (c, d))| check_chunk_full(i, c, d))?;
+pub(crate) fn publish(index: &[u8], items: Vec<(Chunk, Vec<u8>)>, name: &str, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>, reuse: &RawMap) -> Result<PublishStats> {
+    let idx = parse_index(index)?;
+    ensure!(items.len() == idx.chunks.len() && items.iter().zip(&idx.chunks).all(|((c, d), t)| c == t && d.len() == c.encoded_len as usize),
+        "{name}: btrparts don't match the index");
 
     // Decide for every chunk, in parallel: reuse (by its unencoded hash or identical stored
     // bytes), or write it. Writes go out in parallel without a per-file fsync, each distinct file
     // once, then one syncfs; the index that points at the chunks is written (and synced) last.
     enum Act<'a> { Remap(Chunk), Same, New(&'a [u8]) }
-    let acts: Vec<(Chunk, Act)> = items.par_iter().map(|&(c, d)| -> (Chunk, Act) {
+    let acts: Vec<(Chunk, Act)> = items.par_iter().map(|(c, d)| -> (Chunk, Act) {
+        let (c, d) = (*c, d.as_slice());
         // Same unencoded data published before: reuse that btrpart, even if this build framed
         // it to different bytes, but only if it is there and intact (check_chunk_full covers the
         // unencoded hash, so an index naming a btrpart with other data can't get it reused)
@@ -181,16 +173,14 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
     let ib = if out == idx.chunks { idx.bytes.clone() } else { idx.with_chunks(&out) };
     parse_index(&ib).context("rebuilt index")?;
     st.index_bytes = ib.len() as u64;
-    let name = input.file_name().context("no file name")?.to_string_lossy();
-    let name = name.trim_end_matches(".btrpkg").trim_end_matches(".pkg.btr").to_string();
-    let ip = store.join(index_rel(&name));
-    let sp = store.join(sig_rel(&name));
+    let ip = store.join(index_rel(name));
+    let sp = store.join(sig_rel(name));
     match key {
         Some((k, kname)) => write_atomic(&sp, k.sign(&ib[..HDR], kname).as_bytes())?,
         None => { let _ = fs::remove_file(&sp); }
     }
     write_atomic(&ip, &ib)?;
-    Ok((name, st))
+    Ok(st)
 }
 
 #[derive(Default, Debug)]
@@ -297,8 +287,6 @@ pub(crate) struct PullOpts<'a> {
     /// an installed root to take unchanged data from (the package's older version, however it was
     /// installed)
     pub installed: Option<&'a Path>,
-    /// zstd level for chunks compressed here (from installed files)
-    pub level: i32,
     /// decode every downloaded chunk and check its unencoded hash too
     pub verify_data: bool,
     /// fsync the cache file before renaming it into place (a caller placing many packages syncs
@@ -319,7 +307,7 @@ pub(crate) struct PullOpts<'a> {
 
 impl Default for PullOpts<'_> {
     fn default() -> Self {
-        PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None,
+        PullOpts { use_encoded: true, installed: None, verify_data: false, fsync: true, before_fetch: None,
             plan_only: false, progress: false, parts: net::DEFAULT_PARTS }
     }
 }
@@ -499,10 +487,9 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 _ => {}
             }
         }
-        let level = o.level;
         let framed: Vec<(usize, Chunk, Vec<u8>)> = tails.into_par_iter().map(|(j, c, d)| -> Result<(usize, Chunk, Vec<u8>)> {
             if !o.use_encoded { return Ok((j, Chunk { compression: COMP_NONE, encoded_len: c.unencoded_len, stored: c.raw, ..c }, d)); }
-            let (comp, b) = frame(level, d)?;
+            let (comp, b) = frame(d)?;
             let stored = if comp == COMP_NONE { c.raw } else { sha256(&b) };
             Ok((j, Chunk { compression: comp, encoded_len: b.len() as u32, stored, ..c }, b))
         }).collect::<Result<_>>()?;
