@@ -21,6 +21,7 @@ unsigned. How it got here, with all measurements: `HISTORY.md` (the lab notebook
 
 Contents: [Repository layout](#repository-layout) · [File forms](#file-forms) ·
 [Trust](#trust) · [Client: pacman-btrpkg](#client-pacman-btrpkg) ·
+[Upgrades: what gets downloaded](#upgrades-what-gets-downloaded) ·
 [Repository side](#repository-side) · [Commands](#commands) · [Packages and CI](#packages-and-ci) ·
 [Format](#format-version-1) · [Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps)
 
@@ -129,6 +130,40 @@ Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no se
 Also: `pacman -U NAME.pkg.btr` (a cache file, signify `.sig`), `pacstrap-btrpkg` (new systems), `btrpkg
 cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
 (metadata packages + `pacman -U --dbonly`).
+
+## Upgrades: what gets downloaded
+
+Example, measured with both versions converted into a scratch repository: hyprland 0.57.1-2 →
+0.57.2-2 has 647 btrparts, 503 of them (48.0 MB) identical to 0.57.1's. The download is the index
+(177,621 B) and 144 btrparts (5.93 MB): about 6.1 MB instead of the 53.7 MB `.pkg.tar.zst`.
+
+Every btrpart in the new index's table carries the SHA-256 of its uncompressed data. `pull-ids`
+(root, no network) gives each one a source, in this order:
+
+1. An older cache file of the same package (`hyprland-0.57.1-2-x86_64.pkg.btr`): the cache files
+   in CACHEDIR with the same package name and the exact cache-file length, looked up by
+   (uncompressed hash, length) in their btrpart tables.
+2. The installed file at the same path: the index's entries say which file and offset each btrpart
+   belongs to; the file must exist under the root and be long enough.
+3. Otherwise: download `btrparts/xx/HASH` (named by its stored-bytes hash).
+
+Candidates from 1 and 2 are read back and hashed; only a match counts, so a locally changed or
+damaged file just means a download. Matches from cache files are reflinked into the new cache
+file; from installed files whole pieces are reflinked and a file's last piece is compressed again.
+Only the same package's cache files and installed files are searched, not other packages.
+
+The same pass serves both steps of a transaction: `pull-ids --plan` counts the missing bytes (the
+download size pacman shows), and `pull-ids --fetch-via FILE` lists the missing btrparts for the
+unprivileged `fetch-ids --want FILE`, which downloads exactly those and checks each against its
+stored hash (`pull-ids` checks again before writing). A btrpart already in the download directory
+with the right length isn't fetched again, so an interrupted download resumes.
+
+The check is cheap: pulling hyprland 0.57.2 next to the 0.57.1 cache file, hashing the 503 reused
+btrparts and writing the 144 new ones, took 0.04 s (old cache file in memory). btrfs has no way to
+ask for a content hash instead: its data checksums are crc32c by default and cover 4 KiB of the
+on-disk (compressed) bytes, readable only by a raw tree search as root; `BTRFS_IOC_ENCODED_READ`
+skips decompression but still reads the data, and fits only extents btrpkg wrote itself; fs-verity
+would need another hash scheme and read-only files.
 
 ## Repository side
 
