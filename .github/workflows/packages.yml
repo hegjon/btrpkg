@@ -1,0 +1,55 @@
+name: packages
+# Build and test btrpkg-git and pacman-btrpkg for x86_64 and aarch64; on master, publish them as
+# a pacman repository on GitHub releases (packaging/publish-release-repo.sh):
+#   [btrpkg]
+#   SigLevel = Optional
+#   Server = https://github.com/hegjon/btrpkg/releases/download/$arch
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # pkgver counts commits
+      - name: Arch Linux ARM image
+        if: matrix.arch == 'aarch64'
+        run: packaging/alarm-image.sh
+      - name: Build and test
+        run: ARCH=${{ matrix.arch }} BTRPKG_SRC=git+file:///src packaging/build.sh out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packages-${{ matrix.arch }}
+          path: out/
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish the repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: packaging/publish-release-repo.sh artifacts
