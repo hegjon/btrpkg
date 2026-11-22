@@ -1,26 +1,27 @@
-From facde83a8c4f7f091ae72fdd86166b862c716eb5 Mon Sep 17 00:00:00 2001
+From 4c3a143571b36ff6280bfd0a89074d044549e00c Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 23:45:21 +0200
-Subject: [PATCH 11/11] makepkg: also convert the packages to btrpkg (installed as
+Subject: [PATCH] makepkg: also convert the packages to btrpkg (installed as
  makebtrpkg)
 
 After the packages and their signatures are made, put them into the
-btrpkg repository directory BTRDEST (default PKGDEST): the package file
-and .sig (reflinked when BTRDEST is elsewhere), NAME.pkg.btr (signed
-with the signify key BTRPKG_KEY when set), its btrparts in
-BTRDEST/BTRPARTS (default btrparts) and PKGFILE.sha256sum, so that
-btrpkg repo-update takes the package as converted. With BTRREPO set,
-also repo-add the packages to BTRDEST/BTRREPO.db.tar.zst and write
-their btrpkg fields (btrpkg repo-update --no-gpg).
+btrpkg repository directory BTRDEST (default PKGDEST; the package file
+and .sig are reflinked there when BTRDEST is elsewhere):
+ - BTRREPO unset: btrpkg convert writes NAME.pkg.btr (signed with the
+   signify key BTRPKG_KEY when set) and its btrparts into
+   BTRDEST/BTRPARTS (default btrparts).
+ - BTRREPO set: repo-add the packages to BTRDEST/BTRREPO.db.tar.zst,
+   then btrpkg repo-update converts them, signs them with BTRPKG_KEY
+   and writes their btrpkg fields (and PKGFILE.sha256sum).
 
 --nobtrpkg skips it; a missing btrpkg (or repo-add with BTRREPO) is
 reported before building.
 ---
- scripts/makepkg.sh.in | 68 ++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 67 insertions(+), 1 deletion(-)
+ scripts/makepkg.sh.in | 65 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 64 insertions(+), 1 deletion(-)
 
 diff --git a/scripts/makepkg.sh.in b/scripts/makepkg.sh.in
-index 611cc184..abd02a8c 100644
+index 611cc184..d0622b3e 100644
 --- a/scripts/makepkg.sh.in
 +++ b/scripts/makepkg.sh.in
 @@ -64,6 +64,7 @@ INSTALL=0
@@ -31,18 +32,18 @@ index 611cc184..abd02a8c 100644
  NOBUILD=0
  NODEPS=0
  NOEXTRACT=0
-@@ -881,6 +882,57 @@ run_split_packaging() {
+@@ -881,6 +882,54 @@ run_split_packaging() {
  	pkgname=("${pkgname_backup[@]}")
  }
  
 +# makebtrpkg: put the finished packages into the btrpkg repository directory BTRDEST (default
-+# PKGDEST): the package file and its .sig (reflinked when BTRDEST is elsewhere), NAME.pkg.btr
-+# (signed with the signify secret key BTRPKG_KEY when set), its btrparts in BTRDEST/BTRPARTS
-+# (default btrparts) and PKGFILE.sha256sum, so that `btrpkg repo-update` takes the package as
-+# converted. With BTRREPO set, also add the packages to BTRDEST/BTRREPO.db.tar.zst (repo-add) and
-+# write their btrpkg fields into it (btrpkg repo-update).
++# PKGDEST), the package file and its .sig reflinked there when BTRDEST is elsewhere.
++#  - BTRREPO unset: `btrpkg convert` writes NAME.pkg.btr (signed with the signify secret key
++#    BTRPKG_KEY when set) and its btrparts into BTRDEST/BTRPARTS (default btrparts).
++#  - BTRREPO set: the packages are added to BTRDEST/BTRREPO.db.tar.zst (repo-add), then
++#    `btrpkg repo-update` converts them, signs them with BTRPKG_KEY and writes their btrpkg fields.
 +create_btrpkgs() {
-+	local pkg pkgarch pkg_file name ret=0
++	local pkg pkgarch pkg_file name
 +	local fullver=$(get_full_version)
 +	local dest=${BTRDEST:-$PKGDEST} parts=${BTRPARTS:-btrparts}
 +	local files=()
@@ -58,38 +59,35 @@ index 611cc184..abd02a8c 100644
 +
 +	msg "$(gettext "Converting package(s) to btrpkg in %s...")" "$dest"
 +	mkdir -p "$dest" || return 1
-+	local added=()
++	local placed=()
 +	for pkg_file in "${files[@]}"; do
 +		name=${pkg_file##*/}
 +		if ! [[ $dest -ef $PKGDEST ]]; then
-+			cp --reflink=auto -f -- "$pkg_file" "$dest/$name" || { ret=1; continue; }
++			cp --reflink=auto -f -- "$pkg_file" "$dest/$name" || return 1
 +			rm -f -- "$dest/$name.sig"
 +			if [[ -f $pkg_file.sig ]]; then
-+				cp --reflink=auto -f -- "$pkg_file.sig" "$dest/$name.sig" || { ret=1; continue; }
++				cp --reflink=auto -f -- "$pkg_file.sig" "$dest/$name.sig" || return 1
 +			fi
 +		fi
-+		msg2 "$(gettext "Converting %s...")" "$name"
-+		if ! btrpkg convert ${BTRPKG_KEY:+--key "$BTRPKG_KEY"} --parts "$parts" "$dest/$name" "$dest" >/dev/null; then
-+			error "$(gettext "Failed to convert %s.")" "$name"
-+			ret=1
-+			continue
-+		fi
-+		(cd_safe "$dest" && sha256sum -- "$name" > "$name.sha256sum.tmp" && mv -f -- "$name.sha256sum.tmp" "$name.sha256sum") || { ret=1; continue; }
-+		added+=("$dest/$name")
++		placed+=("$dest/$name")
 +	done
 +
-+	if [[ -n $BTRREPO ]] && (( ${#added[@]} )); then
++	if [[ -n $BTRREPO ]]; then
 +		msg2 "$(gettext "Adding to repository %s...")" "$BTRREPO"
-+		repo-add -q "$dest/$BTRREPO.db.tar.zst" "${added[@]}" || return 1
-+		btrpkg repo-update --no-gpg --parts "$parts" "$dest" "$BTRREPO" >/dev/null || return 1
++		repo-add -q "$dest/$BTRREPO.db.tar.zst" "${placed[@]}" || return 1
++		btrpkg repo-update --no-gpg ${BTRPKG_KEY:+--key "$BTRPKG_KEY"} --parts "$parts" "$dest" "$BTRREPO" >/dev/null || return 1
++		return 0
 +	fi
-+	return $ret
++	for pkg_file in "${placed[@]}"; do
++		msg2 "$(gettext "Converting %s...")" "${pkg_file##*/}"
++		btrpkg convert ${BTRPKG_KEY:+--key "$BTRPKG_KEY"} --parts "$parts" "$pkg_file" "$dest" >/dev/null || return 1
++	done
 +}
 +
  usage() {
  	printf "makepkg (pacman) %s\n" "$makepkg_version"
  	echo
-@@ -917,6 +969,7 @@ usage() {
+@@ -917,6 +966,7 @@ usage() {
  	printf -- "$(gettext "  --nocheck        Do not run the %s function in the %s")\n" "check()" "$BUILDSCRIPT"
  	printf -- "$(gettext "  --noprepare      Do not run the %s function in the %s")\n" "prepare()" "$BUILDSCRIPT"
  	printf -- "$(gettext "  --nosign         Do not create a signature for the package")\n"
@@ -97,7 +95,7 @@ index 611cc184..abd02a8c 100644
  	printf -- "$(gettext "  --packagelist    Only list package filepaths that would be produced")\n"
  	printf -- "$(gettext "  --printsrcinfo   Print the generated SRCINFO and exit")\n"
  	printf -- "$(gettext "  --sign           Sign the resulting package with %s")\n" "gpg"
-@@ -964,7 +1017,7 @@ ARGLIST=("$@")
+@@ -964,7 +1014,7 @@ ARGLIST=("$@")
  OPT_SHORT="AcCdD:efFghiLmop:rRsSV"
  OPT_LONG=('allsource' 'check' 'clean' 'cleanbuild' 'config:' 'dir:' 'force' 'geninteg'
            'help' 'holdver' 'ignorearch' 'install' 'key:' 'log' 'noarchive' 'nobuild'
@@ -106,7 +104,7 @@ index 611cc184..abd02a8c 100644
            'printsrcinfo' 'repackage' 'rmdeps' 'sign' 'skipchecksums' 'skipinteg'
            'skippgpcheck' 'source' 'syncdeps' 'verifysource' 'version')
  
-@@ -1009,6 +1062,7 @@ while true; do
+@@ -1009,6 +1059,7 @@ while true; do
  		--noverify)       RUN_VERIFY='n' ;;
  		--noprepare)      RUN_PREPARE='n' ;;
  		--nosign)         SIGNPKG='n' ;;
@@ -114,7 +112,7 @@ index 611cc184..abd02a8c 100644
  		-o|--nobuild)     BUILDPKG=0 NOBUILD=1 ;;
  		-p)               shift; BUILDFILE=$1 ;;
  		--packagelist)    BUILDPKG=0 PACKAGELIST=1;;
-@@ -1268,6 +1322,14 @@ fi
+@@ -1268,6 +1319,14 @@ fi
  
  # check we have the software required to process the PKGBUILD
  check_software || exit $E_MISSING_MAKEPKG_DEPS
@@ -129,7 +127,7 @@ index 611cc184..abd02a8c 100644
  
  # check if gpg signature is to be created and if signing key is valid
  if { [[ -z $SIGNPKG ]] && check_buildenv "sign" "y"; } || [[ $SIGNPKG == 'y' ]]; then
-@@ -1414,6 +1476,10 @@ else
+@@ -1414,6 +1473,10 @@ else
  	enter_fakeroot
  
  	create_package_signatures || exit $E_PRETTY_BAD_PRIVACY

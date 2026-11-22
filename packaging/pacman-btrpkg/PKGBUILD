@@ -1,7 +1,8 @@
 # Maintainer: Jonny Heggheim <hegjon@gmail.com>
 #
 # pacman with the btrpkg patches, installed beside the system pacman: Arch's pacman package (same
-# commit, same patches, same build options) plus libalpm/00*.patch of the btrpkg repository.
+# commit, same patches, same build options) plus libalpm/00*.patch of the btrpkg repository
+# (the same commits as branch btrpkg of https://github.com/hegjon/pacman).
 #   /usr/bin/pacman-btrpkg           -> /usr/lib/pacman-btrpkg/pacman (RUNPATH to its own libalpm)
 #   /usr/bin/pacman-btrpkg-conf      pacman-conf of this build
 #   /etc/pacman-btrpkg.conf          default config: BtrPkgHelper + Include = /etc/pacman.conf
@@ -14,7 +15,7 @@ pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=10
+pkgrel=11
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64 aarch64)
 url="https://github.com/hegjon/btrpkg"
@@ -60,7 +61,7 @@ sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
             '2c6a94a92e3430894753100b49eaa3003f02917a48ab26c60760e4612ac6e417'
             'ac7d794798d5d61c6807e7869773f6d84df38f017cd9e2744299a7a539b03270'
             '75ff4b24675544711d7db755fbe959190c4ad5fd1fd45bdfc580cd4b9d3980f8'
-            'fdd8192e33dc1845c2db25f4195616ad505e13c0dc214d30dd4b7b775bbdfc36'
+            'b6853063ac2bd2355c09ee2592a0f9b1d1c006eff52c5a7e31102ff74150f961'
             '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac'
             '9baa36c396fff615c46acbad513d9797bb9c9450deae0ffb29dce0ccc9b6f327')
 
