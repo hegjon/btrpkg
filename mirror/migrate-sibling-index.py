@@ -10,7 +10,7 @@ and signatures don't change. Holds the repository's .lock (the mirror's and gc's
 Clients before pacman-btrpkg 8 / btrpkg r70 don't take the new field and download the package
 files instead.
 """
-import fcntl, io, os, re, subprocess, sys, tarfile
+import fcntl, gzip, io, os, re, subprocess, sys, tarfile
 
 def die(m):
     sys.exit(f"migrate-sibling-index: {m}")
@@ -43,15 +43,17 @@ def migrate(repo):
 
     # 2. the database
     raw = open(db, "rb").read()
-    if not raw.startswith(b"\x28\xb5\x2f\xfd"): die(f"{db}: not zstd")
-    tarb = subprocess.run(["zstd", "-dc"], input=raw, capture_output=True, check=True).stdout
+    zst = raw.startswith(b"\x28\xb5\x2f\xfd")
+    if zst: tarb = subprocess.run(["zstd", "-dc"], input=raw, capture_output=True, check=True).stdout
+    elif raw.startswith(b"\x1f\x8b"): tarb = gzip.decompress(raw)
+    else: die(f"{db}: neither zstd nor gzip")
     pat = re.compile(r"^btrpkg\.index=index/([^/\n]+)\.btridx$", re.M)
     out = io.BytesIO(); n = 0; have = 0
     with tarfile.open(fileobj=io.BytesIO(tarb)) as tin, tarfile.open(fileobj=out, mode="w", format=tarfile.PAX_FORMAT) as tout:
         for m in tin.getmembers():
             if not m.isfile():
                 tout.addfile(m); continue
-            data = tin.extractfile(m).read()
+            data = tin.extractfile(m).read()  # type: ignore[union-attr]
             if m.name.endswith("/desc"):
                 text = data.decode()
                 have += text.count("btrpkg.index=")
@@ -63,7 +65,8 @@ def migrate(repo):
             m.size = len(data)
             tout.addfile(m, io.BytesIO(data))
     if n != have: die(f"{db}: {have} btrpkg.index lines, {n} in the old form")
-    comp = subprocess.run(["zstd", "-19", "-q", "-c"], input=out.getvalue(), capture_output=True, check=True).stdout
+    comp = (subprocess.run(["zstd", "-19", "-q", "-c"], input=out.getvalue(), capture_output=True, check=True).stdout
+            if zst else gzip.compress(out.getvalue(), 9, mtime=0))
     tmp = db + ".migrate"
     with open(tmp, "wb") as f:
         f.write(comp); f.flush(); os.fsync(f.fileno())

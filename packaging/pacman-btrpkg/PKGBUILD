@@ -12,7 +12,7 @@ pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=8
+pkgrel=9
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64 aarch64)
 url="https://github.com/hegjon/btrpkg"
@@ -68,7 +68,7 @@ prepare() {
   patch -Np1 < ../arch-0001-libalpm-invalidate-curl-data-in-child.patch
   patch -Np1 < ../arch-0002-libalpm-use-curl-s-effective-url-without-authenticat.patch
   # btrpkg's (git apply: they carry binary test fixtures)
-  git apply --whitespace=nowarn ../btrpkg-000*.patch
+  git apply --whitespace=nowarn ../btrpkg-[0-9][0-9][0-9][0-9]-*.patch
   # its own default config file, so it never reads a BtrPkgHelper line the system pacman warns about
   sed -i "s|conf.set_quoted('CONFFILE', join_paths(SYSCONFDIR, 'pacman.conf'))|conf.set_quoted('CONFFILE', join_paths(SYSCONFDIR, 'pacman-btrpkg.conf'))|" meson.build
   grep -q "pacman-btrpkg.conf" meson.build
