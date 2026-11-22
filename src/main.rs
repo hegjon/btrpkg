@@ -682,7 +682,7 @@ fn info(p: &Path) -> Result<()> {
 }
 
 const USAGE: &str = "usage:
-  btrpkg convert [-l N] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN.pkg.tar.zst OUT(.pkg.btr|.pkg.btr.zst)
+  btrpkg convert [-l N (default 12)] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN.pkg.tar.zst OUT(.pkg.btr|.pkg.btr.zst)
   btrpkg fetch [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [-l N] [--sha256 HEX] IN|- CACHE
   btrpkg install [--copy] CACHE ROOT
   btrpkg info FILE
@@ -716,10 +716,16 @@ const USAGE: &str = "usage:
        names. Nothing younger than --min-age (default 3600) goes; busy mirror locks stop it.
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
-  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO
+  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [-l N (default 12)] [--small N] DIR REPO
 NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.pkg.btr.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
+
+/// zstd level for btrparts made by convert and repo-update. 12 is the highest level that decodes as
+/// fast as level 3 in btrfs (13 is 5-10% slower, 15-19 about 20% slower, on every lab machine;
+/// bench/results/zstd-level-read-20261122), and stores 5.5% less than level 3. A different level
+/// changes nothing for clients; unchanged data keeps its existing btrparts (publish's raw map).
+const DEFAULT_LEVEL: i32 = 12;
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
 /// header IDs in its database); signatures are saved for the caller to check.
@@ -905,11 +911,11 @@ fn main() -> Result<()> {
     }
     net::set_options(netopt)?;
     match pos.as_slice() {
-        // .pkg.btr: chunks framed at -l (default 19). .pkg.btr.zst: raw chunks (-l 0
+        // .pkg.btr: btrparts framed at -l (default DEFAULT_LEVEL). .pkg.btr.zst: raw btrparts (-l 0
         // by default) inside one solid zstd stream at --outer-level.
         ["convert", i, o] => {
             let outer = o.ends_with(".zst");
-            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { 19 }), outer_level, small_max, nframes, min_frame)
+            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { DEFAULT_LEVEL }), outer_level, small_max, nframes, min_frame)
         }
         ["fetch", i, c] => {
             let t = trust.resolve(if *i == "-" { None } else { fs::read_to_string(format!("{i}.sig")).ok() })?;
@@ -987,7 +993,7 @@ fn main() -> Result<()> {
         ["repo-update", d, r] => {
             let k = sec_key(key.as_ref())?;
             let o = repo::RepoOpts { key: k.as_ref().map(|(k, n)| (k, n.as_str())), gpg_keyring, drop_missing: flags.contains(&"--drop-missing"),
-                level: level.unwrap_or(19), small: small_max, jobs, db_in: db_in.clone(), parts: parts.clone().unwrap_or_else(|| repo::DEFAULT_REPO_PARTS.to_string()) };
+                level: level.unwrap_or(DEFAULT_LEVEL), small: small_max, jobs, db_in: db_in.clone(), parts: parts.clone().unwrap_or_else(|| repo::DEFAULT_REPO_PARTS.to_string()) };
             let st = repo::repo_update(Path::new(d), r, &o)?;
             eprintln!("repo-update: {st:?}");
             ensure!(st.failed == 0 || flags.contains(&"--keep-going"), "{} packages failed (left to pacman)", st.failed);

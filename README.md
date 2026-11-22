@@ -186,6 +186,9 @@ corrupt transports and stores leave no files behind).
 Converter rules:
 - Files of `--small` bytes or less go in the blob.
 - Identical file contents are stored once and reflinked more than once (dedup).
+- Btrparts are zstd level 12 by default (`-l`): the highest level that decodes as fast as level 3 in
+  btrfs on every lab machine; 13 is 5–10% slower and 15–19 about 20% slower, for 1–5% less size
+  (`bench/results/zstd-level-read-20261122/`). Entries and blob stay level 19 (metadata, read once).
 - A btrpart stays raw when compressing it doesn't save at least one 4 KiB block.
 - Root-level dotfiles (`.PKGINFO`, `.MTREE`, …) are kept in the entries and not installed.
 
