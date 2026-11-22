@@ -1,0 +1,9 @@
+macmini-m1, scratch roots (bench/scratch-root-compare.sh), 7 packages: hyprland mesa ffmpeg noto-fonts-cjk util-linux file omarchy-dev
+mount: rw,noatime,compress=zstd:3,ssd,space_cache=v2
+compare-roots: entries 5768/5768, package-owned 5765, differences 0/0/0; -Qkk 0 altered
+stock: 13.8 s, btr: 4.6 s (one round, downloads included)
+== stock-root      TOTAL 88% 542M disk, 610M uncompressed  (none 515M, zstd 26M of 94M)
+== btr-root        TOTAL 69% 425M disk, 610M uncompressed  (none 108M, zstd 316M of 501M)
+== btr-cache       TOTAL 69% 413M disk, 597M uncompressed
+== btr-root+cache  TOTAL 69% 428M disk, 1.1G referenced (5123 extents, 10097 refs)
+== stock-root+cache TOTAL 92% 887M disk, 955M referenced

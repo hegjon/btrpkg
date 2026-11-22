@@ -115,6 +115,14 @@ The first conversion pass took 3m29s (8 jobs; most package files were already do
   mirror's `.pkg.tar.*`, pacman-btrpkg from the shared btrparts. Result: 6,063 package-owned files
   and the local db identical, `-Qkk` 0 altered. One round: stock 14.9 s, btrpkg 5.4 s. That
   includes the downloads, and stock also has to decompress Arch Linux ARM's xz.
+- **Encoded extents and reflinks on aarch64** (m1, btrfs mounted `compress=zstd:3`; 7 packages,
+  610 MB unencoded; compsize built on the machine):
+
+  | | stock pacman | pacman-btrpkg |
+  |---|---|---|
+  | root on disk | 542 MB (515 MB stored uncompressed; the kernel's heuristic gave up on it) | 425 MB (501 MB as encoded zstd extents) |
+  | root + package cache | 887 MB | 428 MB (the `.pkg.btr` cache shares its extents with the root) |
+
 - The first attempt failed as it should. m1 didn't have the mirror's signify key, so every index
   was refused ("signed with unknown key"). A client needs `/etc/btrpkg/keys/<key>.pub`, as the
   x86_64 clients have.
