@@ -1,0 +1,9 @@
+== t550: Intel(R) Core(TM) i5-5300U CPU @ 2.30GHz | 4 threads | 15676 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 1.276 s, 760 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 1.302 s, 747 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.625 s, 600 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.671 s, 583 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.197 s, 787 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.202 s, 772 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.248 s, 628 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.255 s, 613 MB/s

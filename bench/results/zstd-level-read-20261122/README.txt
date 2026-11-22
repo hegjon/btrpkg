@@ -31,3 +31,21 @@ Decode speed drops at 13-14 (zstd's optimal parsers) and stays flat from 14 to 1
 
 Kernel, p14s, machine CPU time for a cold read of all 8 (5 rounds, median; wall time 0.71-0.75 s
 for all):  level 3 2.03 s, 12 1.96 s, 15 2.16 s, 19 2.23 s.  On disk: 458.8 / 435.8 / 417.1 / 413.7 MB.
+
+Decode speed on every lab machine (2026-11-22, bench/level-decode-lab.sh; MB/s, one core, best of 5;
+"small" = mesa, qt6-base, ghostscript, 156 MB, so turbox (1 GB RAM) could run it; "full" = the 8 packages):
+  host        CPU                                  small: L3   L12   L15   L19   full: L3   L12   L15   L19   L15/L12
+  desktop     AMD Ryzen 9 9950X 16-Core Processor       2198  2187  1720  1678      2059  2066  1582  1540   0.79
+  p14s        AMD Ryzen 7 PRO 5850U with Radeon Gr      1292  1333  1059  1038      1266  1250   985   970   0.79
+  macmini-m1  Icestorm-M1 BIOS CPU @ 0.0GHz Firest      1217  1215   975   952      1184  1182   942   913   0.80
+  galaxybook  Oryon BIOS Snapdragon(R) X Elite - X      1176  1146   913   889      1143  1108   877   849   0.80
+  t490        Intel(R) Core(TM) i5-8265U CPU @ 1.6      1011  1000   797   749       972   925   731   711   0.80
+  t460s       Intel(R) Core(TM) i7-6600U CPU @ 2.6       920   910   728   708       887   879   690   670   0.80
+  t550        Intel(R) Core(TM) i5-5300U CPU @ 2.3       787   772   628   613       760   747   600   583   0.81
+  xps         Intel(R) Core(TM) i5-5300U CPU @ 2.3       785   771   627   611       758   746   601   582   0.81
+  samsung-i5  Intel(R) Core(TM) i5-3337U CPU @ 1.8       570   569   469   459       551   549   450   438   0.82
+  x200        Intel(R) Core(TM)2 Duo CPU     P8400       294   286   244   238       285   279   236   229   0.85
+  hp-amd      AMD A6-7310 APU with AMD Radeon R4 G       289   285   240   234       281   277   231   224   0.84
+  chromebook  Intel(R) Celeron(R) CPU  N2840  @ 2.       267   267   223   214       259   259   215   210   0.84
+  turbox      Intel(R) Core(TM)2 CPU         T5500       214   207   174   171         -     -     -     -   0.84
+Every machine: L12 decodes as fast as L3; L15 is 15-21% slower than L12; L19 another 2-6% slower than L15.

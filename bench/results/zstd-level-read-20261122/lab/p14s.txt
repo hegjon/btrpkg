@@ -1,0 +1,9 @@
+== p14s: AMD Ryzen 7 PRO 5850U with Radeon Graphics | 16 threads | 11764 MB | governor performance
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 0.766 s, 1266 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 0.779 s, 1250 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 0.990 s, 985 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.005 s, 970 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.120 s, 1292 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.117 s, 1333 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.147 s, 1059 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.150 s, 1038 MB/s

@@ -1,0 +1,9 @@
+== t460s: Intel(R) Core(TM) i7-6600U CPU @ 2.60GHz | 4 threads | 19843 MB | governor powersave
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 1.094 s, 887 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 1.107 s, 879 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.411 s, 690 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.454 s, 670 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.169 s, 920 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.172 s, 910 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.214 s, 728 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.220 s, 708 MB/s

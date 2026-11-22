@@ -1,0 +1,5 @@
+== turbox: Intel(R) Core(TM)2 CPU         T5500  @ 1.66GHz | 2 threads | 946 MB | governor schedutil
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.725 s, 214 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.754 s, 207 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.897 s, 174 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.914 s, 171 MB/s

@@ -1,0 +1,9 @@
+== t490: Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz | 8 threads | 7583 MB | governor powersave
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 0.997 s, 972 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 1.052 s, 925 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.333 s, 731 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.371 s, 711 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.153 s, 1011 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.156 s, 1000 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.196 s, 797 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.208 s, 749 MB/s

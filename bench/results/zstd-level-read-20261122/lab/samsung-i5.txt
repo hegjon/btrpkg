@@ -1,0 +1,9 @@
+== samsung-i5: Intel(R) Core(TM) i5-3337U CPU @ 1.80GHz | 4 threads | 3786 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 1.760 s, 551 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 1.772 s, 549 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 2.167 s, 450 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 2.226 s, 438 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.272 s, 570 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.274 s, 569 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.333 s, 469 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.340 s, 459 MB/s

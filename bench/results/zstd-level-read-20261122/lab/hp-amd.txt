@@ -1,0 +1,9 @@
+== hp-amd: AMD A6-7310 APU with AMD Radeon R4 Graphics | 4 threads | 6865 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 3.453 s, 281 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 3.512 s, 277 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 4.220 s, 231 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 4.350 s, 224 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.538 s, 289 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.547 s, 285 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.650 s, 240 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.668 s, 234 MB/s

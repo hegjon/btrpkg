@@ -1,0 +1,9 @@
+== macmini-m1: Icestorm-M1 BIOS CPU @ 0.0GHz Firestorm-M1 BIOS CPU @ 0.0GHz | 8 threads | 7573 MB | governor performance
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 0.819 s, 1184 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 0.823 s, 1182 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.035 s, 942 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.067 s, 913 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.128 s, 1217 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.129 s, 1215 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.160 s, 975 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.164 s, 952 MB/s

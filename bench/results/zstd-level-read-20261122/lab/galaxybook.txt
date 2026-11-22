@@ -1,0 +1,9 @@
+== galaxybook: Oryon BIOS Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Oryon(TM) CPU 446 CPU @ 3.4GHz | 12 threads | 15418 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 0.849 s, 1143 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 0.879 s, 1108 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.111 s, 877 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.148 s, 849 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.132 s, 1176 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.136 s, 1146 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.171 s, 913 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.176 s, 889 MB/s

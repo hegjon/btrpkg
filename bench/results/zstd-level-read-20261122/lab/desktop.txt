@@ -1,0 +1,9 @@
+== desktop: AMD Ryzen 9 9950X 16-Core Processor | 32 threads | 190799 MB | governor performance
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 0.471 s, 2059 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 0.471 s, 2066 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 0.616 s, 1582 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 0.633 s, 1540 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.071 s, 2198 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.071 s, 2187 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.091 s, 1720 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.093 s, 1678 MB/s

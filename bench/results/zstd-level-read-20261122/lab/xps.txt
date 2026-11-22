@@ -1,0 +1,9 @@
+== xps: Intel(R) Core(TM) i5-5300U CPU @ 2.30GHz | 4 threads | 7815 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 1.280 s, 758 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 1.304 s, 746 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 1.622 s, 601 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 1.675 s, 582 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.198 s, 785 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.202 s, 771 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.249 s, 627 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.255 s, 611 MB/s

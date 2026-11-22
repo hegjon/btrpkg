@@ -1,0 +1,9 @@
+== x200: Intel(R) Core(TM)2 Duo CPU     P8400  @ 2.26GHz | 2 threads | 5809 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 3.407 s, 285 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 3.487 s, 279 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 4.127 s, 236 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 4.258 s, 229 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.528 s, 294 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.545 s, 286 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.639 s, 244 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.654 s, 238 MB/s

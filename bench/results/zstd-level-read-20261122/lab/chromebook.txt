@@ -1,0 +1,9 @@
+== chromebook: Intel(R) Celeron(R) CPU  N2840  @ 2.16GHz | 2 threads | 3815 MB | governor schedutil
+full level 3: 12868 frames, 969.5 MB unencoded, best of 5: 3.742 s, 259 MB/s
+full level 12: 12907 frames, 973.4 MB unencoded, best of 5: 3.762 s, 259 MB/s
+full level 15: 12919 frames, 974.6 MB unencoded, best of 5: 4.534 s, 215 MB/s
+full level 19: 12921 frames, 974.7 MB unencoded, best of 5: 4.644 s, 210 MB/s
+small level 3: 2149 frames, 155.2 MB unencoded, best of 5: 0.582 s, 267 MB/s
+small level 12: 2156 frames, 156.1 MB unencoded, best of 5: 0.586 s, 267 MB/s
+small level 15: 2154 frames, 155.9 MB unencoded, best of 5: 0.699 s, 223 MB/s
+small level 19: 2155 frames, 156.0 MB unencoded, best of 5: 0.728 s, 214 MB/s
