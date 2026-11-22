@@ -1,0 +1,10 @@
+== turbox: Intel(R) Core(TM)2 CPU         T5500  @ 1.66GHz | 2 threads | aes-ni no | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 19.106 s | zstd 12941 calls 5.736 s | crypt 13586 calls 8.183 s
+level 11 round 2: wall 19.293 s | zstd 12907 calls 5.757 s | crypt 13584 calls 8.209 s
+level 11 round 3: wall 19.520 s | zstd 12935 calls 5.845 s | crypt 13594 calls 8.287 s
+level 12 round 1: wall 33.252 s | zstd 13739 calls 6.619 s | crypt 15500 calls 10.652 s
+level 12 round 2: wall 20.503 s | zstd 13045 calls 5.855 s | crypt 13722 calls 8.362 s
+level 12 round 3: wall 19.621 s | zstd 12914 calls 5.763 s | crypt 13588 calls 8.264 s
+level 13 round 1: wall 20.049 s | zstd 12946 calls 6.146 s | crypt 13684 calls 8.275 s
+level 13 round 2: wall 19.289 s | zstd 12915 calls 6.219 s | crypt 13573 calls 8.152 s
+level 13 round 3: wall 19.278 s | zstd 12915 calls 6.137 s | crypt 13605 calls 8.107 s

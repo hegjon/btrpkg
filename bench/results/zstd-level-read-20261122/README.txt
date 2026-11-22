@@ -76,3 +76,25 @@ MB/s = unencoded zstd bytes / summed zstd_decompress_bio time (one core's worth)
   t460s 0.18 s vs t550/xps 0.46 s). Without AES-NI (x200, turbox, chromebook) decryption costs more than
   decompression (1.4-2.2x). L15's smaller data saves 0.36-0.44 s of decryption there but costs 0.66-1.13 s more
   decompression: L12 still needs less CPU in total on every machine.
+
+Kernel decode, levels 11-13 (same method, same machines minus macmini-m1, level 12 measured again):
+  stored: L11 406.8 MB, L12 406.4 MB, L13 401.2 MB (L15 387.7, L3 429.8)
+  host        L11  L12  L13 MB/s   L13/L12   (L12 in the first run)
+  p14s         805  863  787        0.91     (883)
+  t490         509  504  475        0.94     (503)
+  t460s        448  451  406        0.90     (450)
+  t550         381  380  341        0.90     (381)
+  xps          372  372  339        0.91     (371)
+  galaxybook   360  358  325        0.91     (360)
+  x200         276  276  254        0.92     (276)
+  samsung-i5   253  253  233        0.92     (252)
+  chromebook   223  233  214        0.92     (232)
+  hp-amd       190  191  180        0.94     (190)
+  turbox       169  166  158        0.95     (171)
+L11 decodes as fast as L12 (within 1%, p14s and chromebook 4-7% off in this run) and is not smaller;
+L13 is 5-10% slower than L12 and 1.3% smaller. L12 reproduced within 2% of the first run.
+
+BMI2 probe per context (Phoronix, 2026-08-26): on p14s, level 12, zstd_init_dstream (btrfs calls it once per
+compressed extent; it runs the CPUID probe) took 1.5 ms for 12,910 calls (0.12 us each) against ~1.2 s of
+decompression: 0.13%. zstd_decompress_stream ran ~25 times per extent (318k calls: btrfs hands zstd one
+4 KiB output page at a time).

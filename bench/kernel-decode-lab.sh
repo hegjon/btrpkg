@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run bench/kernel-decode-bench.sh on one lab host for levels 3 12 15 19 (3 rounds each).
+# Run bench/kernel-decode-bench.sh on one lab host for LEVELS (default "3 12 15 19"; 3 rounds each).
 #   kernel-decode-lab.sh HOST [BTRPKG_BINARY_TO_COPY]
 h=$1 bin=${2:-}
 W=$TMPDIR/kz; out=$W/out/$h.txt; mkdir -p $W/out
@@ -9,7 +9,7 @@ W=$TMPDIR/kz; out=$W/out/$h.txt; mkdir -p $W/out
   scp -q ~/Work/btrpkg/bench/kernel-decode-bench.sh root@$h:/var/tmp/kz/
   B=btrpkg
   if [[ -n $bin ]]; then scp -q "$bin" root@$h:/var/tmp/kz/btrpkg; B=/var/tmp/kz/btrpkg; fi
-  for l in 3 12 15 19; do
+  for l in ${LEVELS:-3 12 15 19}; do
     rsync -a $W/$l root@$h:/var/tmp/kz/
     ssh root@$h "bash /var/tmp/kz/kernel-decode-bench.sh /var/tmp/kz $l 3 $B"
   done

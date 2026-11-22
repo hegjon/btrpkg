@@ -1,0 +1,10 @@
+== chromebook: Intel(R) Celeron(R) CPU  N2840  @ 2.16GHz | 2 threads | aes-ni no | cipher: aes-xts-plain64 512 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 10.258 s | zstd 12907 calls 4.192 s | crypt 13733 calls 9.413 s
+level 11 round 2: wall 13.798 s | zstd 13302 calls 4.360 s | crypt 14375 calls 9.841 s
+level 11 round 3: wall 14.273 s | zstd 13677 calls 4.706 s | crypt 14975 calls 11.074 s
+level 12 round 1: wall 10.184 s | zstd 12927 calls 4.199 s | crypt 13703 calls 9.413 s
+level 12 round 2: wall 10.087 s | zstd 12910 calls 4.179 s | crypt 13682 calls 9.396 s
+level 12 round 3: wall 10.165 s | zstd 12910 calls 4.182 s | crypt 13899 calls 9.452 s
+level 13 round 1: wall 10.295 s | zstd 12915 calls 4.549 s | crypt 13688 calls 9.279 s
+level 13 round 2: wall 10.279 s | zstd 12915 calls 4.549 s | crypt 13708 calls 9.294 s
+level 13 round 3: wall 10.480 s | zstd 12915 calls 4.556 s | crypt 13861 calls 9.338 s

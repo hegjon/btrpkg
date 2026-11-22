@@ -1,0 +1,10 @@
+== hp-amd: AMD A6-7310 APU with AMD Radeon R4 Graphics | 4 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 3.026 s | zstd 12973 calls 5.137 s | crypt 13692 calls 0.501 s
+level 11 round 2: wall 3.042 s | zstd 12973 calls 5.136 s | crypt 13695 calls 0.495 s
+level 11 round 3: wall 2.986 s | zstd 12935 calls 5.093 s | crypt 13702 calls 0.498 s
+level 12 round 1: wall 3.173 s | zstd 12908 calls 5.048 s | crypt 13566 calls 0.498 s
+level 12 round 2: wall 3.165 s | zstd 12908 calls 5.093 s | crypt 13604 calls 0.506 s
+level 12 round 3: wall 3.136 s | zstd 12976 calls 5.115 s | crypt 13689 calls 0.500 s
+level 13 round 1: wall 3.464 s | zstd 12981 calls 5.424 s | crypt 13694 calls 0.501 s
+level 13 round 2: wall 3.512 s | zstd 12981 calls 5.436 s | crypt 13701 calls 0.508 s
+level 13 round 3: wall 3.417 s | zstd 12981 calls 5.424 s | crypt 13696 calls 0.496 s

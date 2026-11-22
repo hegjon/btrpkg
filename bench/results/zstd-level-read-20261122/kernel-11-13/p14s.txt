@@ -1,0 +1,10 @@
+== p14s: AMD Ryzen 7 PRO 5850U with Radeon Graphics | 16 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 0.767 s | zstd 13023 calls 1.282 s | crypt 13859 calls 0.176 s
+level 11 round 2: wall 0.739 s | zstd 13023 calls 1.209 s | crypt 13862 calls 0.168 s
+level 11 round 3: wall 0.734 s | zstd 12907 calls 1.166 s | crypt 13634 calls 0.157 s
+level 12 round 1: wall 0.713 s | zstd 12908 calls 1.128 s | crypt 13626 calls 0.156 s
+level 12 round 2: wall 0.722 s | zstd 12908 calls 1.119 s | crypt 13626 calls 0.158 s
+level 12 round 3: wall 0.721 s | zstd 12946 calls 1.143 s | crypt 13700 calls 0.158 s
+level 13 round 1: wall 0.723 s | zstd 12913 calls 1.228 s | crypt 13630 calls 0.159 s
+level 13 round 2: wall 0.725 s | zstd 12913 calls 1.237 s | crypt 13630 calls 0.156 s
+level 13 round 3: wall 0.725 s | zstd 12913 calls 1.270 s | crypt 13630 calls 0.159 s

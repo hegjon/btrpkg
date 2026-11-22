@@ -1,0 +1,10 @@
+== t460s: Intel(R) Core(TM) i7-6600U CPU @ 2.60GHz | 4 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 1.483 s | zstd 12925 calls 2.273 s | crypt 13663 calls 0.190 s
+level 11 round 2: wall 1.061 s | zstd 12908 calls 2.171 s | crypt 13638 calls 0.185 s
+level 11 round 3: wall 1.107 s | zstd 12907 calls 2.164 s | crypt 13631 calls 0.184 s
+level 12 round 1: wall 1.115 s | zstd 12910 calls 2.166 s | crypt 13635 calls 0.186 s
+level 12 round 2: wall 1.115 s | zstd 12910 calls 2.158 s | crypt 13639 calls 0.184 s
+level 12 round 3: wall 1.110 s | zstd 12910 calls 2.160 s | crypt 13637 calls 0.183 s
+level 13 round 1: wall 1.150 s | zstd 12915 calls 2.401 s | crypt 13645 calls 0.181 s
+level 13 round 2: wall 1.159 s | zstd 12915 calls 2.397 s | crypt 13644 calls 0.180 s
+level 13 round 3: wall 1.152 s | zstd 12915 calls 2.401 s | crypt 13649 calls 0.180 s

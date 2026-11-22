@@ -1,0 +1,10 @@
+== t490: Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz | 8 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 1.296 s | zstd 12907 calls 1.907 s | crypt 13586 calls 0.174 s
+level 11 round 2: wall 1.304 s | zstd 12907 calls 1.921 s | crypt 13586 calls 0.172 s
+level 11 round 3: wall 1.291 s | zstd 12907 calls 1.912 s | crypt 13598 calls 0.172 s
+level 12 round 1: wall 1.287 s | zstd 12910 calls 1.909 s | crypt 13587 calls 0.170 s
+level 12 round 2: wall 1.307 s | zstd 12910 calls 1.930 s | crypt 13591 calls 0.173 s
+level 12 round 3: wall 1.293 s | zstd 12910 calls 1.935 s | crypt 13597 calls 0.172 s
+level 13 round 1: wall 1.279 s | zstd 12915 calls 2.049 s | crypt 13594 calls 0.167 s
+level 13 round 2: wall 1.272 s | zstd 12915 calls 2.059 s | crypt 13592 calls 0.168 s
+level 13 round 3: wall 1.287 s | zstd 12915 calls 2.043 s | crypt 13602 calls 0.169 s

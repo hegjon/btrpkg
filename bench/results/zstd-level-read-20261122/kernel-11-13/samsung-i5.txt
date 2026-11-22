@@ -1,0 +1,10 @@
+== samsung-i5: Intel(R) Core(TM) i5-3337U CPU @ 1.80GHz | 4 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 11 round 1: wall 1.803 s | zstd 12907 calls 3.852 s | crypt 13599 calls 0.409 s
+level 11 round 2: wall 1.808 s | zstd 12907 calls 3.848 s | crypt 13599 calls 0.413 s
+level 11 round 3: wall 1.826 s | zstd 12907 calls 3.845 s | crypt 13595 calls 0.409 s
+level 12 round 1: wall 1.788 s | zstd 12910 calls 3.855 s | crypt 13586 calls 0.411 s
+level 12 round 2: wall 1.801 s | zstd 12910 calls 3.845 s | crypt 13595 calls 0.414 s
+level 12 round 3: wall 1.810 s | zstd 12910 calls 3.842 s | crypt 13585 calls 0.417 s
+level 13 round 1: wall 1.878 s | zstd 12915 calls 4.177 s | crypt 13585 calls 0.412 s
+level 13 round 2: wall 1.870 s | zstd 12915 calls 4.176 s | crypt 13585 calls 0.405 s
+level 13 round 3: wall 1.875 s | zstd 12915 calls 4.162 s | crypt 13585 calls 0.407 s
