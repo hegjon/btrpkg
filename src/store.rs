@@ -8,10 +8,6 @@
 //!                        store by default; a repository can put it elsewhere (`../btrparts`,
 //!                        shared by its architecture directories) and says so in its database
 //!                        (`btrpkg.parts`).
-//!   PARTS/.raw/ab/<sha256>  "compression stored_len part-hash": maps the SHA-256 of a
-//!                        btrpart's unencoded data to the one already stored for it, so a
-//!                        changed compressor (different frame bytes) doesn't add new ones.
-//!                        Build server only, not published (a dot directory).
 //!   NAME.pkg.btr         the package's index (format.rs); its chunk table names the chunks
 //!   NAME.pkg.btr.sig     signify signature over the index header (sign.rs), when published
 //!                        with a key
@@ -20,7 +16,7 @@
 use super::*;
 use std::os::unix::ffi::OsStrExt;
 
-/// A btrpart's (or raw map entry's) path in its directory, "xx/HASH" (also the key in --want files).
+/// A btrpart's path in its directory, "xx/HASH" (also the key in --want files).
 pub(crate) fn part_rel(h: &[u8]) -> String {
     let x = hex(h);
     format!("{}/{x}", &x[..2])
@@ -86,18 +82,43 @@ pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
 }
 
 #[derive(Default, Debug)]
-pub(crate) struct PublishStats { pub chunks: u64, pub new_chunks: u64, pub new_bytes: u64, pub reused_chunks: u64, pub reused_bytes: u64, pub remapped: u64, pub raw_entries: u64, pub index_bytes: u64 }
+pub(crate) struct PublishStats { pub chunks: u64, pub new_chunks: u64, pub new_bytes: u64, pub reused_chunks: u64, pub reused_bytes: u64, pub remapped: u64, pub index_bytes: u64 }
 
 /// Publish a transport file (.pkg.btr) into STORE as NAME.pkg.btr (the index) plus chunks, signed with
 /// `key` (secret key, key name) when given. Signing happens here, after any remapping, because
 /// remapping rewrites the table and so the header.
-/// The raw map of the btrparts directory `parts` (see the module comment).
-pub(crate) fn raw_dir(parts: &Path) -> PathBuf { parts.join(".raw") }
+/// What `publish` reuses when the same data comes framed differently (another zstd level or
+/// version): the unencoded hash of every btrpart named by an index of the repositories that
+/// share the btrparts directory `parts` (found under its parent, like gc finds them), mapped to
+/// the btrpart as stored. Built from the indexes each time, nothing is kept on disk. An index
+/// that can't be read is skipped: reuse only saves space, and `publish` checks a btrpart fully
+/// before it reuses it.
+pub(crate) type RawMap = HashMap<Hash, Chunk>;
+
+pub(crate) fn raw_map(parts: &Path) -> RawMap {
+    let mut m = RawMap::new();
+    // no btrparts directory yet: nothing published to reuse
+    let Ok(parts) = parts.canonicalize() else { return m };
+    let Some(root) = parts.parent() else { return m };
+    let mut dirs = Vec::new();
+    if let Err(e) = crate::gc::find_repos(root, &parts, 0, &mut dirs) {
+        eprintln!("btrpkg: reuse across builds: {e:#} (some indexes not seen)");
+    }
+    let files: Vec<PathBuf> = dirs.iter().flat_map(|d| fs::read_dir(d).into_iter().flatten().flatten())
+        .filter(|e| index_name(&e.file_name().to_string_lossy()).is_some() && e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path()).collect();
+    let tables: Vec<Vec<Chunk>> = files.par_iter().filter_map(|p| {
+        let f = File::open(p).ok()?;
+        read_head(&mut BufReader::new(f)).ok().map(|(_, _, chunks, _)| chunks)
+    }).collect();
+    for c in tables.into_iter().flatten() { m.entry(c.raw).or_insert(c); }
+    m
+}
 
 /// Publish into STORE with the btrparts in `parts` (absolute, or relative to the
-/// working directory: a caller resolves a repository's relative path first).
-pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>) -> Result<(String, PublishStats)> {
-    let raw = raw_dir(parts);
+/// working directory: a caller resolves a repository's relative path first). `reuse`: see
+/// `raw_map` (an empty map reuses only identical btrparts).
+pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>, reuse: &RawMap) -> Result<(String, PublishStats)> {
     let b = fs::read(input).with_context(|| format!("open {}", input.display()))?;
     let idx = parse_index(&b)?;
     ensure!(b.len() as u64 == idx.hdr.transport_len(&idx.chunks), "publish takes a .pkg.btr transport file (btrpkg convert)");
@@ -115,34 +136,24 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
     // bytes), or write it. Writes go out in parallel without a per-file fsync, each distinct file
     // once, then one syncfs; the index that points at the chunks is written (and synced) last.
     enum Act<'a> { Remap(Chunk), Same, New(&'a [u8]) }
-    let acts: Vec<(Chunk, Act)> = items.par_iter().map(|&(c, d)| -> Result<(Chunk, Act)> {
-        let rp = hpath(&raw, &c.raw);
-        match fs::read_to_string(&rp) {
-            Ok(s) => {
-                // Same unencoded data published before: reuse that chunk, even if this
-                // build compressed it to different bytes. Check the mapped chunk first, so a
-                // damaged map can't get a wrong chunk into a signed index.
-                let f: Vec<&str> = s.split_whitespace().collect();
-                ensure!(f.len() == 3, "bad raw map entry {}", rp.display());
-                let c2 = Chunk { compression: f[0].parse()?, encoded_len: f[1].parse()?, stored: unhex(f[2])?, ..c };
-                let cd = fs::read(hpath(parts, &c2.stored)).context("raw map points at a missing chunk")?;
-                // check_chunk_full covers the raw hash: a mapped chunk with other data is refused
-                check_chunk_full(0, &c2, &cd).context("raw map points at a bad chunk")?;
-                Ok((c2, Act::Remap(c)))
+    let acts: Vec<(Chunk, Act)> = items.par_iter().map(|&(c, d)| -> (Chunk, Act) {
+        // Same unencoded data published before: reuse that btrpart, even if this build framed
+        // it to different bytes, but only if it is there and intact (check_chunk_full covers the
+        // unencoded hash, so an index naming a btrpart with other data can't get it reused)
+        if let Some(m) = reuse.get(&c.raw) {
+            let c2 = Chunk { compression: m.compression, encoded_len: m.encoded_len, stored: m.stored, ..c };
+            if fs::read(hpath(parts, &c2.stored)).is_ok_and(|cd| check_chunk_full(0, &c2, &cd).is_ok()) {
+                return (c2, Act::Remap(c));
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                // an existing chunk is reused only if it is intact; a damaged one is replaced
-                // (identical bytes, so the full check above covers them)
-                if fs::read(hpath(parts, &c.stored)).is_ok_and(|old| old == d) { Ok((c, Act::Same)) } else { Ok((c, Act::New(d))) }
-            }
-            Err(e) => Err(e.into()),
         }
-    }).collect::<Result<_>>()?;
+        // an existing btrpart is reused only if it is intact; a damaged one is replaced
+        // (identical bytes, so the full check above covers them)
+        if fs::read(hpath(parts, &c.stored)).is_ok_and(|old| old == d) { (c, Act::Same) } else { (c, Act::New(d)) }
+    }).collect();
 
     let mut st = PublishStats::default();
     let mut out = Vec::with_capacity(acts.len());
     let mut chunk_writes: HashMap<Hash, &[u8]> = HashMap::new();
-    let mut raw_writes: HashMap<Hash, String> = HashMap::new();
     for (c2, act) in &acts {
         st.chunks += 1;
         match act {
@@ -158,16 +169,12 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
                     st.reused_chunks += 1;
                     st.reused_bytes += c2.encoded_len as u64;
                 }
-                if raw_writes.insert(c2.raw, format!("{} {} {}\n", c2.compression, c2.encoded_len, hex(&c2.stored))).is_none() {
-                    st.raw_entries += 1;
-                }
             }
         }
         out.push(*c2);
     }
     chunk_writes.par_iter().try_for_each(|(h, d)| write_atomic_nosync(&hpath(parts, h), d))?;
-    raw_writes.par_iter().try_for_each(|(h, l)| write_atomic_nosync(&hpath(&raw, h), l.as_bytes()))?;
-    if !chunk_writes.is_empty() || !raw_writes.is_empty() { syncfs_dir(parts)?; }
+    if !chunk_writes.is_empty() { syncfs_dir(parts)?; }
     let ib = if out == idx.chunks { idx.bytes.clone() } else { idx.with_chunks(&out) };
     parse_index(&ib).context("rebuilt index")?;
     st.index_bytes = ib.len() as u64;

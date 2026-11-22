@@ -13,7 +13,7 @@
 //! older than it (clients with an older database). A package the database no longer has keeps its
 //! `keep - 1` newest versions. A pruned version loses its index (`NAME.pkg.btr`), its `.sig` and `.src` and, in a
 //! mirror, its `.pkg.tar.*` file and `.sig`. Then every btrpart in the directory that no kept index
-//! names goes, and raw map entries (`.raw/`) that lead to a removed or missing btrpart.
+//! names goes.
 //!
 //! Safety: nothing younger than `min_age` is removed (a publish writes btrparts before its index,
 //! an index before the database); every repository's `.lock` (the mirror's, see
@@ -34,7 +34,6 @@ pub(crate) struct GcStats {
     pub parts_kept: usize,
     pub parts_removed: usize,
     pub parts_young: usize,
-    pub raw_removed: usize,
     pub bytes_removed: u64,
 }
 
@@ -54,7 +53,7 @@ struct Repo {
 
 /// The repositories under `root` (depth ≤ 5): directories with `*.pkg.btr` indexes (and one
 /// non-dot `*.db`, checked by read_repo).
-fn find_repos(root: &Path, parts: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
+pub(crate) fn find_repos(root: &Path, parts: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
     if depth > 5 || root == parts { return Ok(()); }
     let mut is_repo = false;
     // errors stop gc here, before anything is removed: a repository it can't see isn't marked
@@ -178,9 +177,8 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
         }
     }
 
-    // 4. sweep btrparts, then the raw map entries that lead nowhere
+    // 4. sweep btrparts
     let is_hash = |n: &str| n.len() == 64 && n.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-    let mut gone: HashSet<String> = HashSet::new();
     for sub in fs::read_dir(&parts)?.flatten() {
         let sn = sub.file_name().to_string_lossy().into_owned();
         if sn.len() != 2 || !sub.file_type().is_ok_and(|t| t.is_dir()) { continue; }
@@ -192,24 +190,6 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
             if young(&m, o, now) { st.parts_young += 1; continue; }
             remove(&e.path(), o.dry_run, &mut st.bytes_removed)?;
             st.parts_removed += 1;
-            gone.insert(n);
-        }
-    }
-    let raw = store::raw_dir(&parts);
-    if raw.is_dir() {
-        for sub in fs::read_dir(&raw)?.flatten() {
-            if !sub.file_type().is_ok_and(|t| t.is_dir()) { continue; }
-            for e in fs::read_dir(sub.path())?.flatten() {
-                // "compression stored_len part-hash"
-                let Ok(s) = fs::read_to_string(e.path()) else { continue };
-                let Some(target) = s.split_whitespace().nth(2) else { continue };
-                if !is_hash(target) { continue; }
-                let missing = gone.contains(target) || (!o.dry_run && !parts.join(&target[..2]).join(target).exists());
-                if missing && !young(&e.metadata()?, o, now) {
-                    remove(&e.path(), o.dry_run, &mut st.bytes_removed)?;
-                    st.raw_removed += 1;
-                }
-            }
         }
     }
     if !o.dry_run && st.parts_removed > 0 { store::syncfs_dir(&parts)?; }

@@ -38,7 +38,7 @@ omarchy-mirror/
 │   ├── NAME.pkg.btr.src                      SHA-256 of the package file it was made from
 │   ├── .upstream.db, .done, .lock, .wanted-learned
 ├── aarch64/
-└── btrparts/xx/HASH, btrparts/.raw/xx/HASH   shared by both architectures
+└── btrparts/xx/HASH                          shared by both architectures
 ```
 
 Arch's repositories use `$repo/os/$arch` and share `arch-mirror/btrparts`
@@ -58,7 +58,7 @@ Arch's repositories use `$repo/os/$arch` and share `arch-mirror/btrparts`
 4. After all repositories: `btrpkg gc --keep 2` per btrparts directory (skipped if any repository
    failed; `NO_GC=1`, `GC_KEEP=N`). Each package keeps its current version, anything newer and one
    older; other versions lose index, signature, `.src` and package file, then unreferenced btrparts
-   and raw map entries go. Nothing younger than an hour is removed; repository locks are held.
+   go. Nothing younger than an hour is removed; repository locks are held.
 
 The mirror signs an index only after upstream's own signature has checked out, so a client that
 trusts the mirror's key gets nothing upstream didn't sign.

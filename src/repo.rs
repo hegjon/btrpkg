@@ -158,6 +158,8 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
     fs::create_dir_all(&tmpdir)?;
     let st = Mutex::new(RepoStats::default());
     let publish_lock = Mutex::new(());
+    // built on the first publish only (a run with nothing new reads no indexes)
+    let reuse: std::sync::OnceLock<store::RawMap> = std::sync::OnceLock::new();
 
     // what to do for each desc: Some(new desc text) or None (drop)
     let work: Vec<usize> = ents.iter().enumerate().filter(|(_, (h, _))| h.path_bytes().ends_with(b"/desc")).map(|(i, _)| i).collect();
@@ -194,7 +196,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             convert(&src, &tmp, o.level, 19, o.small, 1, 1 << 20)?;
             let (_, ps) = {
                 let _g = publish_lock.lock().unwrap();
-                store::publish(&tmp, dir, &parts, o.key)
+                store::publish(&tmp, dir, &parts, o.key, reuse.get_or_init(|| store::raw_map(&parts)))
             }?;
             let _ = fs::remove_file(&tmp);
             let ib = fs::read(&ip)?;

@@ -190,7 +190,7 @@ frontend, filesystems other than btrfs, Arch's packages.
    the 256-byte header; its magic and version are the namespace, so no separate namespace string.
    `btrpkg keygen`, `publish --key`, Ed25519 over the header with the namespace
    `btrpkg-index-v1`; the signature names its key file. A revoked-keys file in the key directory.
-   Sign in `publish`, after any raw-map remapping: remapping rewrites the table and so the header,
+   Sign in `publish`, after any remapping (reuse by unencoded hash): remapping rewrites the table and so the header,
    so a signature made at convert time would not match the published index. Model: OpenBSD
    signify (Ed25519, keys as files) in Alpine apk v3's structure (one signed metadata block that
    holds every hash).
@@ -275,8 +275,8 @@ From a review of `eca5b8b`; the first three are shown by working proofs of conce
   - `publish` trusts existing store chunks.
   - `with_extension("part")` can make two cache files share one temp name.
   - `pull` opens every cache file in the directory on every pull.
-- **Tests to add:** symlink escape, a wrong uncompressed hash, reuse from a bad cache file, a bad
-  raw-map entry, cleanup after a failed install.
+- **Tests to add:** symlink escape, a wrong uncompressed hash, reuse from a bad cache file, an index
+  naming a btrpart with other data, cleanup after a failed install.
 
 ## Risks
 

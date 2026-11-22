@@ -724,7 +724,7 @@ TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.s
 /// zstd level for btrparts made by convert and repo-update. 12 is the highest level that decodes as
 /// fast as level 3 in btrfs (13 is 5-10% slower, 15-19 about 20% slower, on every lab machine;
 /// bench/results/zstd-level-read-20261122), and stores 5.5% less than level 3. A different level
-/// changes nothing for clients; unchanged data keeps its existing btrparts (publish's raw map).
+/// changes nothing for clients; unchanged data keeps its existing btrparts (store::raw_map).
 const DEFAULT_LEVEL: i32 = 12;
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
@@ -940,9 +940,9 @@ fn main() -> Result<()> {
         ["publish", i, s] => {
             let k = sec_key(key.as_ref())?;
             let pdir = parts_dir(Path::new(s), parts.as_deref().unwrap_or(net::DEFAULT_PARTS))?;
-            store::publish(Path::new(i), Path::new(s), &pdir, k.as_ref().map(|(k, n)| (k, n.as_str()))).map(|(name, st)| {
+            store::publish(Path::new(i), Path::new(s), &pdir, k.as_ref().map(|(k, n)| (k, n.as_str())), &store::raw_map(&pdir)).map(|(name, st)| {
                 eprintln!("publish: {st:?}");
-                println!("upload\t{name}\t{}\t{}\t{}\t{}", st.new_chunks, st.new_bytes, st.index_bytes, st.raw_entries);
+                println!("upload\t{name}\t{}\t{}\t{}\t{}", st.new_chunks, st.new_bytes, st.index_bytes, st.remapped);
             })
         }
         ["pull", s, n, c] => {
@@ -975,9 +975,9 @@ fn main() -> Result<()> {
         },
         ["gc", p] => {
             let o = gc::GcOpts { keep: if keep_given { keep } else { 2 }, min_age: std::time::Duration::from_secs(min_age), dry_run: flags.contains(&"--dry-run") };
-            gc::gc(Path::new(p), &o).map(|st| eprintln!("gc{}: {} repositories; indexes {} kept, {} removed ({} package files); btrparts {} kept, {} removed, {} too young to remove; {} raw map entries removed; {:.1} MiB",
+            gc::gc(Path::new(p), &o).map(|st| eprintln!("gc{}: {} repositories; indexes {} kept, {} removed ({} package files); btrparts {} kept, {} removed, {} too young to remove; {:.1} MiB",
                 if o.dry_run { " (dry run)" } else { "" }, st.repos, st.indexes_kept, st.indexes_removed, st.pkg_files_removed,
-                st.parts_kept, st.parts_removed, st.parts_young, st.raw_removed, st.bytes_removed as f64 / 1048576.0))
+                st.parts_kept, st.parts_removed, st.parts_young, st.bytes_removed as f64 / 1048576.0))
         }
         ["cache-clean", d] => cache::cache_clean(Path::new(d), keep, flags.contains(&"--dry-run")).map(|st| eprintln!("cache-clean: {st:?}")),
         ["fetch-ids", dir, pkgs @ ..] => {
@@ -1176,7 +1176,7 @@ mod tests {
             let src = make_pkg(dir, &stem, &spec(seed));
             let btr = t.0.join(format!("{stem}.pkg.btr"));
             convert_to(&src, &btr, 3);
-            store::publish(&btr, dir, &parts, None).unwrap();
+            store::publish(&btr, dir, &parts, None, &store::raw_map(&parts)).unwrap();
             stems.push((dir.to_path_buf(), stem));
         }
         let db = |dir: &Path, cur: &str| {
@@ -1219,19 +1219,13 @@ mod tests {
         let btr = t.0.join("a3.pkg.btr");
         convert_to(&src, &btr, 3);
         fs::rename(&btr, t.0.join("p-3-1-x86_64.pkg.btr")).unwrap();
-        store::publish(&t.0.join("p-3-1-x86_64.pkg.btr"), &a, &parts, None).unwrap();
+        store::publish(&t.0.join("p-3-1-x86_64.pkg.btr"), &a, &parts, None, &store::raw_map(&parts)).unwrap();
         let st = gc::gc(&parts, &gc::GcOpts { keep: 1, ..o }).unwrap();
         assert_eq!(st.indexes_removed, 2, "{st:?}"); // x86_64 p-2, aarch64 p-1
         let only1: Vec<&Hash> = p1.iter().filter(|h| !p3.contains(*h)).collect();
         assert!(!only1.is_empty() && only1.iter().all(|h| !has(h)));
         assert!(p3.iter().all(has));
-        assert!(st.parts_removed >= only1.len() && st.raw_removed > 0, "{st:?}");
-        // every raw map entry left leads to a btrpart that is there
-        for f in walk_files(&parts.join(".raw")) {
-            let s = fs::read_to_string(f).unwrap();
-            let h = s.split_whitespace().nth(2).unwrap();
-            assert!(parts.join(&h[..2]).join(h).exists());
-        }
+        assert!(st.parts_removed >= only1.len(), "{st:?}");
         // an unreadable index stops the run before anything goes
         fs::write(ix(&x, "p-0-1-x86_64"), b"junk").unwrap();
         fs::write(ix(&x, "p-9-1-x86_64"), b"junk").unwrap();
@@ -1242,7 +1236,6 @@ mod tests {
         let mut v = vec![];
         for e in fs::read_dir(d).into_iter().flatten().flatten() {
             let p = e.path();
-            if p.file_name().is_some_and(|n| n == ".raw") { continue; }
             if p.is_dir() { v.extend(walk_files(&p)); } else { v.push(p); }
         }
         v
@@ -1275,8 +1268,8 @@ mod tests {
         fs::create_dir_all(&arm).unwrap();
         let parts = parts_dir(&x86, "../btrparts").unwrap();
         assert_eq!(parts, t.0.join("repo/btrparts"));
-        let (_, a) = store::publish(&t.0.join("s-1-1.pkg.btr"), &x86, &parts, None).unwrap();
-        let (_, b) = store::publish(&t.0.join("s-1-1.pkg.btr"), &arm, &parts_dir(&arm, "../btrparts").unwrap(), None).unwrap();
+        let (_, a) = store::publish(&t.0.join("s-1-1.pkg.btr"), &x86, &parts, None, &store::raw_map(&parts)).unwrap();
+        let (_, b) = store::publish(&t.0.join("s-1-1.pkg.btr"), &arm, &parts_dir(&arm, "../btrparts").unwrap(), None, &store::raw_map(&parts_dir(&arm, "../btrparts").unwrap())).unwrap();
         assert!(a.new_chunks > 0 && b.new_chunks == 0, "{a:?} {b:?}");
         assert!(!x86.join("btrparts").exists() && !arm.join("btrparts").exists());
         let o = store::PullOpts { parts: "../btrparts", ..Default::default() };
@@ -1477,7 +1470,7 @@ mod tests {
         assert!(format!("{e:#}").contains("unencoded hash"), "{e:#}");
         assert!(!cache.exists() && !part_path(&cache).exists());
         // publish refuses it too
-        assert!(store::publish(&bad, &t.0.join("store"), &t.0.join("store").join(net::DEFAULT_PARTS), None).is_err());
+        assert!(store::publish(&bad, &t.0.join("store"), &t.0.join("store").join(net::DEFAULT_PARTS), None, &store::raw_map(&t.0.join("store").join(net::DEFAULT_PARTS))).is_err());
         // the default fetch checks what the signed stored hash covers, so it takes the chunk; the
         // wrong unencoded hash can't be used for reuse later: reuse reads the data back
         let cdir = t.0.join("cdir");
@@ -1486,7 +1479,7 @@ mod tests {
         let store = t.0.join("store");
         let src2 = make_pkg(&t.0, "w-1-2", &spec(10));
         convert_to(&src2, &t.0.join("w-1-2.pkg.btr"), 19);
-        store::publish(&t.0.join("w-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+        store::publish(&t.0.join("w-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         let p = pull_dir(&store, "w-1-2", &cdir.join("w-1-2.pkg.btr"), &U).unwrap();
         assert!(p.bad_local == 0 && p.reused_chunks == (idx.chunks.len() - 1) as u64, "{p:?}");
         let root = t.0.join("root");
@@ -1503,7 +1496,7 @@ mod tests {
         sign::keygen(&t.0.join("repo")).unwrap();
         sign::keygen(&t.0.join("other")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("repo.sec")).unwrap();
-        store::publish(&t.0.join("s-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), Some((&k, "repo"))).unwrap();
+        store::publish(&t.0.join("s-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), Some((&k, "repo")), &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         let keys = t.0.join("keys");
         fs::create_dir_all(&keys).unwrap();
         fs::copy(t.0.join("repo.pub"), keys.join("repo.pub")).unwrap();
@@ -1600,7 +1593,7 @@ mod tests {
         for (n, s) in names.iter().zip([spec(3), spec(11)]) {
             let src = make_pkg(&t.0, n, &s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         }
         let src = net::Source::Dir(store.clone());
         let mut ns = net::NetStats::default();
@@ -1652,7 +1645,7 @@ mod tests {
         for (n, s) in [("q-1-1-x86_64", &s1), ("q-2-1-x86_64", &s2)] {
             let src = make_pkg(&t.0, n, s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         }
         // version 1 installed some other way (here: from a cache elsewhere, then that cache is gone)
         let root = t.0.join("root");
@@ -1694,7 +1687,7 @@ mod tests {
         for (n, s) in [("q-1-1", &s1), ("q-2-1", &s2)] {
             let src = make_pkg(&t.0, n, s);
             convert_to(&src, &t.0.join(format!("{n}.pkg.btr")), 19);
-            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+            store::publish(&t.0.join(format!("{n}.pkg.btr")), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         }
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
@@ -1757,12 +1750,12 @@ mod tests {
         let s = spec(5);
         let src = make_pkg(&t.0, "r-1-1", &s);
         convert_to(&src, &t.0.join("r-1-1.pkg.btr"), 19);
-        let (_, a) = store::publish(&t.0.join("r-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+        let (_, a) = store::publish(&t.0.join("r-1-1.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         assert_eq!(a.remapped, 0);
         // the same data, framed at another level: different bytes, same unencoded data
         let src2 = make_pkg(&t.0, "r-1-2", &s);
         convert_to(&src2, &t.0.join("r-1-2.pkg.btr"), 3);
-        let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
+        let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
         assert!(b.remapped > 0, "{b:?}");
         assert_eq!(b.new_chunks, 0, "{b:?}");
         let i1 = parse_index(&fs::read(store.join("r-1-1.pkg.btr")).unwrap()).unwrap();
@@ -1774,11 +1767,19 @@ mod tests {
         install(&c.join("r.pkg.btr"), &t.0.join("root"), false).unwrap();
         check_tree(&t.0.join("root"), &s);
 
-        // a raw-map entry pointing at a chunk with other data: publish refuses
-        let x = hex(&i1.chunks[0].raw);
-        let y = &i1.chunks[i1.chunks.len() - 1];
-        fs::write(store.join("btrparts/.raw").join(&x[..2]).join(&x), format!("{} {} {}\n", y.compression, y.encoded_len, hex(&y.stored))).unwrap();
-        let e = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap_err();
-        assert!(format!("{e:#}").contains("raw map"), "{e:#}");
+        // nothing kept on disk for this: the map comes from the indexes
+        assert!(!store.join("btrparts/.raw").exists());
+        // a damaged btrpart is not reused: the next build writes its own (and the index names it)
+        let c0 = i1.chunks.iter().find(|c| c.compression != 0).unwrap();
+        let h = hex(&c0.stored);
+        fs::write(store.join("btrparts").join(&h[..2]).join(&h), b"junk").unwrap();
+        let src3 = make_pkg(&t.0, "r-1-3", &s);
+        convert_to(&src3, &t.0.join("r-1-3.pkg.btr"), 3);
+        let (_, p3) = store::publish(&t.0.join("r-1-3.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None, &store::raw_map(&store.join(net::DEFAULT_PARTS))).unwrap();
+        assert!(p3.new_chunks >= 1, "{p3:?}");
+        let i3 = parse_index(&fs::read(store.join("r-1-3.pkg.btr")).unwrap()).unwrap();
+        let c3 = i3.chunks.iter().find(|x| x.raw == c0.raw).unwrap();
+        assert_ne!(c3.stored, c0.stored);
+        pull_dir(&store, "r-1-3", &c.join("r3.pkg.btr"), &U).unwrap();
     }
 }

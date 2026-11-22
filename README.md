@@ -41,8 +41,7 @@ omarchy-mirror/
 │   └── gliff-0.4.3-1-x86_64.pkg.btr.src           mirrors: SHA-256 of the package file it came from
 ├── aarch64/                                       the same layout
 └── btrparts/                                      shared by x86_64 and aarch64
-    ├── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
-    └── .raw/fa/faa6e2b2d20f…                      raw map: unencoded hash -> "compression length stored-hash"
+    └── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
 ```
 
 The database entry keeps every stock field and adds:
@@ -55,6 +54,10 @@ btrpkg.size=6169373            index + all btrparts: a full download (the .pkg.t
 btrpkg.parts=../btrparts       where the btrparts are, relative to the repository URL
 ```
 
+- Btrpart names stay stable when the compression changes (another zstd level or version):
+  `publish` looks up each btrpart's unencoded hash in a map built from the indexes of the
+  repositories sharing the btrparts directory (0.02 s for Arch's 1,751 indexes) and reuses the
+  btrpart already stored for that data, after checking it. Nothing extra is kept on disk.
 - `btrpkg.parts` lets architectures (and Arch's `$repo/os/$arch` repositories, with
   `../../../btrparts`) share one btrparts directory. Without the field it is `btrparts` inside the
   repository (the ISO's offline repository).
