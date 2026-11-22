@@ -193,7 +193,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             ensure!(got == want, "{fname}: sha256 {got} doesn't match the database's {want}");
             if let Some(k) = &o.gpg_keyring { gpgv(k, &src)?; }
             let tmp = tmpdir.join(format!("{name}.pkg.btr"));
-            convert(&src, &tmp, o.level, 19, o.small, 1, 1 << 20)?;
+            convert(&src, &tmp, o.level, o.small)?;
             let (_, ps) = {
                 let _g = publish_lock.lock().unwrap();
                 store::publish(&tmp, dir, &parts, o.key, reuse.get_or_init(|| store::raw_map(&parts)))

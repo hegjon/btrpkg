@@ -268,7 +268,6 @@ From a review of `eca5b8b`; the first three are shown by working proofs of conce
   - Decompression bomb: `MAX_RAW` 16 GiB per section; a 33 KB index reached 1.5 GB RSS.
   - `align` overflows on huge sizes.
   - `install` leaves `.btrpkg-new` files behind on errors.
-  - The outer-zstd reader allocates from frame content sizes and allows a 2 GiB window.
 - **Low:**
   - No fsync before renames.
   - `unhex` panics on non-ASCII text.

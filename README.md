@@ -72,7 +72,7 @@ the index length and the image length):
 | form | where | layout | length |
 |---|---|---|---|
 | thin (index) | repository `NAME.pkg.btr` | header, btrpart table, entries, small-file blob | index length |
-| transport | `btrpkg convert` output (`.pkg.btr`, or `.pkg.btr.zst` with one outer zstd stream) | index, then every btrpart's stored bytes | index + stored lengths |
+| transport | `btrpkg convert` output, `publish` and `fetch` input | index, then every btrpart's stored bytes | index + stored lengths |
 | cache | pacman cache `NAME.pkg.btr` | index, zeros up to 4 KiB, then the image (each large file 4 KiB-aligned, as encoded extents) | `align(index) + image length` |
 
 Reading an index parses only its first bytes, so any form works as an index. Whatever needs a cache

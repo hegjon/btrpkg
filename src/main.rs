@@ -27,74 +27,6 @@ use format::*;
 
 // ---------------------------------------------------------------- convert
 
-/// Writes the .pkg.btr stream as `n` independent zstd frames of about
-/// total/n bytes each (at least `min_frame`), so fetch can decode them in
-/// parallel. Each frame's window is sized to the frame (capped at 2^27, as
-/// --long=27), and its content size is in the header.
-struct FrameWriter {
-    out: Option<io::BufWriter<File>>,
-    enc: Option<zstd::stream::write::Encoder<'static, io::BufWriter<File>>>,
-    frame_size: u64,
-    remaining: u64,
-    left_in_frame: u64,
-    level: i32,
-    frames: u32,
-}
-impl FrameWriter {
-    fn new(out: io::BufWriter<File>, total: u64, n: u64, min_frame: u64, level: i32) -> FrameWriter {
-        let frame_size = total.div_ceil(n.max(1)).max(min_frame).min(total.max(1));
-        FrameWriter { out: Some(out), enc: None, frame_size, remaining: total, left_in_frame: 0, level, frames: 0 }
-    }
-    fn start(&mut self) -> io::Result<()> {
-        let len = self.frame_size.min(self.remaining);
-        let wl = (64 - (len.max(1) - 1).leading_zeros()).clamp(10, 27);
-        let mut z = zstd::stream::write::Encoder::new(self.out.take().unwrap(), self.level)?;
-        z.set_pledged_src_size(Some(len))?;
-        z.include_contentsize(true)?;
-        z.include_checksum(true)?;
-        z.window_log(wl)?;
-        if wl >= 23 { z.long_distance_matching(true)?; }
-        z.multithread(std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1))?;
-        self.enc = Some(z);
-        self.left_in_frame = len;
-        self.frames += 1;
-        Ok(())
-    }
-    fn finish(mut self) -> Result<u32> {
-        ensure!(self.remaining == 0 && self.enc.is_none(), "frame writer: {} bytes short", self.remaining);
-        self.out.take().unwrap().into_inner()?;
-        Ok(self.frames)
-    }
-}
-impl Write for FrameWriter {
-    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
-        if b.is_empty() { return Ok(0); }
-        if self.enc.is_none() {
-            if self.remaining == 0 { return Err(io::Error::other("write past announced size")); }
-            self.start()?;
-        }
-        let n = (b.len() as u64).min(self.left_in_frame) as usize;
-        self.enc.as_mut().unwrap().write_all(&b[..n])?;
-        self.left_in_frame -= n as u64;
-        self.remaining -= n as u64;
-        if self.left_in_frame == 0 {
-            self.out = Some(self.enc.take().unwrap().finish()?);
-        }
-        Ok(n)
-    }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
-}
-
-enum Out { Plain(io::BufWriter<File>), Zst(FrameWriter) }
-impl Write for Out {
-    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
-        match self { Out::Plain(w) => w.write(b), Out::Zst(w) => w.write(b) }
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        match self { Out::Plain(w) => w.flush(), Out::Zst(w) => w.flush() }
-    }
-}
-
 /// One btrfs-readable zstd frame for a 4 KiB-aligned chunk of at most 128 KiB
 /// (window <= 128 KiB, no checksum, no dictionary ID). Stays raw unless the
 /// frame saves at least one 4 KiB block on disk.
@@ -125,7 +57,7 @@ fn package_reader(input: &Path) -> Result<Box<dyn Read>> {
     })
 }
 
-fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max: u64, nframes: u64, min_frame: u64) -> Result<()> {
+fn convert(input: &Path, output: &Path, level: i32, small_max: u64) -> Result<()> {
     let mut ar = tar::Archive::new(package_reader(input)?);
     let mut entries = Vec::new();
     let mut small = Vec::new();
@@ -208,8 +140,7 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
     }
 
     // Compress every extent independently: zstd frames btrfs can read back
-    // (window <= 128 KiB, no checksum, no dictionary). Level 0 keeps the chunks
-    // raw, for .pkg.btr.zst where the outer zstd compresses and fetch frames.
+    // (window <= 128 KiB, no checksum, no dictionary). Level 0 keeps the btrparts raw.
     let compressed: Vec<(Chunk, Vec<u8>)> = jobs
         .into_par_iter()
         .map(|(off, data)| -> Result<(Chunk, Vec<u8>)> {
@@ -224,23 +155,13 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
     let chunks: Vec<Chunk> = compressed.iter().map(|(c, _)| *c).collect();
     let index = build_index(&entries, &small, &chunks, cursor)?;
     let tmp = part_path(output);
-    // .pkg.btr.zst: the whole .pkg.btr wrapped in one solid zstd stream (long window).
-    let outer = output.extension().is_some_and(|e| e == "zst");
     let file = File::create(&tmp)?;
-    let total = index.len() as u64 + compressed.iter().map(|(_, d)| d.len() as u64).sum::<u64>();
-    let mut out: Out = if outer {
-        Out::Zst(FrameWriter::new(io::BufWriter::new(file.try_clone()?), total, nframes, min_frame, outer_level))
-    } else {
-        Out::Plain(io::BufWriter::new(file.try_clone()?))
-    };
+    let mut out = io::BufWriter::new(file.try_clone()?);
     out.write_all(&index)?;
     for (_, d) in &compressed {
         out.write_all(d)?;
     }
-    match out {
-        Out::Plain(w) => { w.into_inner()?; }
-        Out::Zst(z) => { z.finish()?; }
-    }
+    out.into_inner()?;
     file.sync_all()?;
     fs::rename(&tmp, output)?;
     if stats.dedup_files > 0 { eprintln!("convert: {:?}", stats); }
@@ -321,7 +242,7 @@ fn set_nocomp(f: &File) {
 
 #[derive(Default, Debug)]
 #[allow(dead_code)]
-pub(crate) struct FetchStats { outer: bool, framed_here: bool, file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
+pub(crate) struct FetchStats { file_sha256: String, encoded_bytes: u64, encoded_chunks: u64, raw_bytes: u64, fallback_bytes: u64 }
 
 /// Hashes everything read through it: the bytes of the file as downloaded.
 struct HashReader { inner: Box<dyn Read + Send>, h: std::sync::Arc<std::sync::Mutex<sha2::Sha256>> }
@@ -330,77 +251,6 @@ impl Read for HashReader {
         let n = self.inner.read(b)?;
         sha2::Digest::update(&mut *self.h.lock().unwrap(), &b[..n]);
         Ok(n)
-    }
-}
-
-/// The outer stream of a .pkg.btr.zst is written with --long=27; nothing larger is accepted.
-const OUTER_WINDOW_LOG: u32 = 27;
-/// Largest outer frame decoded into memory (the spike holds frames in memory).
-const MAX_OUTER_FRAME: u64 = 8 << 30;
-
-/// Decode a .pkg.btr.zst: find the frame boundaries (block headers only, no
-/// decoding), then decode all frames in parallel. Spike limitation: the whole
-/// download and the whole inner stream are held in memory, and decoding starts
-/// once the download is complete.
-fn decode_frames(mut src: impl Read) -> Result<Box<dyn Read + Send>> {
-    let mut all = Vec::new();
-    src.read_to_end(&mut all)?;
-    // One frame: stream it, so decoding overlaps with framing and writing.
-    if zstd::zstd_safe::find_frame_compressed_size(&all).is_ok_and(|n| n == all.len()) {
-        let mut d = zstd::stream::read::Decoder::with_buffer(io::Cursor::new(all))?;
-        d.window_log_max(OUTER_WINDOW_LOG)?;
-        return Ok(Box::new(d));
-    }
-    let mut frames = Vec::new();
-    let mut pos = 0;
-    while pos < all.len() {
-        let n = zstd::zstd_safe::find_frame_compressed_size(&all[pos..])
-            .map_err(|e| anyhow::anyhow!("truncated package: bad zstd frame at {pos}: {}", zstd::zstd_safe::get_error_name(e)))?;
-        frames.push(pos..pos + n);
-        pos += n;
-    }
-    let bufs = frames
-        .par_iter()
-        .map(|r| -> Result<Vec<u8>> {
-            let f = &all[r.clone()];
-            match zstd::zstd_safe::get_frame_content_size(f) {
-                Ok(Some(size)) => {
-                    ensure!(size <= MAX_OUTER_FRAME, "zstd frame too large");
-                    let mut d = zstd::bulk::Decompressor::new()?;
-                    d.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(OUTER_WINDOW_LOG))?;
-                    let out = d.decompress(f, size as usize).context("truncated package: zstd frame")?;
-                    ensure!(out.len() as u64 == size, "zstd frame decoded to the wrong size");
-                    Ok(out)
-                }
-                _ => {
-                    // no content size (older single-frame files): stream it
-                    let mut d = zstd::stream::read::Decoder::new(f)?;
-                    d.window_log_max(OUTER_WINDOW_LOG)?;
-                    let mut out = Vec::new();
-                    (&mut d).take(MAX_OUTER_FRAME + 1).read_to_end(&mut out).context("truncated package: zstd frame")?;
-                    ensure!(out.len() as u64 <= MAX_OUTER_FRAME, "zstd frame too large");
-                    Ok(out)
-                }
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(Box::new(BufList { bufs: bufs.into(), pos: 0 }))
-}
-
-struct BufList { bufs: std::collections::VecDeque<Vec<u8>>, pos: usize }
-impl Read for BufList {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        while let Some(b) = self.bufs.front() {
-            if self.pos < b.len() {
-                let n = out.len().min(b.len() - self.pos);
-                out[..n].copy_from_slice(&b[self.pos..self.pos + n]);
-                self.pos += n;
-                return Ok(n);
-            }
-            self.bufs.pop_front();
-            self.pos = 0;
-        }
-        Ok(0)
     }
 }
 
@@ -437,31 +287,24 @@ impl ChunkWriter {
     }
 }
 
-/// Stream a transport file (.pkg.btr, or .pkg.btr.zst) into the package cache.
+/// Stream a transport file (.pkg.btr) into the package cache.
 /// The index (header, chunk table, entries, blob) is read and checked first; then every chunk
 /// is checked against its hash before it is written. The cache file is the index, padding,
-/// then the image with each zstd chunk as a btrfs compressed extent. Raw chunks of a
-/// .pkg.btr.zst are framed here (in parallel, at `level`) so they land compressed too.
+/// then the image with each zstd chunk as a btrfs compressed extent.
 /// `file_sha256`: expected sha256 of the file as downloaded (what pacman keeps in the repo
 /// database); optional, the index and chunk hashes already cover the contents.
-pub(crate) struct FetchOpts { pub use_encoded: bool, pub level: i32, pub verify_data: bool, pub fsync: bool }
+pub(crate) struct FetchOpts { pub use_encoded: bool, pub verify_data: bool, pub fsync: bool }
 
 #[allow(dead_code)]
-pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, level: i32, file_sha256: Option<&str>, trust: &sign::Trust) -> Result<FetchStats> {
-    fetch_with(input, cache, file_sha256, trust, &FetchOpts { use_encoded, level, verify_data: false, fsync: true })
+pub(crate) fn fetch(input: &str, cache: &Path, use_encoded: bool, file_sha256: Option<&str>, trust: &sign::Trust) -> Result<FetchStats> {
+    fetch_with(input, cache, file_sha256, trust, &FetchOpts { use_encoded, verify_data: false, fsync: true })
 }
 
 pub(crate) fn fetch_with(input: &str, cache: &Path, file_sha256: Option<&str>, trust: &sign::Trust, o: &FetchOpts) -> Result<FetchStats> {
-    let (use_encoded, level) = (o.use_encoded, o.level);
-    let mut src: Box<dyn Read + Send> = if input == "-" { Box::new(io::stdin()) } else { Box::new(File::open(input)?) };
-    let mut magic = [0u8; 4];
-    src.read_exact(&mut magic).context("empty package")?;
+    let use_encoded = o.use_encoded;
+    let src: Box<dyn Read + Send> = if input == "-" { Box::new(io::stdin()) } else { Box::new(File::open(input)?) };
     let file_hash = std::sync::Arc::new(std::sync::Mutex::new(<sha2::Sha256 as sha2::Digest>::new()));
-    sha2::Digest::update(&mut *file_hash.lock().unwrap(), magic);
     let src: Box<dyn Read + Send> = Box::new(HashReader { inner: src, h: file_hash.clone() });
-    let chained = io::Cursor::new(magic.to_vec()).chain(src);
-    let outer = magic == [0x28, 0xb5, 0x2f, 0xfd];
-    let src: Box<dyn Read + Send> = if outer { decode_frames(chained)? } else { Box::new(chained) };
     let mut rd = BufReader::with_capacity(1 << 20, src);
     // The header is checked (expected ID or signature) before anything else is read or written.
     let idx = read_index_checked(&mut rd, &|h| trust.check(h))?;
@@ -474,13 +317,12 @@ pub(crate) fn fetch_with(input: &str, cache: &Path, file_sha256: Option<&str>, t
     // kernel try to compress them. Without encoded writes the kernel must compress.
     if use_encoded { set_nocomp(&out); }
 
-    let mut st = FetchStats { outer, ..Default::default() };
+    let mut st = FetchStats::default();
     let mut w = ChunkWriter::new(use_encoded)?;
     const BATCH: usize = 16 << 20;
     type Batch = Vec<(usize, Chunk, Vec<u8>)>;
     let chunks = idx.chunks.clone();
-    // Pipeline: a reader thread decompresses the outer zstd and reads chunks, this
-    // thread checks them (and frames raw ones) in parallel and writes them.
+    // Pipeline: a reader thread reads and checks chunks (in parallel), this thread writes them.
     let (tx, rx) = std::sync::mpsc::sync_channel::<Batch>(2);
     let result: Result<()> = std::thread::scope(|s| {
         let reader = s.spawn(move || -> Result<()> {
@@ -500,28 +342,14 @@ pub(crate) fn fetch_with(input: &str, cache: &Path, file_sha256: Option<&str>, t
                 if tx.send(batch).is_err() { bail!("writer stopped"); }
             }
             drop(tx);
-            // Read to the end: finishes the outer frame (and checks its checksum),
-            // and refuses trailing data.
+            // Read to the end: refuses trailing data.
             let mut rest = [0u8; 1];
             ensure!(rd.read(&mut rest).context("reading package end")? == 0, "trailing data after package");
             Ok(())
         });
         let mut write_all = || -> Result<()> {
             for batch in rx.iter() {
-                // Raw chunks (from a .pkg.btr.zst) are framed here, in parallel, so they land
-                // as compressed extents too. Already-framed .pkg.btr chunks go straight through.
-                let frame_here = use_encoded && w.encoded_ok && level > 0;
-                let batch: Vec<(Chunk, Vec<u8>)> = if frame_here && outer && batch.iter().any(|(_, c, _)| c.compression == COMP_NONE) {
-                    st.framed_here = true;
-                    batch.into_par_iter().map(|(_, c, d)| -> Result<(Chunk, Vec<u8>)> {
-                        if c.compression != COMP_NONE { return Ok((c, d)); }
-                        let (comp, b) = frame(level, d)?;
-                        Ok((Chunk { compression: comp, encoded_len: b.len() as u32, ..c }, b))
-                    }).collect::<Result<_>>()?
-                } else {
-                    batch.into_iter().map(|(_, c, d)| (c, d)).collect()
-                };
-                for (c, data) in batch {
+                for (_, c, data) in batch {
                     w.write(&out, image_base + c.image_off, &c, &data)?;
                 }
             }
@@ -682,8 +510,8 @@ fn info(p: &Path) -> Result<()> {
 }
 
 const USAGE: &str = "usage:
-  btrpkg convert [-l N (default 12)] [--outer-level N] [--frames N] [--min-frame BYTES] [--small N] IN.pkg.tar.zst OUT(.pkg.btr|.pkg.btr.zst)
-  btrpkg fetch [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [-l N] [--sha256 HEX] IN|- CACHE
+  btrpkg convert [-l N (default 12)] [--small N] IN.pkg.tar.zst OUT.pkg.btr
+  btrpkg fetch [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--sha256 HEX] IN|- CACHE
   btrpkg install [--copy] CACHE ROOT
   btrpkg info FILE
   btrpkg dump FILE                        (the parsed index as text, to compare with other readers)
@@ -849,10 +677,7 @@ fn main() -> Result<()> {
     let mut flags: Vec<&str> = vec![];
     let mut pos: Vec<&str> = vec![];
     let mut level: Option<i32> = None;
-    let mut outer_level = 19;
     let mut sha: Option<String> = None;
-    let mut nframes = 1u64;
-    let mut min_frame = 1u64 << 20;
     let mut small_max = 4096u64;
     let mut key: Option<PathBuf> = None;
     let mut gpg_keyring: Option<PathBuf> = Some("/etc/pacman.d/gnupg/pubring.gpg".into());
@@ -876,10 +701,7 @@ fn main() -> Result<()> {
         let mut val = |n: &str| it.next().with_context(|| format!("{n} needs a value")).cloned();
         match a.as_str() {
             "-l" | "--level" => level = Some(val("-l")?.parse()?),
-            "--frames" => nframes = val("--frames")?.parse()?,
-            "--min-frame" => min_frame = val("--min-frame")?.parse()?,
             "--sha256" => sha = Some(val("--sha256")?),
-            "--outer-level" => outer_level = val("--outer-level")?.parse()?,
             "--small" => small_max = val("--small")?.parse()?,
             "--key" => key = Some(val("--key")?.into()),
             "--id" => trust.id = Some(val("--id")?),
@@ -912,15 +734,10 @@ fn main() -> Result<()> {
     }
     net::set_options(netopt)?;
     match pos.as_slice() {
-        // .pkg.btr: btrparts framed at -l (default DEFAULT_LEVEL). .pkg.btr.zst: raw btrparts (-l 0
-        // by default) inside one solid zstd stream at --outer-level.
-        ["convert", i, o] => {
-            let outer = o.ends_with(".zst");
-            convert(Path::new(i), Path::new(o), level.unwrap_or(if outer { 0 } else { DEFAULT_LEVEL }), outer_level, small_max, nframes, min_frame)
-        }
+        ["convert", i, o] => convert(Path::new(i), Path::new(o), level.unwrap_or(DEFAULT_LEVEL), small_max),
         ["fetch", i, c] => {
             let t = trust.resolve(if *i == "-" { None } else { fs::read_to_string(format!("{i}.sig")).ok() })?;
-            let fo = FetchOpts { use_encoded: !flags.contains(&"--no-encoded"), level: level.unwrap_or(3), verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync") };
+            let fo = FetchOpts { use_encoded: !flags.contains(&"--no-encoded"), verify_data: flags.contains(&"--verify-data"), fsync: !flags.contains(&"--no-fsync") };
             fetch_with(i, Path::new(c), sha.as_deref(), &t, &fo).map(|st| eprintln!("fetch: {st:?}"))
         }
         ["install", c, r] => install(Path::new(c), Path::new(r), flags.contains(&"--copy")).map(|st| eprintln!("install: {st:?}")),
@@ -1122,8 +939,7 @@ mod tests {
     }
 
     fn convert_to(src: &Path, out: &Path, level: i32) {
-        let zst = out.extension().is_some_and(|e| e == "zst");
-        convert(src, out, level, 19, 4096, if zst { 2 } else { 1 }, 4096).unwrap();
+        convert(src, out, level, 4096).unwrap();
     }
 
     #[test]
@@ -1290,11 +1106,11 @@ mod tests {
         let t = TempDir::new("cfi");
         let s = spec(1);
         let src = make_pkg(&t.0, "p-1-1", &s);
-        for (out, level) in [("p.pkg.btr", 19), ("p.pkg.btr.zst", 0)] {
+        for (out, level) in [("p.pkg.btr", 19), ("p0.pkg.btr", 0)] {
             let out = t.0.join(out);
             convert_to(&src, &out, level);
             let cache = t.0.join(format!("{}.cache", out.file_name().unwrap().to_string_lossy()));
-            let st = fetch(out.to_str().unwrap(), &cache, true, 3, None, &U).unwrap();
+            let st = fetch(out.to_str().unwrap(), &cache, true, None, &U).unwrap();
             assert!(st.encoded_chunks + st.fallback_bytes.min(1) + st.raw_bytes.min(1) > 0);
             let root = t.0.join(format!("root-{level}"));
             let ist = install(&cache, &root, false).unwrap();
@@ -1303,9 +1119,9 @@ mod tests {
             // and the file sha256 check
             let digest = hex(&sha256(&fs::read(&out).unwrap()));
             fs::remove_file(&cache).unwrap();
-            fetch(out.to_str().unwrap(), &cache, false, 3, Some(&digest), &U).unwrap();
+            fetch(out.to_str().unwrap(), &cache, false, Some(&digest), &U).unwrap();
             fs::remove_file(&cache).unwrap();
-            assert!(fetch(out.to_str().unwrap(), &cache, false, 3, Some(&"0".repeat(64)), &U).is_err());
+            assert!(fetch(out.to_str().unwrap(), &cache, false, Some(&"0".repeat(64)), &U).is_err());
             assert!(!cache.exists() && !part_path(&cache).exists());
         }
         // the large file is deduplicated: one copy in the image
@@ -1338,25 +1154,14 @@ mod tests {
             let mut c = b.clone();
             c[pos as usize] ^= 0x40;
             fs::write(&bad, &c).unwrap();
-            let e = fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U);
+            let e = fetch(bad.to_str().unwrap(), &cache, true, None, &U);
             assert!(e.is_err(), "{what}: accepted");
             assert!(!cache.exists() && !part_path(&cache).exists(), "{what}: left a file");
         }
         for (what, c) in [("truncated", b[..b.len() - 1].to_vec()), ("trailing", [b.as_slice(), b"x"].concat())] {
             fs::write(&bad, &c).unwrap();
-            assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U).is_err(), "{what}: accepted");
+            assert!(fetch(bad.to_str().unwrap(), &cache, true, None, &U).is_err(), "{what}: accepted");
             assert!(!cache.exists() && !part_path(&cache).exists(), "{what}: left a file");
-        }
-        // the outer-zstd form: a flipped byte anywhere is caught
-        let gz = t.0.join("p.pkg.btr.zst");
-        convert_to(&src, &gz, 0);
-        let z = fs::read(&gz).unwrap();
-        for pos in [10, z.len() / 2, z.len() - 3] {
-            let mut c = z.clone();
-            c[pos] ^= 0x01;
-            fs::write(&bad, &c).unwrap();
-            assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U).is_err(), "zst byte {pos}: accepted");
-            assert!(!cache.exists() && !part_path(&cache).exists());
         }
     }
 
@@ -1415,16 +1220,16 @@ mod tests {
             ("hardlink-to-symlink", vec![("usr", D, 0o755, b"", None), ("usr/s", S, 0o777, b"", Some(o.as_str())), ("usr/h", L, 0o644, b"", Some("usr/s"))]),
         ] {
             let src = make_tar(&t.0, n, &ents);
-            assert!(convert(&src, &t.0.join(format!("{n}.pkg.btr")), 19, 19, 4096, 1, 4096).is_err(), "{n}: converted");
+            assert!(convert(&src, &t.0.join(format!("{n}.pkg.btr")), 19, 4096).is_err(), "{n}: converted");
         }
         // through symlinks already on disk: refused by install, nothing outside changed, no
         // temporary file left
         let ok = make_tar(&t.0, "ok", &[("usr", D, 0o755, b"", None), ("usr/evil", D, 0o777, b"", None),
             ("usr/evil/x", F, 0o644, &[1u8; 9000], None), ("usr/y", F, 0o644, b"y", None)]);
         let btr = t.0.join("ok.pkg.btr");
-        convert(&ok, &btr, 19, 19, 4096, 1, 4096).unwrap();
+        convert(&ok, &btr, 19, 4096).unwrap();
         let cache = t.0.join("ok.cache");
-        fetch(btr.to_str().unwrap(), &cache, true, 3, None, &U).unwrap();
+        fetch(btr.to_str().unwrap(), &cache, true, None, &U).unwrap();
         let root = t.0.join("root");
         fs::create_dir_all(root.join("usr")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("usr/evil")).unwrap();
@@ -1465,7 +1270,7 @@ mod tests {
         fs::write(&bad, [ib.as_slice(), &b[idx.bytes.len()..]].concat()).unwrap();
         let cache = t.0.join("c.pkg.btr");
         // --verify-data decodes every chunk: refused, nothing left
-        let full = FetchOpts { use_encoded: true, level: 3, verify_data: true, fsync: false };
+        let full = FetchOpts { use_encoded: true, verify_data: true, fsync: false };
         let e = fetch_with(bad.to_str().unwrap(), &cache, None, &U, &full).unwrap_err();
         assert!(format!("{e:#}").contains("unencoded hash"), "{e:#}");
         assert!(!cache.exists() && !part_path(&cache).exists());
@@ -1475,7 +1280,7 @@ mod tests {
         // wrong unencoded hash can't be used for reuse later: reuse reads the data back
         let cdir = t.0.join("cdir");
         fs::create_dir_all(&cdir).unwrap();
-        fetch(bad.to_str().unwrap(), &cdir.join("w-1-1.pkg.btr"), true, 3, None, &U).unwrap();
+        fetch(bad.to_str().unwrap(), &cdir.join("w-1-1.pkg.btr"), true, None, &U).unwrap();
         let store = t.0.join("store");
         let src2 = make_pkg(&t.0, "w-1-2", &spec(10));
         convert_to(&src2, &t.0.join("w-1-2.pkg.btr"), 19);
@@ -1520,7 +1325,7 @@ mod tests {
         // a transport file with a detached signature (btrpkg sign)
         let tp = t.0.join("s-1-1.pkg.btr");
         let tsig = k.sign(&fs::read(&tp).unwrap()[..HDR], "repo");
-        fetch(tp.to_str().unwrap(), &cdir.join("d.pkg.btr"), true, 3, None, &trust(tsig)).unwrap();
+        fetch(tp.to_str().unwrap(), &cdir.join("d.pkg.btr"), true, None, &trust(tsig)).unwrap();
     }
 
 

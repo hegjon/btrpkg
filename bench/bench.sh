@@ -9,7 +9,6 @@
 #   pacman  - copy .pkg.tar.zst into the cache (the download), bsdtar -xp into the root
 #   btrpkg  - btrpkg fetch (encoded writes into the cache), btrpkg install (reflinks)
 #   noenc   - btrpkg fetch --no-encoded (decompress, kernel recompresses), btrpkg install
-#   fNAME   - btrpkg fetch -l $FETCHLEVEL of .pkg.btr.zst from bench/out-fNAME (list in ZSTDIRS)
 # LUKS=1: LUKS2 (aes-xts-plain64, 4096-byte sectors, LUKS_SECTOR to override) between partition
 #   and btrfs.
 #   Each scenario TRIMs the partition, formats and opens LUKS, then mkfs.btrfs on the mapper.
@@ -27,13 +26,11 @@ if findmnt -S $DEV >/dev/null; then echo "$DEV is mounted, refusing"; exit 1; fi
 size=$(blockdev --getsize64 $DEV); (( size > 100*1024**3 && size < 120*1024**3 )) || { echo "unexpected size $size"; exit 1; }
 
 echo "staging inputs into tmpfs"
-mkdir -p /exp/pkg /exp/btr /exp/btrzst
+mkdir -p /exp/pkg /exp/btr
 while read -r f; do
   cp /pkgs/$f /exp/pkg/; cp $CONV/${f%.pkg.tar.zst}.btrpkg /exp/btr/
-  [[ -d ${CONVZST:-/nonexistent} ]] && cp $CONVZST/${f%.pkg.tar.zst}.pkg.btr.zst /exp/btrzst/
-  for d in ${ZSTDIRS:-}; do mkdir -p /exp/$d; cp /w/bench/out-$d/${f%.pkg.tar.zst}.pkg.btr.zst /exp/$d/; done
 done <$SET
-du -sb /exp/pkg /exp/btr /exp/btrzst
+du -sb /exp/pkg /exp/btr
 
 written() { awk '{print $7*512}' /sys/class/block/$PART/stat; }
 used() { btrfs filesystem sync $T >/dev/null; btrfs filesystem usage -b $T 2>/dev/null | grep -m1 '^Data,' | grep -o 'Used:[0-9]*' | cut -d: -f2; }
@@ -69,10 +66,10 @@ run_pacman() {
       --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || return 1
   done <$SET
 }
-run_btrpkg() {  # $1 = extra fetch flags, $2 = input dir, $3 = input extension
+run_btrpkg() {  # $1 = extra fetch flags
   local c=$ROOT/var/cache/pacman/pkg
   while read -r f; do
-    local in=/exp/${2:-btr}/${f%.pkg.tar.zst}${3:-.btrpkg}
+    local in=/exp/btr/${f%.pkg.tar.zst}.btrpkg
     f=${f%.pkg.tar.zst}.pkg.btr
     $B fetch --unverified $1 $in $c/$f 2>>/tmp/fetch.log || return 1
     $B install $c/$f $ROOT 2>>/tmp/install.log || return 1
@@ -88,8 +85,6 @@ for round in $(seq $ROUNDS); do
       pacman) run_pacman ;;
       btrpkg) run_btrpkg "" ;;
       noenc)  run_btrpkg --no-encoded ;;
-      btrzst-l*) run_btrpkg "-l ${s#btrzst-l}" btrzst .pkg.btr.zst ;;
-      f[0-9]*) run_btrpkg "-l ${FETCHLEVEL:-3}" $s .pkg.btr.zst ;;
     esac || { echo "$s failed"; tail /tmp/*.log; exit 1; }
     sync; t1=$(now); w1=$(written)
     u=$(used)
@@ -111,7 +106,6 @@ while read -r f; do
   bsdtar -xp --numeric-owner -f /exp/pkg/$f -C $ROOT/a \
     --exclude .PKGINFO --exclude .BUILDINFO --exclude .MTREE --exclude .INSTALL --exclude .CHANGELOG || exit 1
   g=${f%.pkg.tar.zst}.btrpkg; in=/exp/btr/$g
-  [[ -n ${VERIFYZST:-} ]] && in=/exp/${VERIFYZST/#1/btrzst}/${f%.pkg.tar.zst}.pkg.btr.zst
   $B fetch --unverified $in $c/$g 2>/dev/null && $B install $c/$g $ROOT/b 2>/dev/null || { echo "btrpkg failed on $f"; exit 1; }
 done <$SET
 python3 /w/bench/compare.py $ROOT/a $ROOT/b | tee $OUT/${OUTNAME:-matrix}-verify.txt
