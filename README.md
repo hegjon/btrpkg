@@ -104,8 +104,7 @@ omarchy-mirror/
 │   └── .raw/xx/HASH           raw map, build server only (dot directory, caddy hides it)
 └── x86_64/
     ├── omarchy.db             btrpkg.parts=../btrparts in every btrpkg entry
-    ├── index/NAME.btridx(.sig)
-    └── chunks -> ../btrparts  for clients from before the rename
+    └── index/NAME.btridx(.sig)
 arch-mirror/
 ├── btrparts/                  shared by core/os/x86_64 and extra/os/x86_64
 ├── core/os/x86_64/core.db     btrpkg.parts=../../../btrparts
@@ -135,8 +134,16 @@ arch-mirror/
   Every repository checked out: 0 missing among the btrparts its indexes name (48,104 references
   for omarchy-mirror, 23,176 core, 66,949 extra). No packages were converted again
   (`converted: 0`). The mirror timer's next pass found nothing new to convert.
-- Old clients still work. pacman-btrpkg -4 on p14s fetched `x86_64/chunks/xx/HASH` through the
-  symlink, and `-Qkk` found 0 altered files. The symlink can go once every client has pkgrel 5.
+- The move left compat symlinks for the transition: `chunks -> ../btrparts` for pkgrel ≤4 clients
+  (pacman-btrpkg -4 on p14s installed through it, 0 altered files) and `btrparts -> ../btrparts`
+  for new clients with a db synced before the move. After every client was upgraded, both were
+  removed (2026-11-21). The clients were p14s and x200, t460s and t490, which still had the
+  iteration-1 dev builds in `/usr/local/bin` and `/opt/pacbtr`; those were replaced by btrpkg-git
+  r55 and pacman-btrpkg -5. `bench/btrparts-client-check.sh` (throwaway dbpath and cache, `-Sw`)
+  then downloaded through the database's path on all four: the test repo (`../btrparts`) on x200,
+  t460s and t490, and the omarchy, core and extra mirrors on p14s (`../btrparts`,
+  `../../../btrparts`). Every btrpart request went to the shared directories
+  (`bench/results/lab-20261121-btrparts/client-check*.txt`).
 - With an aarch64 directory beside x86_64, the measured overlap means it would add 2.04 GB
   instead of 3.29 GB of btrparts.
 

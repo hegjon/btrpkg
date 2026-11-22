@@ -2,7 +2,8 @@
 """One-off: move each repository's chunks/ and raw/ into the shared btrparts directory, leave
 chunks -> ../btrparts (clients from before the rename) and btrparts -> ../btrparts (new clients
 with a database from before the move) symlinks, rewrite every database with
-btrpkg.parts, then check that every btrpart every index names is there."""
+btrpkg.parts, then check that every btrpart every index names is there. (The symlinks were removed
+again once every client had pacman-btrpkg -5 / btrpkg-git r55.)"""
 import os, subprocess, sys
 R = os.path.expanduser("~/Work/btrpkg-repo")
 B = os.path.expanduser("~/Work/btrpkg/target/release/btrpkg")
