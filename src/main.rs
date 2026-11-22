@@ -701,12 +701,14 @@ const USAGE: &str = "usage:
       (for package managers: every NAME's index must have the header ID IDHEX; all packages share
        one download queue; writes CACHEDIR/NAME.pkg.btr, and NAME.pkg.btr.sig when the server
        has a signature; one syncfs at the end)
-  btrpkg fetch-ids [--landlock] [--progress] [--installed ROOT] [--cachedir DIR] [--want FILE] --server URL... DIR NAME=IDHEX...
+  btrpkg fetch-ids [--landlock] [--progress] [--installed ROOT] [--cachedir DIR] [--want FILE | --index-only [--skip-missing]] [--parts REL] --server URL... DIR NAME=IDHEX...
       (the unprivileged, network half of pull-ids: indexes and the chunks that can't come from
        the machine into the directory store DIR; servers tried in order; --landlock: write only
        to DIR, run nothing. The other half: pull-ids [--missing-to FILE] [--consume] ... DIR CACHEDIR ...,
        which exits 3 and lists the chunks DIR lacks if a local file didn't check out, and with
-       --consume removes DIR after success. For package managers: fetch-ids --index-only, then
+       --consume removes DIR after success. For package managers: fetch-ids --index-only (with
+       --skip-missing a package no server has an index for is left out: no DIR/index/NAME.btridx,
+       the caller downloads its package file instead), then
        pull-ids --fetch-via FILE, which hashes and reuses local data, lists exactly the missing
        chunks in FILE, prints fetch N BYTES and waits for go on stdin while the caller runs
        fetch-ids --want FILE. pull-ids --plan checks local data the same way, writes nothing and
@@ -901,7 +903,7 @@ fn main() -> Result<()> {
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
-            "--keep-going" | "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" | "--progress" | "--landlock" | "--consume" | "--index-only" | "--plan" => flags.push(a.as_str()),
+            "--keep-going" | "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" | "--progress" | "--landlock" | "--consume" | "--index-only" | "--skip-missing" | "--plan" => flags.push(a.as_str()),
             s if s.starts_with('-') && s.len() > 1 => bail!("unknown option {s}\n{USAGE}"),
             s => pos.push(s),
         }
@@ -989,7 +991,7 @@ fn main() -> Result<()> {
             }
             let w = match &want { Some(p) => Some(fs::read_to_string(p)?.lines().filter(|l| !l.is_empty()).map(String::from).collect()), None => None };
             let o = fetchids::FetchOpts { installed: installed.as_deref(), cachedir: cachedir.as_deref(), want: w, progress: flags.contains(&"--progress"),
-                index_only: flags.contains(&"--index-only"), parts: parts.as_deref().unwrap_or(net::DEFAULT_PARTS) };
+                index_only: flags.contains(&"--index-only"), skip_missing: flags.contains(&"--skip-missing"), parts: parts.as_deref().unwrap_or(net::DEFAULT_PARTS) };
             fetchids::fetch_ids(&srcs, dir, &ids, &o)
         }
         ["repo-update", d, r] => {

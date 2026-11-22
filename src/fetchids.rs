@@ -35,6 +35,9 @@ pub(crate) struct FetchOpts<'a> {
     pub progress: bool,
     /// only the indexes (and signatures)
     pub index_only: bool,
+    /// with index_only: a package no server has a (valid) index for is left out instead of
+    /// failing the run; pacman then downloads its package file (DIR/index/NAME.btridx missing)
+    pub skip_missing: bool,
     /// the servers' btrparts directory, relative to each (net::DEFAULT_PARTS by default)
     pub parts: &'a str,
 }
@@ -92,7 +95,13 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
                 Err(e) => eprintln!("btrpkg: {name} from {}: {e:#}", s.describe()),
             }
         }
-        let (idx, ib, sig) = got.with_context(|| format!("{name}: no server has its index"))?;
+        let Some((idx, ib, sig)) = got else {
+            ensure!(o.skip_missing && o.index_only, "{name}: no server has its index");
+            // no stale index (one that failed its check above) for pacman to mistake for one
+            let _ = fs::remove_file(&ip);
+            let _ = fs::remove_file(dir.join("index").join(format!("{name}.btridx.sig")));
+            continue;
+        };
         store::write_atomic(&ip, &ib)?;
         let sp = dir.join("index").join(format!("{name}.btridx.sig"));
         match sig { Some(t) => store::write_atomic(&sp, t.as_bytes())?, None => { let _ = fs::remove_file(&sp); } }
