@@ -217,8 +217,9 @@ installed tree checked equal to the package file's):
 
 These match what `bench/moved-files.py` finds reusable by content in the old version (38.0, 4.9,
 39.3 and 35.1 MB), so the guess by size and name finds all of it here. Modules are signed with a
-per-build key, so most of a kernel package changes anyway. Plan time went up by 0.04–0.3 s
-(stat of the old version's files, reading the moved data back).
+per-build key, so most of a kernel package changes anyway. The whole pull from a local directory
+took between 0.1 s less and 0.3 s more (stat of the old version's files and reading the moved data
+back, against less to write).
 
 ## Repository side
 
