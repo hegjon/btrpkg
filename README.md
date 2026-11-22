@@ -89,6 +89,36 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Cleanup: `btrpkg gc` (2026-11-22)
+
+`btrpkg gc [--keep N] [--min-age SECS] [--dry-run] BTRPARTS` removes old package versions from
+every repository that shares a btrparts directory, then removes the btrparts no kept index names.
+
+- **What stays.** Per package name and repository: the version the database names, anything
+  newer (published, db not swapped yet), and the N-1 newest older versions. The default N=2 means
+  current + previous. A package gone from the database keeps its N-1 newest versions. A removed
+  version loses its index, `.sig`, `.src`, and on mirrors its `.pkg.tar.*` and `.sig`.
+- **Shared directory.** The repositories are found under the btrparts directory's parent (any
+  directory with `index/` and one `REPO.db`). Every one of them is marked. A btrpart goes only when
+  no kept index in any of them names it. A repository whose db points its entries somewhere else
+  is marked but not pruned. Raw map entries (`.raw/`) leading to a removed btrpart go too.
+- **Safety.**
+  - It holds every repository's `.lock`; a running mirror pass makes it stop.
+  - Nothing younger than an hour is removed.
+  - An unreadable index stops the run before anything is deleted.
+  - Indexes go before btrparts, so an interrupted run leaves extra btrparts, never an index
+    without its btrparts.
+- **Mirror.** `mirror-all.sh` runs it once per btrparts directory after all repositories, unless
+  a repository failed in that pass. `GC_KEEP` and `NO_GC` override.
+- **First run** (omarchy-mirror): 14 old versions of `omarchy-dev` and `omarchy-settings-dev`
+  went (git builds r8121–r8143; r8160 and r8147 stay), with their package files and 649 btrparts:
+  593 MiB, 3,589 → 2,999 MiB. Afterwards 0 of the 42,812 btrpart references were missing, and
+  pacman-btrpkg on p14s downloaded the current versions. It takes 0.16 s there and 0.68 s for
+  arch-mirror's 829 indexes and 89,689 btrparts (nothing old there yet).
+- A client whose database is older than the previous version gets no index. pacman-btrpkg then
+  fails the transaction instead of falling back to the `.pkg.tar.zst` from another server. That is
+  the same outcome as a stale db against an Arch mirror (404), but the fallback would be better.
+
 ## Shared btrparts directory beside the architectures (2026-11-21)
 
 A btrpart is one entry of an index's table: up to 128 KiB of one file's data, stored the way

@@ -22,6 +22,7 @@ mod format;
 mod cache;
 mod fetchids;
 mod fsx;
+mod gc;
 mod net;
 mod repo;
 mod sign;
@@ -711,6 +712,11 @@ const USAGE: &str = "usage:
        fetch-ids --want FILE. pull-ids --plan checks local data the same way, writes nothing and
        prints need NAME CHUNK_BYTES INDEX_BYTES per package: the download size)
   btrpkg cache-clean [--keep N] [--dry-run] CACHEDIR
+  btrpkg gc [--keep N] [--min-age SECS] [--dry-run] BTRPARTS
+       repository side: in every repository under BTRPARTS's parent (they share it), keep each
+       package's current version, anything newer, and N-1 older ones (default 2: current +
+       previous); remove the other indexes and package files, then the btrparts no kept index
+       names. Nothing younger than --min-age (default 3600) goes; busy mirror locks stop it.
       (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
@@ -857,6 +863,8 @@ fn main() -> Result<()> {
     let mut want: Option<PathBuf> = None;
     let mut missing_to: Option<PathBuf> = None;
     let mut keep: usize = 3;
+    let mut keep_given = false;
+    let mut min_age: u64 = 3600;
     let mut fetch_via: Option<PathBuf> = None;
     let mut trust = TrustArgs { id: None, sig: None, keys: vec![], unverified: false };
     let mut it = args.iter();
@@ -883,7 +891,8 @@ fn main() -> Result<()> {
             "--http" => netopt.version = Some(val("--http")?),
             "--server" => servers.push(val("--server")?),
             "--parts" => parts = Some(val("--parts")?),
-            "--keep" => keep = val("--keep")?.parse()?,
+            "--keep" => { keep = val("--keep")?.parse()?; keep_given = true; }
+            "--min-age" => min_age = val("--min-age")?.parse()?,
             "--fetch-via" => fetch_via = Some(val("--fetch-via")?.into()),
             "--cachedir" => cachedir = Some(val("--cachedir")?.into()),
             "--want" => want = Some(val("--want")?.into()),
@@ -960,6 +969,12 @@ fn main() -> Result<()> {
             }
             r => r,
         },
+        ["gc", p] => {
+            let o = gc::GcOpts { keep: if keep_given { keep } else { 2 }, min_age: std::time::Duration::from_secs(min_age), dry_run: flags.contains(&"--dry-run") };
+            gc::gc(Path::new(p), &o).map(|st| eprintln!("gc{}: {} repositories; indexes {} kept, {} removed ({} package files); btrparts {} kept, {} removed, {} too young to remove; {} raw map entries removed; {:.1} MiB",
+                if o.dry_run { " (dry run)" } else { "" }, st.repos, st.indexes_kept, st.indexes_removed, st.pkg_files_removed,
+                st.parts_kept, st.parts_removed, st.parts_young, st.raw_removed, st.bytes_removed as f64 / 1048576.0))
+        }
         ["cache-clean", d] => cache::cache_clean(Path::new(d), keep, flags.contains(&"--dry-run")).map(|st| eprintln!("cache-clean: {st:?}")),
         ["fetch-ids", dir, pkgs @ ..] => {
             let dir = Path::new(dir);
@@ -1097,6 +1112,97 @@ mod tests {
     fn convert_to(src: &Path, out: &Path, level: i32) {
         let zst = out.extension().is_some_and(|e| e == "zst");
         convert(src, out, level, 19, 4096, if zst { 2 } else { 1 }, 4096).unwrap();
+    }
+
+    #[test]
+    fn gc_shared_btrparts() {
+        // two repositories share ../btrparts; p has versions 1, 2, 3 in x86_64 (db names 3) and
+        // version 1 in aarch64 (db names 1): with --keep 2 only x86_64's p-1 goes, and only the
+        // btrparts no kept index of either repository names
+        let t = TempDir::new("gc");
+        let root = t.0.join("r");
+        let (x, a) = (root.join("x86_64"), root.join("aarch64"));
+        fs::create_dir_all(&x).unwrap();
+        fs::create_dir_all(&a).unwrap();
+        let parts = root.join("btrparts");
+        fs::create_dir_all(&parts).unwrap();
+        // versions differ in "other" (seed); "big" is shared by all of them
+        let mut stems = vec![];
+        for (dir, v, seed) in [(&x, "1-1", 11u64), (&x, "2-1", 12), (&x, "3-1", 13), (&a, "1-1", 11)] {
+            let stem = format!("p-{v}-x86_64");
+            let src = make_pkg(dir, &stem, &spec(seed));
+            let btr = t.0.join(format!("{stem}.pkg.btr"));
+            convert_to(&src, &btr, 3);
+            store::publish(&btr, dir, &parts, None).unwrap();
+            stems.push((dir.to_path_buf(), stem));
+        }
+        let db = |dir: &Path, cur: &str| {
+            let desc = format!("%FILENAME%\n{cur}.pkg.tar.zst\n\n%NAME%\np\n\n%DATA%\nbtrpkg.index=index/{cur}.btridx\nbtrpkg.parts=../btrparts\n\n");
+            let mut tb = tar::Builder::new(Vec::new());
+            let mut h = tar::Header::new_gnu();
+            h.set_path("p/desc").unwrap(); h.set_mode(0o644); h.set_size(desc.len() as u64); h.set_cksum();
+            tb.append(&h, desc.as_bytes()).unwrap();
+            fs::write(dir.join("t.db"), tb.into_inner().unwrap()).unwrap();
+        };
+        db(&x, "p-3-1-x86_64");
+        db(&a, "p-1-1-x86_64");
+        let names = |idx: &Path| -> std::collections::HashSet<Hash> { parse_index(&fs::read(idx).unwrap()).unwrap().chunks.iter().map(|c| c.stored).collect() };
+        let ix = |d: &Path, s: &str| d.join("index").join(format!("{s}.btridx"));
+        let p1 = names(&ix(&x, "p-1-1-x86_64"));
+        let p2 = names(&ix(&x, "p-2-1-x86_64"));
+        let p3 = names(&ix(&x, "p-3-1-x86_64"));
+        let count = || walk_files(&parts).len();
+        let before = count();
+        // too young: nothing goes
+        let o = gc::GcOpts { keep: 2, min_age: std::time::Duration::from_secs(3600), dry_run: false };
+        let st = gc::gc(&parts, &o).unwrap();
+        assert_eq!((st.repos, st.indexes_removed, st.parts_removed), (2, 0, 0), "{st:?}");
+        let o = gc::GcOpts { min_age: std::time::Duration::ZERO, ..o };
+        let dry = gc::gc(&parts, &gc::GcOpts { dry_run: true, ..o }).unwrap();
+        assert_eq!(count(), before);
+        let st = gc::gc(&parts, &o).unwrap();
+        assert_eq!((dry.indexes_removed, dry.parts_removed), (st.indexes_removed, st.parts_removed));
+        assert_eq!((st.indexes_removed, st.pkg_files_removed), (1, 1), "{st:?}");
+        assert!(!ix(&x, "p-1-1-x86_64").exists() && !x.join("p-1-1-x86_64.pkg.tar.zst").exists());
+        assert!(ix(&x, "p-2-1-x86_64").exists() && ix(&x, "p-3-1-x86_64").exists() && ix(&a, "p-1-1-x86_64").exists());
+        // p-1's btrparts all stay: aarch64's current p-1 names the same ones
+        let has = |h: &Hash| { let s = hex(h); parts.join(&s[..2]).join(&s).exists() };
+        assert!(p1.iter().chain(&p2).chain(&p3).all(has));
+        assert_eq!(st.parts_removed, 0, "{st:?}");
+        // aarch64 moves to 3: its p-1 is previous now, still kept; at --keep 1 it goes, and with
+        // it the btrparts only p-1 had
+        db(&a, "p-3-1-x86_64");
+        let src = make_pkg(&a, "p-3-1-x86_64", &spec(13));
+        let btr = t.0.join("a3.pkg.btr");
+        convert_to(&src, &btr, 3);
+        fs::rename(&btr, t.0.join("p-3-1-x86_64.pkg.btr")).unwrap();
+        store::publish(&t.0.join("p-3-1-x86_64.pkg.btr"), &a, &parts, None).unwrap();
+        let st = gc::gc(&parts, &gc::GcOpts { keep: 1, ..o }).unwrap();
+        assert_eq!(st.indexes_removed, 2, "{st:?}"); // x86_64 p-2, aarch64 p-1
+        let only1: Vec<&Hash> = p1.iter().filter(|h| !p3.contains(*h)).collect();
+        assert!(!only1.is_empty() && only1.iter().all(|h| !has(h)));
+        assert!(p3.iter().all(has));
+        assert!(st.parts_removed >= only1.len() && st.raw_removed > 0, "{st:?}");
+        // every raw map entry left leads to a btrpart that is there
+        for f in walk_files(&parts.join(".raw")) {
+            let s = fs::read_to_string(f).unwrap();
+            let h = s.split_whitespace().nth(2).unwrap();
+            assert!(parts.join(&h[..2]).join(h).exists());
+        }
+        // an unreadable index stops the run before anything goes
+        fs::write(ix(&x, "p-0-1-x86_64"), b"junk").unwrap();
+        fs::write(ix(&x, "p-9-1-x86_64"), b"junk").unwrap();
+        assert!(gc::gc(&parts, &o).is_err());
+    }
+
+    fn walk_files(d: &Path) -> Vec<PathBuf> {
+        let mut v = vec![];
+        for e in fs::read_dir(d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.file_name().is_some_and(|n| n == ".raw") { continue; }
+            if p.is_dir() { v.extend(walk_files(&p)); } else { v.push(p); }
+        }
+        v
     }
 
     #[test]

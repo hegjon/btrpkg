@@ -16,10 +16,10 @@ use std::sync::Mutex;
 #[derive(Default, Debug)]
 pub(crate) struct RepoStats { pub packages: u64, pub converted: u64, pub unchanged: u64, pub failed: u64, pub missing: u64, pub dropped: u64, pub new_chunk_bytes: u64 }
 
-struct Desc { fields: Vec<(String, Vec<String>)> }
+pub(crate) struct Desc { pub fields: Vec<(String, Vec<String>)> }
 
 impl Desc {
-    fn parse(text: &str) -> Desc {
+    pub(crate) fn parse(text: &str) -> Desc {
         let mut fields: Vec<(String, Vec<String>)> = Vec::new();
         for l in text.lines() {
             if l.starts_with('%') && l.ends_with('%') && l.len() > 2 {
@@ -55,9 +55,9 @@ impl Desc {
     }
 }
 
-enum Comp { Zstd, Gzip, None }
+pub(crate) enum Comp { Zstd, Gzip, None }
 
-fn read_db(p: &Path) -> Result<(Comp, Vec<u8>)> {
+pub(crate) fn read_db(p: &Path) -> Result<(Comp, Vec<u8>)> {
     let b = fs::read(p).with_context(|| format!("read {}", p.display()))?;
     if b.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
         Ok((Comp::Zstd, zstd::stream::decode_all(&b[..])?))
