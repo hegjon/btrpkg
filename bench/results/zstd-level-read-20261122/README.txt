@@ -116,3 +116,10 @@ Why the kernel looked slower (p14s, Ryzen 7 PRO 5850U, linux-omarchy 7.2.15, lev
 - Not a cause: feeding zstd 4 KiB of output per call (userspace stream4k is within 4% of one-shot decoding),
   no SIMD/asm in the kernel (within 3%), the BMI2 probe (0.13%). There is no zstd kernel patch to make here;
   what costs is parallel decoding on shared cores, which still gives the shortest wall time (0.72 vs 1.13 s).
+
+Writing btrparts in parallel (p14s, the 8 packages at level 12, 365 MB stored, from local transports;
+bench/kzstd/parallel-write.sh, 3 rounds): `btrpkg fetch` one package after another 0.86-0.89 s, all 8 at once
+0.58-0.62 s, sync afterwards 0.07-0.10 s either way. The encoded writes themselves took 0.27 s for 12,942
+btrparts (21 us each, strace), i.e. ~1.3 GB/s of stored data from one thread; the parallel gain is mostly
+the reading and the userspace work overlapping. btrfs locks the inode for an encoded write, so btrparts
+of one file can't be written in parallel anyway (libreoffice-fresh is 45% of this set).
