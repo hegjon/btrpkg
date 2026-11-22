@@ -9,7 +9,7 @@
 //!   btrpkg.parts=<the btrparts directory, relative to the repository's directory>
 //! pacman reads `%DATA%` silently, so the same database serves plain pacman unchanged. The
 //! `.pkg.tar.zst` files stay. Order: chunks, signatures and indexes first, the database last.
-//! Packages already converted from the same file (NAME.pkg.btr.src holds its SHA-256) are skipped.
+//! Packages already converted from the same file (PKGFILE.sha256sum holds its SHA-256) are skipped.
 use super::*;
 use std::sync::Mutex;
 
@@ -183,8 +183,8 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
         let name = fname.trim_end_matches(".pkg.tar.zst").trim_end_matches(".pkg.tar.xz").to_string();
         let r = (|| -> Result<(Hash, u64, bool)> {
             let ip = dir.join(store::index_rel(&name));
-            let srcp = dir.join(store::src_rel(&name));
-            if fs::read_to_string(&srcp).is_ok_and(|s| s.trim() == want) && ip.exists() {
+            let sump = dir.join(store::sum_rel(&fname));
+            if fs::read_to_string(&sump).is_ok_and(|s| s.split_whitespace().next() == Some(want.as_str())) && ip.exists() {
                 let ib = fs::read(&ip)?;
                 let idx = parse_index(&ib)?;
                 return Ok((idx.hdr.id(), idx.hdr.transport_len(&idx.chunks), false));
@@ -201,7 +201,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             let _ = fs::remove_file(&tmp);
             let ib = fs::read(&ip)?;
             let idx = parse_index(&ib)?;
-            store::write_atomic(&srcp, format!("{want}\n").as_bytes())?;
+            store::write_atomic(&sump, format!("{want}  {fname}\n").as_bytes())?;
             st.lock().unwrap().new_chunk_bytes += ps.new_bytes;
             Ok((idx.hdr.id(), idx.hdr.transport_len(&idx.chunks), true))
         })();

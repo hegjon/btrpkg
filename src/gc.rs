@@ -163,10 +163,10 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     }
     st.indexes_kept = kept.len();
 
-    // 3. old versions: index, signature, source record, and the mirror's package file
+    // 3. old versions: index, signature, and the mirror's package file (+ .sig, .sha256sum)
     for (dir, stem) in &doomed {
         println!("{}{}", if o.dry_run { "would remove " } else { "removed " }, dir.join(store::index_rel(stem)).display());
-        for f in [store::sig_rel(stem), store::src_rel(stem), store::index_rel(stem)] {
+        for f in [store::sig_rel(stem), store::index_rel(stem)] {
             remove(&dir.join(f), o.dry_run, &mut st.bytes_removed)?;
         }
         st.indexes_removed += 1;
@@ -174,6 +174,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
             let p = dir.join(format!("{stem}.pkg.tar.{ext}"));
             if remove(&p, o.dry_run, &mut st.bytes_removed)? { st.pkg_files_removed += 1; }
             remove(&dir.join(format!("{stem}.pkg.tar.{ext}.sig")), o.dry_run, &mut st.bytes_removed)?;
+            remove(&dir.join(store::sum_rel(&format!("{stem}.pkg.tar.{ext}"))), o.dry_run, &mut st.bytes_removed)?;
         }
     }
 

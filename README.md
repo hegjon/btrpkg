@@ -37,8 +37,8 @@ omarchy-mirror/
 ├── x86_64/
 │   ├── omarchy.db                                 pacman database, btrpkg fields in %DATA%
 │   ├── gliff-0.4.3-1-x86_64.pkg.tar.zst (+ .sig)  the package file: stock pacman, fallback
-│   ├── gliff-0.4.3-1-x86_64.pkg.btr     (+ .sig)  the index (thin .pkg.btr), signify signature
-│   └── gliff-0.4.3-1-x86_64.pkg.btr.src           mirrors: SHA-256 of the package file it came from
+│   ├── gliff-0.4.3-1-x86_64.pkg.tar.zst.sha256sum "HASH  FILE": the package file this index came from
+│   └── gliff-0.4.3-1-x86_64.pkg.btr     (+ .sig)  the index (thin .pkg.btr), signify signature
 ├── aarch64/                                       the same layout
 └── btrparts/                                      shared by x86_64 and aarch64
     └── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
@@ -140,7 +140,8 @@ Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems,
 - `btrpkg repo-update [--db-in UPSTREAM.db] DIR REPO`: converts and publishes every new package
   file in DIR (checked against the database's SHA-256 and, unless `--no-gpg`, its OpenPGP
   signature), signs the indexes (`--key`), and writes REPO.db last with the btrpkg fields.
-  Unchanged packages are recognised by `NAME.pkg.btr.src`.
+  Unchanged packages are recognised by `PKGFILE.sha256sum` (written after a publish, sha256sum's
+  format, so `sha256sum -c` checks the package file too).
 - `mirror/` (details in `mirror/README.md`): `mirror-all.sh` runs `repo-mirror.sh` for each line of
   `repos.conf` every 10 minutes (systemd user timer): upstream database through pacoloco, the
   wanted packages (lists plus 404s learned from caddy's log), `repo-update`, then `btrpkg gc` per

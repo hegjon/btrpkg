@@ -32,9 +32,12 @@ pub(crate) fn index_rel(name: impl std::fmt::Display) -> String { format!("{name
 pub(crate) fn index_name(rel: &str) -> Option<&str> {
     rel.strip_suffix(INDEX_EXT).filter(|n| !n.is_empty() && !n.starts_with('.') && !n.contains('/'))
 }
-/// Its signify signature, and (repositories) the SHA-256 of the package file it was made from.
+/// Its signify signature.
 pub(crate) fn sig_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}.sig") }
-pub(crate) fn src_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}.src") }
+/// Repositories: the SHA-256 of a package file an index was made from, beside the package file
+/// (`PKGFILE.sha256sum`, in sha256sum's format: "HASH  PKGFILE"), so repo-update knows the file
+/// is converted already.
+pub(crate) fn sum_rel(pkgfile: &str) -> String { format!("{pkgfile}.sha256sum") }
 
 /// NAME-VER-REL-ARCH -> (NAME, VER-REL)
 pub(crate) fn split_stem(stem: &str) -> Option<(&str, &str)> {

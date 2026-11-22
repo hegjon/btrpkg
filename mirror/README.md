@@ -35,7 +35,7 @@ omarchy-mirror/
 │   ├── omarchy.db -> omarchy.db.tar.zst      upstream's database with btrpkg fields
 │   ├── NAME.pkg.tar.zst (+ .sig)             upstream's package file (stock pacman, fallback)
 │   ├── NAME.pkg.btr (+ .sig)                 the index, signed with the mirror's key
-│   ├── NAME.pkg.btr.src                      SHA-256 of the package file it was made from
+│   ├── NAME.pkg.tar.zst.sha256sum            "HASH  FILE": the package file the index was made from
 │   ├── .upstream.db, .done, .lock, .wanted-learned
 ├── aarch64/
 └── btrparts/xx/HASH                          shared by both architectures
@@ -57,7 +57,7 @@ Arch's repositories use `$repo/os/$arch` and share `arch-mirror/btrparts`
    `.sig` upstream: Omarchy aarch64's obsidian) keeps its plain entry.
 4. After all repositories: `btrpkg gc --keep 2` per btrparts directory (skipped if any repository
    failed; `NO_GC=1`, `GC_KEEP=N`). Each package keeps its current version, anything newer and one
-   older; other versions lose index, signature, `.src` and package file, then unreferenced btrparts
+   older; other versions lose index, signature, package file and its `.sha256sum`, then unreferenced btrparts
    go. Nothing younger than an hour is removed; repository locks are held.
 
 The mirror signs an index only after upstream's own signature has checked out, so a client that
