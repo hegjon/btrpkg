@@ -28,7 +28,7 @@ else echo "$default" > "$ml"; fi
 chmod 644 "$ml"
 docker run --rm --network host --platform "$platform" \
   -v "$repo:/src:ro" -v "$out:/out" -v "$ml:/etc/pacman.d/mirrorlist.host:ro" \
-  -e BTRPKG_SRC="${BTRPKG_SRC:-}" -e KEYRING="$keyring" -e OWNER="$(id -u):$(id -g)" "$image" bash -euo pipefail -c '
+  -e BTRPKG_SRC="${BTRPKG_SRC:-}" -e PACKAGER="${PACKAGER:-btrpkg build.sh}" -e KEYRING="$keyring" -e OWNER="$(id -u):$(id -g)" "$image" bash -euo pipefail -c '
     cp /etc/pacman.d/mirrorlist.host /etc/pacman.d/mirrorlist
     # (a container has no meaningful mount points to check. The download sandbox needs Landlock
     # and a switch to the alpm user, and qemu-user has neither; archlinux:latest itself sets
@@ -43,7 +43,7 @@ docker run --rm --network host --platform "$platform" \
     cp -rL /src/packaging /home/builder/packaging    # -L: the patch symlinks become files
     chown -R builder: /home/builder/packaging
     git config --system --add safe.directory "*"
-    b() { su builder -c "cd /home/builder/packaging/$1 && BTRPKG_SRC=\"$BTRPKG_SRC\" makepkg -f --noconfirm $2"; }
+    b() { su builder -c "cd /home/builder/packaging/$1 && BTRPKG_SRC=\"$BTRPKG_SRC\" PACKAGER=\"$PACKAGER\" makepkg -f --noconfirm $2"; }
     pkgs() { find /home/builder/packaging/$1 -maxdepth 1 -name "*.pkg.tar.*" ! -name "*.sig" ! -name "*-debug-*"; }
     echo "== btrpkg-git"; b btrpkg ""
     pacman -U --noconfirm $(pkgs btrpkg) >/dev/null

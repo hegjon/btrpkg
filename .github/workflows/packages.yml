@@ -26,15 +26,17 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # pkgver counts commits
       - name: Arch Linux ARM image
         if: matrix.arch == 'aarch64'
         run: packaging/alarm-image.sh
       - name: Build and test
+        env:
+          PACKAGER: "btrpkg CI <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}>"
         run: ARCH=${{ matrix.arch }} BTRPKG_SRC=git+file:///src packaging/build.sh out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: packages-${{ matrix.arch }}
@@ -44,8 +46,8 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Publish the repositories
