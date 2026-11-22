@@ -1,7 +1,7 @@
 From 04fddb082bb819fcc4b3a5969833f05412807901 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 17:34:00 +0200
-Subject: [PATCH 4/9] libalpm: btrpkg: use a package file that is already in
+Subject: [PATCH 04/10] libalpm: btrpkg: use a package file that is already in
  the cache
 
 A sync target with btrpkg data whose .pkg.tar.* is already in a cache

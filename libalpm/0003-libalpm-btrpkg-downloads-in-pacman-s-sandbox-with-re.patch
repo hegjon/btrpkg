@@ -1,8 +1,8 @@
 From de7f29ad63bcebb66728764aaa0cfc9e9525836e Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 16:16:18 +0200
-Subject: [PATCH 3/9] libalpm: btrpkg downloads in pacman's sandbox, with real
- sizes and progress
+Subject: [PATCH 03/10] libalpm: btrpkg downloads in pacman's sandbox, with
+ real sizes and progress
 
 The network half (btrpkg fetch-ids) runs as DownloadUser under pacman's
 seccomp filter and its own Landlock ruleset, writing only to

@@ -5,11 +5,11 @@
 //! publish its btrparts (into the btrparts directory, `../btrparts` by default: beside the
 //! architecture directories, which share it), signature and index (into the directory), then
 //! rewrite the database with four `%DATA%` lines per package:
-//!   btrpkg.index=index/NAME.btridx   btrpkg.id=<header hash>   btrpkg.size=<index + btrpart bytes>
+//!   btrpkg.index=NAME.pkg.btr   btrpkg.id=<header hash>   btrpkg.size=<index + btrpart bytes>
 //!   btrpkg.parts=<the btrparts directory, relative to the repository's directory>
 //! pacman reads `%DATA%` silently, so the same database serves plain pacman unchanged. The
 //! `.pkg.tar.zst` files stay. Order: chunks, signatures and indexes first, the database last.
-//! Packages already converted from the same file (index/NAME.src holds its SHA-256) are skipped.
+//! Packages already converted from the same file (NAME.pkg.btr.src holds its SHA-256) are skipped.
 use super::*;
 use std::sync::Mutex;
 
@@ -181,7 +181,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
         let name = fname.trim_end_matches(".pkg.tar.zst").trim_end_matches(".pkg.tar.xz").to_string();
         let r = (|| -> Result<(Hash, u64, bool)> {
             let ip = dir.join(store::index_rel(&name));
-            let srcp = dir.join("index").join(format!("{name}.src"));
+            let srcp = dir.join(store::src_rel(&name));
             if fs::read_to_string(&srcp).is_ok_and(|s| s.trim() == want) && ip.exists() {
                 let ib = fs::read(&ip)?;
                 let idx = parse_index(&ib)?;

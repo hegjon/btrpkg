@@ -1,7 +1,7 @@
 //! `fetch-ids`: the network half of a btrpkg download, meant to run unprivileged (pacman's
 //! DownloadUser, seccomp, and Landlock applied here: reads anywhere, writes only to DIR, no exec).
 //!
-//! It writes a directory store into DIR: `index/NAME.btridx` (+ `.sig`) and
+//! It writes a directory store into DIR: `NAME.pkg.btr` (the index, + `.sig`) and
 //! `btrparts/xx/HASH` for every btrpart that can't come from the machine (read from each
 //! server's btrparts directory, `--parts`, which the repository's database names). Whether a chunk can come
 //! from the machine is only estimated here (an older cache file of the package lists it, or the
@@ -36,7 +36,7 @@ pub(crate) struct FetchOpts<'a> {
     /// only the indexes (and signatures)
     pub index_only: bool,
     /// with index_only: a package no server has a (valid) index for is left out instead of
-    /// failing the run; pacman then downloads its package file (DIR/index/NAME.btridx missing)
+    /// failing the run; pacman then downloads its package file (no DIR/NAME.pkg.btr)
     pub skip_missing: bool,
     /// the servers' btrparts directory, relative to each (net::DEFAULT_PARTS by default)
     pub parts: &'a str,
@@ -94,11 +94,11 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
             ensure!(o.skip_missing && o.index_only, "{name}: no server has its index");
             // no stale index (one that failed its check above) for pacman to mistake for one
             let _ = fs::remove_file(&ip);
-            let _ = fs::remove_file(dir.join("index").join(format!("{name}.btridx.sig")));
+            let _ = fs::remove_file(dir.join(store::sig_rel(name)));
             continue;
         };
         store::write_atomic(&ip, &ib)?;
-        let sp = dir.join("index").join(format!("{name}.btridx.sig"));
+        let sp = dir.join(store::sig_rel(name));
         match sig { Some(t) => store::write_atomic(&sp, t.as_bytes())?, None => { let _ = fs::remove_file(&sp); } }
         idxs.push(idx);
     }

@@ -3,7 +3,7 @@
 //! One index describes a package. The other two forms only append to it, so the header (and
 //! later its signature) is the same in all three:
 //!
-//!   index      (.btridx)   header | chunk table | entries | small-file blob
+//!   index      (repository: NAME.pkg.btr without data)   header | chunk table | entries | small-file blob
 //!   transport  (.pkg.btr)  index | chunk data, in table order
 //!   cache file             index | zero padding up to image_base | image
 //!

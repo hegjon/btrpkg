@@ -1,7 +1,7 @@
 From 6d17a7daa19265d45b9e44c6f611a8fbca1e37a6 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 22:34:02 +0200
-Subject: [PATCH 7/9] libalpm: btrpkg: btrparts where the database says
+Subject: [PATCH 07/10] libalpm: btrpkg: btrparts where the database says
  (btrpkg.parts)
 
 A repository can keep its btrparts outside its directory, shared by its

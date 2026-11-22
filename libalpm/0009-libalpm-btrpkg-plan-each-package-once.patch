@@ -1,7 +1,7 @@
 From 1b3fcb8cf0fd3abc2f9cc39a578f3a597d9c9ba4 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 12:30:38 +0200
-Subject: [PATCH 9/9] libalpm: btrpkg: plan each package once
+Subject: [PATCH 09/10] libalpm: btrpkg: plan each package once
 
 _alpm_sync_load ran btr_plan again after _alpm_sync_prepare had already
 planned the targets: one more fetch-ids --index-only and pull-ids --plan

@@ -12,8 +12,8 @@
 //!                        btrpart's unencoded data to the one already stored for it, so a
 //!                        changed compressor (different frame bytes) doesn't add new ones.
 //!                        Build server only, not published (a dot directory).
-//!   index/NAME.btridx    the package's index (format.rs); its chunk table names the chunks
-//!   index/NAME.btridx.sig  signify signature over the index header (sign.rs), when published
+//!   NAME.pkg.btr         the package's index (format.rs); its chunk table names the chunks
+//!   NAME.pkg.btr.sig     signify signature over the index header (sign.rs), when published
 //!                        with a key
 //! Publish writes chunks, then the signature, then the index, so a published index never refers
 //! to a missing chunk or lacks its signature.
@@ -28,10 +28,17 @@ pub(crate) fn part_rel(h: &[u8]) -> String {
 
 pub(crate) fn hpath(dir: &Path, h: &[u8]) -> PathBuf { dir.join(part_rel(h)) }
 
-/// The index of package file NAME (NAME-VER-REL-ARCH) in a repository, as the database's
-/// btrpkg.index names it; and back.
-pub(crate) fn index_rel(name: impl std::fmt::Display) -> String { format!("index/{name}.btridx") }
-pub(crate) fn index_name(rel: &str) -> Option<&str> { rel.strip_prefix("index/")?.strip_suffix(".btridx") }
+/// The index of package NAME (NAME-VER-REL-ARCH) in a repository, next to NAME.pkg.tar.zst, as
+/// the database's btrpkg.index names it; and back. It is a .pkg.btr without its data (the same
+/// bytes a cache file starts with, and the same signature): clients fill the data in.
+pub(crate) const INDEX_EXT: &str = ".pkg.btr";
+pub(crate) fn index_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}") }
+pub(crate) fn index_name(rel: &str) -> Option<&str> {
+    rel.strip_suffix(INDEX_EXT).filter(|n| !n.is_empty() && !n.starts_with('.') && !n.contains('/'))
+}
+/// Its signify signature, and (repositories) the SHA-256 of the package file it was made from.
+pub(crate) fn sig_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}.sig") }
+pub(crate) fn src_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}.src") }
 
 /// NAME-VER-REL-ARCH -> (NAME, VER-REL)
 pub(crate) fn split_stem(stem: &str) -> Option<(&str, &str)> {
@@ -81,13 +88,13 @@ pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
 #[derive(Default, Debug)]
 pub(crate) struct PublishStats { pub chunks: u64, pub new_chunks: u64, pub new_bytes: u64, pub reused_chunks: u64, pub reused_bytes: u64, pub remapped: u64, pub raw_entries: u64, pub index_bytes: u64 }
 
-/// Publish a transport file (.pkg.btr) into STORE as index/NAME.btridx plus chunks, signed with
+/// Publish a transport file (.pkg.btr) into STORE as NAME.pkg.btr (the index) plus chunks, signed with
 /// `key` (secret key, key name) when given. Signing happens here, after any remapping, because
 /// remapping rewrites the table and so the header.
 /// The raw map of the btrparts directory `parts` (see the module comment).
 pub(crate) fn raw_dir(parts: &Path) -> PathBuf { parts.join(".raw") }
 
-/// Publish into STORE (its index/) with the btrparts in `parts` (absolute, or relative to the
+/// Publish into STORE with the btrparts in `parts` (absolute, or relative to the
 /// working directory: a caller resolves a repository's relative path first).
 pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>) -> Result<(String, PublishStats)> {
     let raw = raw_dir(parts);
@@ -167,7 +174,7 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
     let name = input.file_name().context("no file name")?.to_string_lossy();
     let name = name.trim_end_matches(".btrpkg").trim_end_matches(".pkg.btr").to_string();
     let ip = store.join(index_rel(&name));
-    let sp = store.join("index").join(format!("{name}.btridx.sig"));
+    let sp = store.join(sig_rel(&name));
     match key {
         Some((k, kname)) => write_atomic(&sp, k.sign(&ib[..HDR], kname).as_bytes())?,
         None => { let _ = fs::remove_file(&sp); }
@@ -214,7 +221,7 @@ pub(crate) fn pkgname(name: &str) -> &str {
 /// The signature published next to an index in a directory store, if any.
 #[allow(dead_code)]
 pub(crate) fn read_sig(store: &Path, name: &str) -> Option<String> {
-    fs::read_to_string(store.join("index").join(format!("{name}.btridx.sig"))).ok()
+    fs::read_to_string(store.join(sig_rel(name))).ok()
 }
 
 /// Largest index `pull` downloads (ansible's, the largest seen, is 3.6 MB).
@@ -223,7 +230,7 @@ const MAX_INDEX: usize = 256 << 20;
 /// Index and signature of NAME from a source.
 pub(crate) fn fetch_index(src: &net::Source, name: &str, ns: &mut net::NetStats) -> Result<(Vec<u8>, Option<String>)> {
     let ib = src.get(&index_rel(name), MAX_INDEX, ns)?.with_context(|| format!("no index for {name}"))?;
-    let sig = src.get(&format!("index/{name}.btridx.sig"), 4096, ns)?.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let sig = src.get(&sig_rel(name), 4096, ns)?.map(|b| String::from_utf8_lossy(&b).into_owned());
     Ok((ib, sig))
 }
 

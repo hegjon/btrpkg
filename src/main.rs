@@ -707,7 +707,7 @@ const USAGE: &str = "usage:
        to DIR, run nothing. The other half: pull-ids [--missing-to FILE] [--consume] ... DIR CACHEDIR ...,
        which exits 3 and lists the chunks DIR lacks if a local file didn't check out, and with
        --consume removes DIR after success. For package managers: fetch-ids --index-only (with
-       --skip-missing a package no server has an index for is left out: no DIR/index/NAME.btridx,
+       --skip-missing a package no server has an index for is left out: no DIR/NAME.pkg.btr,
        the caller downloads its package file instead), then
        pull-ids --fetch-via FILE, which hashes and reuses local data, lists exactly the missing
        chunks in FILE, prints fetch N BYTES and waits for go on stdin while the caller runs
@@ -725,7 +725,7 @@ const USAGE: &str = "usage:
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO
 NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
-       NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
+       NAME.pkg.btr.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
 /// header IDs in its database); signatures are saved for the caller to check.
@@ -1179,7 +1179,7 @@ mod tests {
             stems.push((dir.to_path_buf(), stem));
         }
         let db = |dir: &Path, cur: &str| {
-            let desc = format!("%FILENAME%\n{cur}.pkg.tar.zst\n\n%NAME%\np\n\n%DATA%\nbtrpkg.index=index/{cur}.btridx\nbtrpkg.parts=../btrparts\n\n");
+            let desc = format!("%FILENAME%\n{cur}.pkg.tar.zst\n\n%NAME%\np\n\n%DATA%\nbtrpkg.index={cur}.pkg.btr\nbtrpkg.parts=../btrparts\n\n");
             let mut tb = tar::Builder::new(Vec::new());
             let mut h = tar::Header::new_gnu();
             h.set_path("p/desc").unwrap(); h.set_mode(0o644); h.set_size(desc.len() as u64); h.set_cksum();
@@ -1189,7 +1189,7 @@ mod tests {
         db(&x, "p-3-1-x86_64");
         db(&a, "p-1-1-x86_64");
         let names = |idx: &Path| -> std::collections::HashSet<Hash> { parse_index(&fs::read(idx).unwrap()).unwrap().chunks.iter().map(|c| c.stored).collect() };
-        let ix = |d: &Path, s: &str| d.join("index").join(format!("{s}.btridx"));
+        let ix = |d: &Path, s: &str| d.join(store::index_rel(s));
         let p1 = names(&ix(&x, "p-1-1-x86_64"));
         let p2 = names(&ix(&x, "p-2-1-x86_64"));
         let p3 = names(&ix(&x, "p-3-1-x86_64"));
@@ -1513,13 +1513,13 @@ mod tests {
         pull_dir(&store, "s-1-1", &cdir.join("a.pkg.btr"), &trust(sig.clone())).unwrap();
         // signed by a key the keyring doesn't have
         let other = sign::SecretKey::load(&t.0.join("other.sec")).unwrap();
-        let ib = fs::read(store.join("index/s-1-1.btridx")).unwrap();
+        let ib = fs::read(store.join("s-1-1.pkg.btr")).unwrap();
         assert!(pull_dir(&store, "s-1-1", &cdir.join("b.pkg.btr"), &trust(other.sign(&ib[..HDR], "other"))).is_err());
         // a tampered index (re-hashed, so only the signature can tell)
         let idx = parse_index(&ib).unwrap();
         let mut ch = idx.chunks.clone();
         ch[0].raw[1] ^= 1;
-        fs::write(store.join("index/s-1-1.btridx"), idx.with_chunks(&ch)).unwrap();
+        fs::write(store.join("s-1-1.pkg.btr"), idx.with_chunks(&ch)).unwrap();
         assert!(pull_dir(&store, "s-1-1", &cdir.join("c.pkg.btr"), &trust(sig)).is_err());
         // nothing but the first cache file
         assert_eq!(fs::read_dir(&cdir).unwrap().count(), 1);
@@ -1576,7 +1576,7 @@ mod tests {
         }
         assert_eq!(descs.keys().cloned().collect::<Vec<_>>(), ["p-1-1/", "p-1-1/desc", "q-2-1/", "q-2-1/desc"]);
         let q = &descs["q-2-1/desc"];
-        assert!(q.contains("%DATA%\nother.key=1\nbtrpkg.index=index/q-2-1-x86_64.btridx\nbtrpkg.id="), "{q}");
+        assert!(q.contains("%DATA%\nother.key=1\nbtrpkg.index=q-2-1-x86_64.pkg.btr\nbtrpkg.id="), "{q}");
         let id = q.lines().find_map(|l| l.strip_prefix("btrpkg.id=")).unwrap();
         // the ID from the database is enough to pull, and the signature is there too
         let c = t.0.join("cache");
@@ -1723,7 +1723,7 @@ mod tests {
         check_tree(&root, &s2);
 
         // the header ID from the repo database: a wrong one is refused before anything is written
-        let ib = fs::read(store.join("index/q-2-1.btridx")).unwrap();
+        let ib = fs::read(store.join("q-2-1.pkg.btr")).unwrap();
         let c3 = cdir.join("again.pkg.btr");
         assert!(pull_dir(&store, "q-2-1", &c3, &sign::Trust::Id([0; 32])).is_err());
         assert!(!c3.exists() && !part_path(&c3).exists());
@@ -1744,7 +1744,7 @@ mod tests {
         // a damaged index: refused
         let mut ib2 = ib.clone();
         ib2[HDR + 7] ^= 1;
-        fs::write(store.join("index/bad.btridx"), &ib2).unwrap();
+        fs::write(store.join("bad.pkg.btr"), &ib2).unwrap();
         assert!(pull_dir(&store, "bad", &fresh.join("bad.pkg.btr"), &U).is_err());
         assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
     }
@@ -1764,8 +1764,8 @@ mod tests {
         let (_, b) = store::publish(&t.0.join("r-1-2.pkg.btr"), &store, &store.join(net::DEFAULT_PARTS), None).unwrap();
         assert!(b.remapped > 0, "{b:?}");
         assert_eq!(b.new_chunks, 0, "{b:?}");
-        let i1 = parse_index(&fs::read(store.join("index/r-1-1.btridx")).unwrap()).unwrap();
-        let i2 = parse_index(&fs::read(store.join("index/r-1-2.btridx")).unwrap()).unwrap();
+        let i1 = parse_index(&fs::read(store.join("r-1-1.pkg.btr")).unwrap()).unwrap();
+        let i2 = parse_index(&fs::read(store.join("r-1-2.pkg.btr")).unwrap()).unwrap();
         assert_eq!(i1.chunks, i2.chunks);
         let c = t.0.join("c");
         fs::create_dir_all(&c).unwrap();

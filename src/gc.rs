@@ -4,14 +4,14 @@
 //! A btrparts directory can be shared (`omarchy/btrparts` by `omarchy/x86_64` and
 //! `omarchy/aarch64`; `arch/btrparts` by core and extra), so a btrpart can only go when no index
 //! of ANY of those repositories names it. The repositories are found under the btrparts
-//! directory's parent (a directory with an `index/` directory and one REPO.db), every one of them
+//! directory's parent (a directory with `*.pkg.btr` indexes and one REPO.db), every one of them
 //! takes part in the mark, and a repository whose database points its btrpkg entries somewhere
 //! else is marked but not pruned.
 //!
 //! Per package name in a repository, kept are: the version the database names (current), every
 //! version newer than it (published, database not swapped yet), and the `keep - 1` newest versions
 //! older than it (clients with an older database). A package the database no longer has keeps its
-//! `keep - 1` newest versions. A pruned version loses its index, `.btridx.sig`, `.src` and, in a
+//! `keep - 1` newest versions. A pruned version loses its index (`NAME.pkg.btr`), its `.sig` and `.src` and, in a
 //! mirror, its `.pkg.tar.*` file and `.sig`. Then every btrpart in the directory that no kept index
 //! names goes, and raw map entries (`.raw/`) that lead to a removed or missing btrpart.
 //!
@@ -52,19 +52,23 @@ struct Repo {
     prune: bool,
 }
 
-/// The repositories under `root` (depth ≤ 5): directories with `index/` and one non-dot `*.db`.
+/// The repositories under `root` (depth ≤ 5): directories with `*.pkg.btr` indexes (and one
+/// non-dot `*.db`, checked by read_repo).
 fn find_repos(root: &Path, parts: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
     if depth > 5 || root == parts { return Ok(()); }
-    if root.join("index").is_dir() { out.push(root.to_path_buf()); }
+    let mut is_repo = false;
     // errors stop gc here, before anything is removed: a repository it can't see isn't marked
     for e in fs::read_dir(root).with_context(|| root.display().to_string())? {
         let e = e?;
         let n = e.file_name();
-        if n.to_string_lossy().starts_with('.') || n == "index" { continue; }
+        if n.to_string_lossy().starts_with('.') { continue; }
+        let t = e.file_type()?;
+        if t.is_file() && store::index_name(&n.to_string_lossy()).is_some() { is_repo = true; }
         // real directories only: a symlinked repository would be marked twice, which is harmless,
         // but a symlink loop isn't
-        if e.file_type()?.is_dir() { find_repos(&e.path(), parts, depth + 1, out)?; }
+        if t.is_dir() { find_repos(&e.path(), parts, depth + 1, out)?; }
     }
+    if is_repo { out.push(root.to_path_buf()); }
     Ok(())
 }
 
@@ -107,7 +111,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     let root = parts.parent().context("btrparts directory has no parent")?;
     let mut dirs = Vec::new();
     find_repos(root, &parts, 0, &mut dirs)?;
-    ensure!(!dirs.is_empty(), "no repository (a directory with index/) under {}", root.display());
+    ensure!(!dirs.is_empty(), "no repository (a directory with *.pkg.btr indexes) under {}", root.display());
     // hold every repository's lock (a mirror run holds it while it publishes)
     let mut locks = Vec::new();
     for d in &dirs {
@@ -125,10 +129,11 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     let mut kept: Vec<PathBuf> = Vec::new();             // index files to mark from
     for r in &repos {
         let mut by_name: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new(); // name -> (ver, stem)
-        for e in fs::read_dir(r.dir.join("index"))? {
+        for e in fs::read_dir(&r.dir)? {
             let e = e?; // an index not seen would not be marked
             let n = e.file_name().to_string_lossy().into_owned();
-            let Some(stem) = n.strip_suffix(".btridx") else { continue };
+            let Some(stem) = store::index_name(&n) else { continue };
+            if !e.file_type()?.is_file() { continue; }
             match store::split_stem(stem) {
                 Some((name, ver)) => by_name.entry(name.to_string()).or_default().push((ver.to_string(), stem.to_string())),
                 None => kept.push(e.path()), // not NAME-VER-REL-ARCH: keep it, never guess
@@ -162,7 +167,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     // 3. old versions: index, signature, source record, and the mirror's package file
     for (dir, stem) in &doomed {
         println!("{}{}", if o.dry_run { "would remove " } else { "removed " }, dir.join(store::index_rel(stem)).display());
-        for f in [format!("index/{stem}.btridx.sig"), format!("index/{stem}.src"), format!("index/{stem}.btridx")] {
+        for f in [store::sig_rel(stem), store::src_rel(stem), store::index_rel(stem)] {
             remove(&dir.join(f), o.dry_run, &mut st.bytes_removed)?;
         }
         st.indexes_removed += 1;

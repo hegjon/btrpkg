@@ -12,7 +12,7 @@ pkgname=pacman-btrpkg
 _commit=54d94116164b0b2202c6061c4a59c6f3e70820d8
 _archpkg=7.1.0.r9.g54d9411-4    # Arch's packaging tag the patches below come from
 pkgver=7.1.0.r9.g54d9411
-pkgrel=7
+pkgrel=8
 pkgdesc="pacman that installs btrpkg packages (reflinked, encoded btrfs writes), beside the system pacman"
 arch=(x86_64 aarch64)
 url="https://github.com/hegjon/btrpkg"
@@ -39,6 +39,7 @@ source=("pacman::git+https://gitlab.archlinux.org/pacman/pacman.git#commit=$_com
         btrpkg-0007-libalpm-btrpkg-btrparts-where-the-database-says-btrp.patch
         btrpkg-0008-libalpm-btrpkg-fall-back-to-the-package-file.patch
         btrpkg-0009-libalpm-btrpkg-plan-each-package-once.patch
+        btrpkg-0010-libalpm-btrpkg-the-index-is-NAME.pkg.btr-next-to-the.patch
         pacman-btrpkg.conf
         pacstrap-btrpkg)
 sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
@@ -46,15 +47,16 @@ sha256sums=('49e9f94553e8d3589830e2023ac0f536389cc01356a349236ea45770d482940f'
             'de428b496a825772ef49ec5555a386a4b23ffa10b9dfd9907f0671d5c1dc2178'
             '9a734e5d75be603d58aa92e8d29a15466b3ac2af6b7d6f6728dd5c3e5ed8758d'
             '021893dd44ec23251cfc0f2b81c12d832927ea60095d4d2956d9760e8bbfaa58'
-            '8aa32e0d5b3e0ede120def964de1ce9cb0faeade6998dbc755028bb5eec7818d'
-            '31b11696ed01cb1d74abb117d51aec8e8fe7d4101f6ff0253a68b4fcb435ab43'
-            '2a650869e11d4724588cbf9c653e9d90153bba01ec85050e4491fe7ed8cd1e91'
-            '358f769a744ac2080027d7bd21e7f623494dac2a83bd169135a8b7aa9d53413d'
-            '705db1b6ae4a5c5255e3bfd9a8a19e93bf31425f5c9678b7703f5a067c94245e'
-            'cb8e1816450e5069b2b719df5c7328d487c20b1b13f5339089fbb459f3100900'
-            '078a1714532d6a4f77bd914aca2dd4b5e30988933a8f734b98684806d0ee0adb'
-            'f0d3ce66d8d24328faaa3652d3efb9d77cb4a918cd2d76b6e3ae381d898311d0'
-            '6d1bcf4095d25dd1fd43426b8f5d7e05aae7159f3a7d3f5a5c0d184d1a06fae6'
+            'a572dde910cb2bb49549706c60e9c97c58b5f50f4581585248d3d2e943f0ca9c'
+            '80f49c7dfa80e1f8a87f6e9486903bcf6669217d54d4f4589c6734597173802d'
+            '7544cea39fb656ddd9666c246abe9e8e8677b539d534751d4f2df5e9fd04376a'
+            'f343031469dc5b7b3b32da503dbc036f400c3e5ea983ef68ecae37b024839ad8'
+            '5ced7b6018a73d3afe7a1044f7de3bea47e65f2acb01c117d83a12fca84fe742'
+            '686c9d443a1aa6214ac3aca58daca92c514008839936b358fac11f9f972ab403'
+            '2e2dc15dce122006f89d9c7de4b7455a087ab02467948b5d160a86eae47556a4'
+            '2c6a94a92e3430894753100b49eaa3003f02917a48ab26c60760e4612ac6e417'
+            'ac7d794798d5d61c6807e7869773f6d84df38f017cd9e2744299a7a539b03270'
+            '75ff4b24675544711d7db755fbe959190c4ad5fd1fd45bdfc580cd4b9d3980f8'
             '92a7cff709b7922e4faea223b32adabc4a4b59cbea7fca242e3ab58f4ab1a0ac'
             '9baa36c396fff615c46acbad513d9797bb9c9450deae0ffb29dce0ccc9b6f327')
 

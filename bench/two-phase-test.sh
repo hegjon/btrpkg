@@ -7,7 +7,7 @@ B=${B:-$(dirname $0)/../target/release/btrpkg}
 R=${R:-$HOME/Work/btrpkg-repo/omarchy/x86_64}
 U=http://127.0.0.1:8790/omarchy/x86_64
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
-id() { $B dump $R/index/$1.btridx | awk '/^id/{print $2}'; }
+id() { $B dump $R/$1.pkg.btr | awk '/^id/{print $2}'; }
 P1=owe-lockfeed-0.2.18-1-x86_64; P2=aether-4.33.0-1-x86_64
 ARGS="$P1=$(id $P1) $P2=$(id $P2)"
 fail=0; ok() { echo "ok - $1"; }; no() { echo "NOT OK - $1"; fail=1; }
@@ -19,8 +19,8 @@ $B fetch-ids --landlock --progress --server $U $T/d1 $ARGS > $T/p2 2>&1
 awk -F'\t' '$1=="total" && $3!=0' $T/p2 | grep -q . && no "resume: fetched again" || ok "resume: nothing fetched twice"
 $B --no-fsync pull-ids --missing-to $T/m $T/d1 $T/c1 $ARGS > /dev/null 2>$T/e2 && ok "pull-ids from the directory" || { no "pull-ids"; cat $T/e2; }
 [ -s $T/c1/$P2.pkg.btr.sig ] && ok "signature copied" || no "signature copied"
-# landlock: DIR/index is a symlink to a directory outside DIR, so writing the index there must be refused
-mkdir -p $T/d3 $T/outside; ln -s $T/outside $T/d3/index
+# landlock: DIR/btrparts is a symlink to a directory outside DIR, so writing btrparts there must be refused
+mkdir -p $T/d3 $T/outside; ln -s $T/outside $T/d3/btrparts
 $B fetch-ids --landlock --server $U $T/d3 $P1=$(id $P1) >/dev/null 2>$T/e4; rc=$?
 [ $rc != 0 ] && [ -z "$(ls $T/outside)" ] && ok "landlock refuses a write outside DIR ($(grep -o 'Permission denied' $T/e4 | head -1))" || { no "landlock: wrote outside DIR"; cat $T/e4; }
 $B fetch-ids --server $U $T/d3 $P1=$(id $P1) >/dev/null 2>&1; [ -n "$(ls $T/outside)" ] && ok "(control: without --landlock the write goes through)" || no "control"
@@ -38,7 +38,7 @@ $B --no-fsync --installed $T/root pull-ids --missing-to $T/m4 $T/d4 $T/c4 $P2=$(
 ls $T/c4 | grep -q . && no "partial cache file left" || ok "no partial cache file"
 $B fetch-ids --want $T/m4 --server $U $T/d4 $P2=$(id $P2) > /dev/null 2>&1 && ok "fetch-ids --want" || no "--want"
 $B --no-fsync --installed $T/root pull-ids $T/d4 $T/c4 $P2=$(id $P2) > /dev/null 2>$T/e6 && ok "second pull-ids" || { no "second pull-ids"; cat $T/e6; }
-cmp <($B dump $T/c4/$P2.pkg.btr) <($B dump $R/index/$P2.btridx) && ok "cache file has the right index" || no "index differs"
+cmp <($B dump $T/c4/$P2.pkg.btr) <($B dump $R/$P2.pkg.btr) && ok "cache file has the right index" || no "index differs"
 $B install $T/c4/$P2.pkg.btr $T/root2 >/dev/null 2>&1; $B install $T/c1/$P2.pkg.btr $T/root3 >/dev/null 2>&1
 diff -r $T/root2 $T/root3 >/dev/null && ok "installed tree identical to a fresh pull" || no "trees differ"
 exit $fail

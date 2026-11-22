@@ -1,7 +1,7 @@
 From 50e6d30dc4d6fe590731023f351ecb1e0c8db833 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 20:13:32 +0200
-Subject: [PATCH 6/9] libalpm: btrpkg: pacman -U of .pkg.btr, -Sp without
+Subject: [PATCH 06/10] libalpm: btrpkg: pacman -U of .pkg.btr, -Sp without
  btrpkg, signify not recorded as pgp
 
 - alpm_pkg_load of a btrpkg cache file (pacman -U, -Qp): the .sig is

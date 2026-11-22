@@ -1,7 +1,7 @@
 From 9847cdb44031908408bbb46dfd0dda6f47c72ed4 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 17:50:29 +0200
-Subject: [PATCH 5/9] libalpm: btrpkg: one root process when downloads aren't
+Subject: [PATCH 05/10] libalpm: btrpkg: one root process when downloads aren't
  sandboxed
 
 Without a download user (DisableSandbox, and pacstrap always disables

@@ -60,7 +60,7 @@ filefrag -v $R/b/usr/bin/Hyprland | sed -n '4,5p'
 
 echo "== corrupt chunk in the store: pull must fail and leave nothing behind"
 cp -a $S /exp/store-bad
-h=$(python3 - /exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx <<'EOF'
+h=$(python3 - /exp/store-bad/hyprland-0.57.2-2-x86_64.pkg.btr <<'EOF'
 import sys
 b = open(sys.argv[1], "rb").read()
 print(b[256 + 24:256 + 56].hex())   # format v1: stored hash of the first chunk in the table
@@ -72,6 +72,6 @@ mkdir -p $C/fresh
 if $B pull --unverified /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: corrupt chunk accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"
 echo "== tampered index"
-printf '\x00' | dd of=/exp/store-bad/index/hyprland-0.57.2-2-x86_64.btridx bs=1 seek=300 conv=notrunc status=none
+printf '\x00' | dd of=/exp/store-bad/hyprland-0.57.2-2-x86_64.pkg.btr bs=1 seek=300 conv=notrunc status=none
 if $B pull --unverified /exp/store-bad hyprland-0.57.2-2-x86_64 $C/fresh/hyprland.pkg.btr 2>&1; then echo "FAIL: bad index accepted"; exit 1; fi
 ls -A $C/fresh | grep . && { echo "FAIL: partial file left"; exit 1; } || echo "ok: refused, nothing left"

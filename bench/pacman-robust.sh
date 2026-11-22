@@ -88,20 +88,20 @@ if [[ -d /var/tmp/robust-repo/btrparts ]]; then
   ff=$(pacman --config $C -Sp --print-format "%f" $first); stem=${ff%.pkg.tar.*}
   # 7. no server has the index of one package: it comes as its package file, the rest as btrpkg
   rm -rf /var/tmp/noidx; cp -a --reflink=always /var/tmp/robust-repo /var/tmp/noidx
-  rm -f /var/tmp/noidx/x86_64/index/$stem.btridx /var/tmp/noidx/x86_64/index/$stem.btridx.sig
+  rm -f /var/tmp/noidx/x86_64/$stem.pkg.btr /var/tmp/noidx/x86_64/$stem.pkg.btr.sig
   clean; unplain; conf "" "Server = file:///var/tmp/noidx/x86_64" only
   $PAC --config $BC -Syy >/dev/null 2>&1
   $PAC --config $BC -Sw --noconfirm $T >/tmp/r7.log 2>&1; rc=$?
   [[ $rc == 0 && $(btrs) == $((N-1)) && $(plain) == 1 && -e $CACHE/$ff ]] && grep -q "no server has the index of $first" /tmp/r7.log \
     && ok "no index anywhere: $first as its package file, the other $(btrs) as btrpkg" || { no "no index rc=$rc btr=$(btrs) plain=$(plain)"; tail -5 /tmp/r7.log; }
   # 8. the btrpkg download fails (no btrparts at all): every package as its package file
-  clean; unplain; rm -rf /var/tmp/noidx/btrparts; cp -a /var/tmp/robust-repo/x86_64/index/$stem.btridx* /var/tmp/noidx/x86_64/index/
+  clean; unplain; rm -rf /var/tmp/noidx/btrparts; cp -a /var/tmp/robust-repo/x86_64/$stem.pkg.btr* /var/tmp/noidx/x86_64/
   $PAC --config $BC -Sw --noconfirm $T >/tmp/r8.log 2>&1; rc=$?
   [[ $rc == 0 && $(plain) == "$N" && $(btrs) == 0 ]] && grep -q "downloading the package files instead" /tmp/r8.log \
     && ok "btrpkg download failed: all $(plain) as package files" || { no "no btrparts rc=$rc btr=$(btrs) plain=$(plain)"; tail -5 /tmp/r8.log; }
   # 9. as 7, without the download user (DisableSandbox, pacstrap's way)
   rm -rf /var/tmp/noidx; cp -a --reflink=always /var/tmp/robust-repo /var/tmp/noidx
-  rm -f /var/tmp/noidx/x86_64/index/$stem.btridx /var/tmp/noidx/x86_64/index/$stem.btridx.sig
+  rm -f /var/tmp/noidx/x86_64/$stem.pkg.btr /var/tmp/noidx/x86_64/$stem.pkg.btr.sig
   clean; unplain; conf "DisableSandbox" "Server = file:///var/tmp/noidx/x86_64" only
   $PAC --config $BC -Sw --noconfirm $T >/tmp/r9.log 2>&1; rc=$?
   [[ $rc == 0 && $(btrs) == $((N-1)) && $(plain) == 1 && -e $CACHE/$ff ]] && grep -q "no server has the index of $first" /tmp/r9.log \
