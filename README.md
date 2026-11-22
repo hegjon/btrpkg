@@ -116,7 +116,10 @@ Network: every request of a btrpkg process goes through one long-lived curl mult
 opens one connection per server (HTTP/2; up to 8 kept-alive ones over HTTP/1.1) and keeps it for all
 its downloads: the indexes and signatures, all requested at once, then the btrparts. At 50 ms
 round-trip time, planning an upgrade of 100 packages (`fetch-ids --index-only`) takes 0.36 s over
-HTTPS (19.5 s before, one connection per object); `bench/net-latency-bench.sh`. The plan and the
+HTTPS (19.5 s before, one connection per object); `bench/net-latency-bench.sh`. HTTP/3 (`--http
+h3`) works as well: 0.28 s for the same plan, about as fast as HTTP/2 for btrparts. Checking and
+writing btrparts runs on a thread of its own so the transfer loop keeps reading and acknowledging
+(QUIC is in userspace). The plan and the
 download are two runs (pacman asks in between), so a transaction opens two connections.
 
 Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no server has the index

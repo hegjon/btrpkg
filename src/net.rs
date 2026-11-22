@@ -251,7 +251,9 @@ impl Source {
             None => *h2c || base.starts_with("https://"),
         };
         with_multi(|multi| {
-            // HTTP/2: requests wait for the open connection (pipewait) rather than open more
+            // HTTP/2 and 3: requests wait for the open connection (pipewait); another one is opened
+            // only when it has no free stream (HTTP/3 servers hand out stream credit lazily:
+            // allowing a second connection there is ~20% faster than waiting on one)
             multi.set_max_host_connections(if multiplexed { 4 } else { *parallel })?;
             let mut next = 0usize;
             let mut active: HashMap<usize, (Easy2Handle<Collector>, usize, u32)> = HashMap::new();
@@ -315,7 +317,7 @@ impl Source {
     /// range sends everything, which is fine too. Callers check every object against its SHA-256
     /// (its name), so a wrong reconstruction can't get through. `f` gets the objects in batches
     /// of about 16 MB, in no particular order, as (item index, bytes).
-    pub fn get_many(&self, items: &[(String, usize, usize)], st: &mut NetStats, mut f: impl FnMut(Vec<(usize, Vec<u8>)>) -> Result<()>) -> Result<()> {
+    pub fn get_many(&self, items: &[(String, usize, usize)], st: &mut NetStats, mut f: impl FnMut(Vec<(usize, Vec<u8>)>) -> Result<()> + Send) -> Result<()> {
         match self {
             Source::Dir(d) => {
                 let absent: Vec<String> = items.iter()
@@ -335,23 +337,40 @@ impl Source {
                 Ok(())
             }
             Source::Http { .. } => {
+                // `f` (checking, writing) runs on a thread of its own, so this one keeps driving the
+                // transfers meanwhile: over HTTP/3 (QUIC in userspace) nothing acknowledges or
+                // reads packets while the loop is busy elsewhere, and over HTTP/1.1 and 2 new
+                // requests would wait too
                 let rq: Vec<Req> = items.iter().map(|(rel, len, data)| Req { rel, max: *len, exact: Some((*len, *data)) }).collect();
-                let mut batch: Vec<(usize, Vec<u8>)> = Vec::new();
-                let mut batch_bytes = 0usize;
-                self.transfer(&rq, st, |i, got| {
-                    match got {
-                        Got::Body(b) => {
-                            batch_bytes += b.len();
-                            batch.push((i, b));
-                            if batch_bytes >= BATCH_BYTES { batch_bytes = 0; f(std::mem::take(&mut batch))?; }
-                            Ok(())
+                std::thread::scope(|sc| -> Result<()> {
+                    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<(usize, Vec<u8>)>>(2);
+                    let worker = sc.spawn(move || -> Result<()> { for b in rx { f(b)?; } Ok(()) });
+                    let mut batch: Vec<(usize, Vec<u8>)> = Vec::new();
+                    let mut batch_bytes = 0usize;
+                    let r = self.transfer(&rq, st, |i, got| {
+                        match got {
+                            Got::Body(b) => {
+                                batch_bytes += b.len();
+                                batch.push((i, b));
+                                if batch_bytes >= BATCH_BYTES {
+                                    batch_bytes = 0;
+                                    ensure!(tx.send(std::mem::take(&mut batch)).is_ok(), "stopped");
+                                }
+                                Ok(())
+                            }
+                            Got::Missing => bail!("{}: HTTP 404", items[i].0),
+                            Got::Failed(m) => bail!("{}: {m}", items[i].0),
                         }
-                        Got::Missing => bail!("{}: HTTP 404", items[i].0),
-                        Got::Failed(m) => bail!("{}: {m}", items[i].0),
-                    }
-                })?;
-                if !batch.is_empty() { f(batch)?; }
-                Ok(())
+                    });
+                    let r = r.and_then(|()| {
+                        if !batch.is_empty() { ensure!(tx.send(batch).is_ok(), "stopped"); }
+                        Ok(())
+                    });
+                    drop(tx);
+                    // the worker's error is the cause when the transfers stopped because of it
+                    worker.join().map_err(|_| anyhow::anyhow!("btrpart worker panicked"))??;
+                    r
+                })
             }
         }
     }

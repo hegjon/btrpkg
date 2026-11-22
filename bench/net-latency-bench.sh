@@ -29,12 +29,12 @@ EOF
 want=--index-only
 [ "$MODE" = full ] && { want=""; tr ' ' '\n' < "$W/args" | head -"$N2" | tr '\n' ' ' > "$W/args2"; mv "$W/args2" "$W/args"; }
 start=$(date +%s.%N)
-docker run --rm --cap-add NET_ADMIN --add-host=mirror:192.168.2.2 -v "$B:/b:ro" -v "$CA:/ca.crt:ro" -v "$W:/w" exp-btrfs sh -c "
-  [ $D -gt 0 ] && tc qdisc add dev eth0 root netem delay ${D}ms
+docker run --rm --cap-add NET_ADMIN --add-host=mirror:192.168.2.2 -v "$B:/b:ro" -v "$CA:/ca.crt:ro" -v "$W:/w" ${IMAGE:-exp-btrfs} sh -c "
+  [ $D -gt 0 ] && tc qdisc add dev eth0 root netem delay ${D}ms limit 100000; tc -s qdisc show dev eth0 > /w/qdisc0
   ping -c1 -q 192.168.2.2 | tail -1
   mkdir -p /w/d; s=\$(date +%s%N)
   BTRPKG_NETSTATS=1 /b fetch-ids --cacert /ca.crt ${EXTRA:-} $want --parts ../../../btrparts --server https://192.168.2.2:1763/$REL /w/d $(cat "$W/args") > /w/out 2> /w/err; rc=\$?
-  e=\$(date +%s%N); echo \"rc \$rc  time \$(( (e - s) / 1000000 )) ms\"
+  e=\$(date +%s%N); tc -s qdisc show dev eth0 | grep -o \"dropped [0-9]*\" | head -1; echo \"rc \$rc  time \$(( (e - s) / 1000000 )) ms\"
   echo \"files \$(find /w/d -type f | wc -l)  bytes \$(du -sb /w/d | cut -f1)\"; chown -R 1000:1000 /w
 "
 sleep 1
@@ -47,7 +47,9 @@ for l in open(sys.argv[1]):
     if j.get('ts', 0) < t0: continue
     rq = j.get('request', {})
     if not rq.get('headers', {}).get('User-Agent', [''])[0].startswith('btrpkg'): continue
-    n += 1; ports.add(rq.get('remote_port')); proto = rq.get('proto')
-print(f"requests {n}, connections {len(ports)}, proto {proto if n else '-'}")
+    n += 1; ports.add((rq.get('remote_port'), rq.get('proto')))
+by = {}
+for _, pr in ports: by[pr] = by.get(pr, 0) + 1
+print(f"requests {n}, connections {len(ports)} ({', '.join(f'{v} {k}' for k, v in sorted(by.items()))})")
 EOF
 tail -3 "$W/err"; rm -rf "$W"
