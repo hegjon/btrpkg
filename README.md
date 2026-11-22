@@ -165,7 +165,8 @@ Trust options (`--id`, `--sig`, `--unverified`) and network options (`--http h1|
 
 ## Format (version 1)
 
-The full description is at the top of `src/format.rs`.
+The full description is at the top of `src/format.rs`; a worked example follows the tables. An
+index is header, btrpart table, entries and small-file blob, in that order.
 
 | part | contents |
 |---|---|
@@ -187,6 +188,56 @@ Converter rules:
 - Identical file contents are stored once and reflinked more than once (dedup).
 - A btrpart stays raw when compressing it doesn't save at least one 4 KiB block.
 - Root-level dotfiles (`.PKGINFO`, `.MTREE`, …) are kept in the entries and not installed.
+
+### Example: gliff 0.4.3-1 (x86_64)
+
+`btrpkg info` and `btrpkg dump` of the mirror's `gliff-0.4.3-1-x86_64.pkg.btr`:
+
+```
+header        256 B   131 btrparts, image 16,588,800 B, entries 406 B (1,773), blob 3,458 B (6,100),
+                      hashes of table/entries/blob; header hash ef575023…48d2 = btrpkg.id, what .sig signs
+btrpart table 11,528 B  131 × 88 B, e.g.  offset 12288  unencoded 131072  stored 20014  zstd  c9550014…  3927f6b1…
+entries       406 B   25 entries: 13 files, 12 directories
+blob          3,458 B the 7 small files (6,100 B)
+index         15,648 B = 256 + 11,528 + 406 + 3,458
+```
+
+Entries (image offsets for large files, blob offsets for small ones):
+
+```
+file 644    11,885  image @ 0           .BUILDINFO
+file 644       280  blob  @ 0           .INSTALL
+file 644       894  blob  @ 280         .MTREE
+file 644     1,003  blob  @ 1174        .PKGINFO
+dir  755                                usr, usr/bin, … (12 directories)
+file 755 5,081,704  image @ 12288       usr/bin/gliff
+file 755 5,799,448  image @ 5,095,424   usr/bin/gliff-probe
+file 755 5,663,832  image @ 10,895,360  usr/bin/gliff-server
+file 644       251  blob  @ 2177        usr/share/applications/gliff.desktop
+file 644     6,623  image @ 16,560,128  usr/share/doc/gliff/README.md
+file 644    18,291  image @ 16,568,320  usr/share/doc/gliff/hardware-quirks.md
+file 644     1,157  blob  @ 2428        usr/share/icons/hicolor/scalable/apps/gliff.svg
+file 644     1,072  blob  @ 3585        usr/share/licenses/gliff/LICENSE
+file 644     1,443  blob  @ 4657        usr/share/licenses/gliff/NOTICE
+```
+
+- Large files start on 4 KiB boundaries of the image: gliff ends at 5,093,992, so gliff-probe
+  starts at 5,095,424. Each is cut into btrparts of up to 128 KiB (all 131 of gliff's are zstd:
+  16.6 MB of data stored as 6.15 MB).
+- Root-level dotfiles (`.PKGINFO`, `.MTREE`, `.BUILDINFO`) are kept for pacman, not installed.
+
+The three forms of this package:
+
+```
+thin (repository)  [index]                                                      15,648 B
+transport          [index][131 btrparts' stored bytes, in table order]        6,169,373 B = btrpkg.size
+cache (pacman)     [index][zeros up to 16,384][image, 16,588,800 B]           16,605,184 B
+```
+
+In the cache file each btrpart sits at 16,384 + its image offset as a compressed extent
+(`BTRFS_IOC_ENCODED_WRITE`): the file reads as 16.6 MB of plain data and takes about 6.2 MB on disk.
+Installing `usr/bin/gliff` reflinks 5,081,704 bytes from offset 16,384 + 12,288, sharing those
+extents; its data is never decompressed, copied or written again.
 
 ## Tests
 
