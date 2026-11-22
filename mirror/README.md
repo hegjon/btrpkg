@@ -87,6 +87,3 @@ Systemd user units in `systemd/`, installed in `~/.config/systemd/user/`, linger
 Check: `systemctl --user list-timers btrpkg-mirror.timer`, `journalctl --user -u btrpkg-mirror`.
 Stop the timer and wait for the service to go idle before changing a repository by hand.
 
-One-off migrations (already run on these repositories): `migrate-btrparts.py` (btrparts into the
-shared directory), `migrate-sibling-index.py REPODIR...` (`index/NAME.btridx` to `NAME.pkg.btr`;
-hard links, database rewritten atomically under `.lock`, then `index/` removed).
