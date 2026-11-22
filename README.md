@@ -56,13 +56,11 @@ btrpkg.parts=../btrparts       where the btrparts are, relative to the repositor
 
 - Btrpart names stay stable when the compression changes (another zstd level or version):
   `publish` looks up each btrpart's unencoded hash in a map built from the indexes of the
-  repositories sharing the btrparts directory (0.02 s for Arch's 1,751 indexes) and reuses the
-  btrpart already stored for that data, after checking it. Nothing extra is kept on disk.
+  repositories sharing the btrparts directory and reuses the btrpart already stored for that data,
+  after checking it.
 - `btrpkg.parts` lets architectures (and Arch's `$repo/os/$arch` repositories, with
   `../../../btrparts`) share one btrparts directory. Without the field it is `btrparts` inside the
   repository (the ISO's offline repository).
-- The `.raw/` map lets the publisher reuse an existing btrpart when a new build has the same data,
-  instead of storing it again compressed differently.
 - A btrpkg repository must not be a pacman `CacheDir`: its thin `NAME.pkg.btr` files have the
   names of cache files.
 
@@ -116,24 +114,20 @@ cache on btrfs, a sync target with btrpkg fields comes as `NAME.pkg.btr`:
    reflinked from the cache file. Scripts, backups/`.pacnew`, hooks and the database work as usual.
 
 Network: every request of a btrpkg process goes through one long-lived curl multi handle, so a run
-opens one connection per server (HTTP/2; up to 8 kept-alive ones over HTTP/1.1) and keeps it for all
-its downloads: the indexes and signatures, all requested at once, then the btrparts. At 50 ms
-round-trip time, planning an upgrade of 100 packages (`fetch-ids --index-only`) takes 0.36 s over
-HTTPS (19.5 s before, one connection per object); `bench/net-latency-bench.sh`. HTTP/3 (`--http
-h3`) works as well: 0.28 s for the same plan, about as fast as HTTP/2 for btrparts. Checking and
-writing btrparts runs on a thread of its own so the transfer loop keeps reading and acknowledging
-(QUIC is in userspace). The plan and the
+opens one connection per server (HTTP/2 or 3; up to 8 kept-alive ones over HTTP/1.1) and keeps it
+for all its downloads: the indexes and signatures, all requested at once, then the btrparts.
+Checking and writing btrparts runs on a thread of its own, so the transfer loop keeps reading and
+acknowledging (QUIC is in userspace). At 50 ms round-trip time, planning an upgrade of 100 packages
+takes 0.36 s over HTTP/2 and 0.28 s over HTTP/3 (`bench/net-latency-bench.sh`). The plan and the
 download are two runs (pacman asks in between), so a transaction opens two connections.
 
 Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no server has the index
 (a database older than what the servers keep), or the btrpkg download of a repository fails. A
-`.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors). Entries in an older layout
-(`index/NAME.btridx`) count as unusable btrpkg data and also fall back.
+`.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors).
 
-Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems, see
-"pacstrap-btrpkg" in `HISTORY.md`), `btrpkg cache-clean` (paccache for `.pkg.btr`), and `pacbtr` /
-`btrpkg upgrade`, the standalone upgrader from iteration 1 (metadata packages + `pacman -U
---dbonly`).
+Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems), `btrpkg
+cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
+(metadata packages + `pacman -U --dbonly`).
 
 ## Repository side
 
@@ -149,8 +143,6 @@ Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems,
 - `btrpkg gc BTRPARTS`: in every repository sharing the directory, keeps each package's current
   version, anything newer and one older (`--keep 2`), removes the other indexes and package files,
   then the btrparts no kept index names. Nothing younger than an hour goes; mirror locks are held.
-- Migrations, run once: `mirror/migrate-btrparts.py` (shared btrparts directory),
-  `mirror/migrate-sibling-index.py` (the index next to the package file).
 
 ## Commands
 
@@ -278,6 +270,5 @@ extents; its data is never decompressed, copied or written again.
 - **Left for later**: one multi-server source for fetch-ids, pull-ids and `pacbtr` (server fallback
   is written three ways); committing per package so one bad package doesn't send its repository to
   package files; splitting `store::pull_many` and `upgrade()`; one fork/exec helper in libalpm;
-  libalpm's cache-file length check (exact, and before the
-  "already in the cache" shortcut).
+  libalpm's cache-file length check (exact, and before the "already in the cache" shortcut).
 - Code identifiers still say "chunk" for btrpart.
