@@ -7,7 +7,7 @@ caddy's access log. Packages: 100 spread over Arch extra (8.0 MB of indexes and 
                                           before (r72+level 12)       after
 fetch-ids --index-only, 100 pkgs, RTT 0   1.25 s, 200 connections     0.05 s, 1 connection
   RTT 50 ms, HTTP/2                       19.5 s, 200 connections     0.36 s, 1 connection
-  RTT 100 ms, HTTP/2                      37.4 s, 200 connections     (1.66 s before the fsync change)
+  RTT 100 ms, HTTP/2                      37.4 s, 200 connections     0.68 s, 1 connection
   RTT 50 ms, HTTP/1.1                     19.2 s, 200 connections     0.88 s, 8 connections
 fetch-ids, 10 packages (43.6 MB), RTT 50  2.86 s, 21 connections      0.97 s, 1 connection
 
