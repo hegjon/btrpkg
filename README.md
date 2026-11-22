@@ -152,6 +152,19 @@ damaged file just means a download. Matches from cache files are reflinked into 
 file; from installed files whole pieces are reflinked and a file's last piece is compressed again.
 Only the same package's cache files and installed files are searched, not other packages.
 
+The same pass serves both steps of a transaction: `pull-ids --plan` counts the missing bytes (the
+download size pacman shows), and `pull-ids --fetch-via FILE` lists the missing btrparts for the
+unprivileged `fetch-ids --want FILE`, which downloads exactly those and checks each against its
+stored hash (`pull-ids` checks again before writing). A btrpart already in the download directory
+with the right length isn't fetched again, so an interrupted download resumes.
+
+The check is cheap: pulling hyprland 0.57.2 next to the 0.57.1 cache file, hashing the 503 reused
+btrparts and writing the 144 new ones, took 0.04 s (old cache file in memory). btrfs has no way to
+ask for a content hash instead: its data checksums are crc32c by default and cover 4 KiB of the
+on-disk (compressed) bytes, readable only by a raw tree search as root; `BTRFS_IOC_ENCODED_READ`
+skips decompression but still reads the data, and fits only extents btrpkg wrote itself; fs-verity
+would need another hash scheme and read-only files.
+
 ### Reading installed files
 
 btrfs isn't asked for anything here: an installed file is opened by its path, read and hashed like
@@ -183,19 +196,6 @@ the old cache file is gone (the cache-file lookup is by content and finds it).
 `bench/moved-files.py` over the 24 packages with two versions on the mirror: 244.0 MB of the
 1,107.5 MB download is at the same path in the old version, another 117.3 MB moved (almost all
 kernel modules and headers, which move to a new `/usr/lib/modules/VERSION/`).
-
-The same pass serves both steps of a transaction: `pull-ids --plan` counts the missing bytes (the
-download size pacman shows), and `pull-ids --fetch-via FILE` lists the missing btrparts for the
-unprivileged `fetch-ids --want FILE`, which downloads exactly those and checks each against its
-stored hash (`pull-ids` checks again before writing). A btrpart already in the download directory
-with the right length isn't fetched again, so an interrupted download resumes.
-
-The check is cheap: pulling hyprland 0.57.2 next to the 0.57.1 cache file, hashing the 503 reused
-btrparts and writing the 144 new ones, took 0.04 s (old cache file in memory). btrfs has no way to
-ask for a content hash instead: its data checksums are crc32c by default and cover 4 KiB of the
-on-disk (compressed) bytes, readable only by a raw tree search as root; `BTRFS_IOC_ENCODED_READ`
-skips decompression but still reads the data, and fits only extents btrpkg wrote itself; fs-verity
-would need another hash scheme and read-only files.
 
 ## Repository side
 
