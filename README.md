@@ -54,7 +54,8 @@ btrpkg.size=6169373            index + all btrparts: a full download (the .pkg.t
 btrpkg.parts=../btrparts       where the btrparts are, relative to the repository URL
 ```
 
-- Btrpart names stay stable when the compression changes (another zstd level or version):
+- Btrpart names stay stable when the compressed bytes change (another zstd version, or the old
+  level-19 btrparts):
   `convert` looks up each btrpart's unencoded hash in a map built from the indexes of the
   repositories sharing the btrparts directory and reuses the btrpart already stored for that data,
   after checking it.
@@ -76,8 +77,7 @@ length (the header records the index length and the image length):
 
 `btrpkg convert` writes a package file straight into a repository (index and btrparts); `pull` and
 `pull-ids` make cache files from a repository. Reading an index parses only its first bytes, so a
-cache file works as an index too. Whatever needs a cache
-file checks the length: `open_cache()`/`cache_head()` in Rust (exact), libalpm's `read_index` (at
+cache file works as an index too. Whatever needs a cache file checks the length: `open_cache()`/`cache_head()` in Rust (exact), libalpm's `read_index` (at
 least that long: "cache file shorter than its index says"). Details: "Format (version 1)" below
 and `src/format.rs`.
 
@@ -126,7 +126,7 @@ Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no se
 (a database older than what the servers keep), or the btrpkg download of a repository fails. A
 `.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors).
 
-Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems), `btrpkg
+Also: `pacman -U NAME.pkg.btr` (a cache file, signify `.sig`), `pacstrap-btrpkg` (new systems), `btrpkg
 cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
 (metadata packages + `pacman -U --dbonly`).
 
@@ -191,7 +191,7 @@ arrived. Tests: `cargo test` (flipped bits and truncations of an index or a btrp
 and leave no files behind).
 
 Converter rules:
-- Files of `--small` bytes or less go in the blob.
+- Files of `--small` bytes or less (default 4096) go in the blob.
 - Identical file contents are stored once and reflinked more than once (dedup).
 - Btrparts are zstd level 12, fixed (also for those `pull` makes from installed files): the
   highest level that decodes as fast as level 3 in btrfs on every lab machine; 13 is 5–10% slower
@@ -202,7 +202,8 @@ Converter rules:
 
 ### Example: gliff 0.4.3-1 (x86_64)
 
-`btrpkg info` and `btrpkg dump` of the mirror's `gliff-0.4.3-1-x86_64.pkg.btr`:
+`btrpkg info` and `btrpkg dump` of the mirror's `gliff-0.4.3-1-x86_64.pkg.btr` (converted when
+btrparts were still level 19; at 12 its btrparts would take 6,637,445 B instead of 6,153,725):
 
 ```
 header        256 B   131 btrparts, image 16,588,800 B, entries 406 B (1,773), blob 3,458 B (6,100),
