@@ -166,6 +166,8 @@ pub(crate) struct PullStats {
     pub installed_chunks: u64, pub installed_bytes: u64, pub installed_cloned: u64,
     /// downloaded
     pub fetched_chunks: u64, pub fetched_bytes: u64,
+    /// of those, fetched without their padding (HTTP Range), and the zero bytes not sent
+    pub ranged: u64, pub range_saved: u64,
     /// cache ranges that failed their check and were not used
     pub bad_local: u64,
     pub encoded_chunks: u64, pub raw_chunks: u64, pub fallback_chunks: u64,
@@ -219,6 +221,17 @@ pub(crate) fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
         }
     }
     m
+}
+
+/// Bytes of a btrpart that carry data: for a raw btrpart at the end of a file, its data up to
+/// the end of the file (the rest is padding, zeros); everything else in full (a zstd frame is
+/// only usable whole). Any file the btrpart holds will do: the bytes after its end are zeros in
+/// the btrpart's content, and the content is checked against its SHA-256 anyway.
+pub(crate) fn data_len(c: &Chunk, files: &HashMap<u64, (Vec<u8>, u64, u64)>) -> usize {
+    match files.get(&c.image_off) {
+        Some((_, _, dlen)) if c.compression == COMP_NONE => (*dlen as usize).min(c.encoded_len as usize),
+        _ => c.encoded_len as usize,
+    }
 }
 
 /// Read a piece of an installed file (a regular file, not followed through a final symlink),
@@ -451,10 +464,11 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
         }
 
         // 4. one download queue for everything still missing, checked in parallel as it arrives
-        let items: Vec<(String, usize)> = missing.iter().map(|&(j, i)| {
+        let files: Vec<HashMap<u64, (Vec<u8>, u64, u64)>> = jobs.iter().map(|j| chunk_files(&j.idx)).collect();
+        let items: Vec<(String, usize, usize)> = missing.iter().map(|&(j, i)| {
             let c = &jobs[j].idx.chunks[i];
             let x = hex(&c.stored);
-            (format!("{}/{x}", &x[..2]), c.encoded_len as usize)
+            (format!("{}/{x}", &x[..2]), c.encoded_len as usize, data_len(c, &files[j]))
         }).collect();
         // progress: bytes each package still needs from the source
         let mut need = vec![0u64; jobs.len()];
@@ -467,7 +481,7 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
         if let Some(hook) = o.before_fetch {
             // the same chunk can be missing for two packages; ask for it once
             let mut seen = std::collections::HashSet::new();
-            let uniq: Vec<(String, usize)> = items.iter().filter(|(r, _)| seen.insert(r.clone())).cloned().collect();
+            let uniq: Vec<(String, usize)> = items.iter().filter(|(r, _, _)| seen.insert(r.clone())).map(|(r, l, _)| (r.clone(), *l)).collect();
             hook(&uniq)?;
         }
         src.get_many(&items, &mut ns, |batch| {
@@ -509,6 +523,6 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
     for j in jobs.iter_mut() {
         if j.out.take().is_some() { fs::rename(&j.tmp, j.item.cache)?; }
     }
-    if let Some(j) = jobs.first_mut() { (j.st.requests, j.st.retries) = (ns.requests, ns.retries); }
+    if let Some(j) = jobs.first_mut() { (j.st.requests, j.st.retries, j.st.ranged, j.st.range_saved) = (ns.requests, ns.retries, ns.ranged, ns.saved); }
     Ok(jobs.into_iter().map(|j| j.st).collect())
 }

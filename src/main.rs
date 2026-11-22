@@ -1128,6 +1128,37 @@ mod tests {
     }
 
     #[test]
+    fn data_len_stops_at_the_padding() {
+        // every raw btrpart: the bytes after data_len are zeros, the bytes before reach the end
+        // of the file data; zstd btrparts are whole
+        let t = TempDir::new("datalen");
+        // libx.so.1: random bytes of an odd length, so its last piece stays raw and padded
+        let mut x = 0x9e3779b97f4a7c15u64;
+        let random: Vec<u8> = (0..200_123).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; (x >> 24) as u8 }).collect();
+        let src = make_pkg(&t.0, "d-1-1", &Spec { big: data(300_000, 7), other: random });
+        let btr = t.0.join("d.pkg.btr");
+        convert_to(&src, &btr, 19);
+        let b = fs::read(&btr).unwrap();
+        let idx = parse_index(&b).unwrap();
+        let files = store::chunk_files(&idx);
+        let mut pos = idx.hdr.index_len() as usize; // transport: chunk data after the index
+        let (mut raw_tails, mut shorter) = (0, 0); // raw btrparts that end in padding
+        for c in &idx.chunks {
+            let d = &b[pos..pos + c.encoded_len as usize];
+            pos += c.encoded_len as usize;
+            let n = store::data_len(c, &files);
+            if c.compression == COMP_ZSTD { assert_eq!(n, c.encoded_len as usize); continue; }
+            assert!(n >= 1 && n <= d.len());
+            assert!(d[n..].iter().all(|&x| x == 0), "nonzero byte after data_len");
+            if n < d.len() { shorter += 1; }
+            if n < c.encoded_len as usize { raw_tails += 1; }
+        }
+        assert!(raw_tails > 0 && shorter == raw_tails, "no raw tail ({raw_tails}, {shorter})");
+        // libx.so.1's tail: 200_123 - 131_072 = 69_051 data bytes of a 69_632-byte btrpart
+        assert!(idx.chunks.iter().any(|c| c.compression == COMP_NONE && store::data_len(c, &files) == 69_051 && c.encoded_len == 69_632));
+    }
+
+    #[test]
     fn gc_shared_btrparts() {
         // two repositories share ../btrparts; p has versions 1, 2, 3 in x86_64 (db names 3) and
         // version 1 in aarch64 (db names 1): with --keep 2 only x86_64's p-1 goes, and only the

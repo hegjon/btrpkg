@@ -105,6 +105,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
     let parts = dir.join(net::DEFAULT_PARTS);
     let mut need: Vec<(String, usize, usize)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut data_of: HashMap<String, usize> = HashMap::new();
     let want: Option<HashSet<&str>> = o.want.as_ref().map(|w| w.iter().map(|s| s.as_str()).collect());
     for (j, idx) in idxs.iter().enumerate() {
         let local: HashSet<(Hash, u32)> = match (o.cachedir, &want) {
@@ -124,6 +125,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
             }
             if !seen.insert(rel.clone()) { continue; }
             if fs::symlink_metadata(parts.join(&rel)).is_ok_and(|m| m.is_file() && m.len() == c.encoded_len as u64) { continue; }
+            data_of.insert(rel.clone(), store::data_len(c, &files));
             need.push((rel, c.encoded_len as usize, j));
         }
     }
@@ -139,7 +141,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
     let mut left: Vec<(String, usize, usize)> = need;
     for (k, s) in servers.iter().enumerate() {
         if left.is_empty() { break; }
-        let items: Vec<(String, usize)> = left.iter().map(|(r, l, _)| (r.clone(), *l)).collect();
+        let items: Vec<(String, usize, usize)> = left.iter().map(|(r, l, _)| (r.clone(), *l, data_of[r])).collect();
         let ps = match s.parts(o.parts) {
             Ok(ps) => ps,
             Err(e) => { eprintln!("btrpkg: {}: {e:#}", s.describe()); continue; }

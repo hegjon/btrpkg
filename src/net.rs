@@ -31,7 +31,14 @@ pub fn set_options(o: NetOptions) -> Result<()> {
 fn options() -> &'static NetOptions { OPTIONS.get_or_init(NetOptions::default) }
 
 #[derive(Default, Debug, Clone)]
-pub struct NetStats { pub requests: u64, pub bytes: u64, pub retries: u64 }
+pub struct NetStats {
+    pub requests: u64,
+    pub bytes: u64,
+    pub retries: u64,
+    /// objects fetched without their trailing zeros (HTTP Range), and the zero bytes not sent
+    pub ranged: u64,
+    pub saved: u64,
+}
 
 struct Collector { buf: Vec<u8>, max: usize }
 impl Handler for Collector {
@@ -187,17 +194,21 @@ impl Source {
         }
     }
 
-    /// Many objects of known exact length. `f` gets them in batches of about 16 MB, in no
-    /// particular order, as (item index, bytes).
-    pub fn get_many(&self, items: &[(String, usize)], st: &mut NetStats, mut f: impl FnMut(Vec<(usize, Vec<u8>)>) -> Result<()>) -> Result<()> {
+    /// Many objects of known exact length, as (path, length, data length): bytes after the data
+    /// length are zeros (a raw btrpart's padding after the end of its file), so over HTTP only
+    /// the data is asked for (`Range`) and the zeros are put back here. A server that ignores the
+    /// range sends everything, which is fine too. Callers check every object against its SHA-256
+    /// (its name), so a wrong reconstruction can't get through. `f` gets the objects in batches
+    /// of about 16 MB, in no particular order, as (item index, bytes).
+    pub fn get_many(&self, items: &[(String, usize, usize)], st: &mut NetStats, mut f: impl FnMut(Vec<(usize, Vec<u8>)>) -> Result<()>) -> Result<()> {
         match self {
             Source::Dir(d) => {
                 let absent: Vec<String> = items.iter()
-                    .filter(|(rel, _)| std::fs::symlink_metadata(d.join(rel)).is_err())
-                    .map(|(rel, _)| rel.clone()).collect();
+                    .filter(|(rel, _, _)| std::fs::symlink_metadata(d.join(rel)).is_err())
+                    .map(|(rel, _, _)| rel.clone()).collect();
                 if !absent.is_empty() { return Err(AbsentChunks(absent).into()); }
                 for (b, chunk) in items.chunks(256).enumerate() {
-                    let got = chunk.par_iter().enumerate().map(|(k, (rel, len))| -> Result<(usize, Vec<u8>)> {
+                    let got = chunk.par_iter().enumerate().map(|(k, (rel, len, _))| -> Result<(usize, Vec<u8>)> {
                         let v = read_local(d, rel).with_context(|| format!("read {rel}"))?;
                         ensure!(v.len() == *len, "{rel}: wrong length");
                         Ok((b * 256 + k, v))
@@ -226,7 +237,10 @@ impl Source {
                 loop {
                     while active.len() < *parallel && (next < items.len() || !retry.is_empty()) {
                         let (i, attempt) = retry.pop().unwrap_or_else(|| { next += 1; (next - 1, 0) });
-                        let mut h = multi.add2(self.easy(&items[i].0, items[i].1)?)?;
+                        let (rel, len, data) = &items[i];
+                        let mut e = self.easy(rel, *len)?;
+                        if data < len && *data > 0 { e.range(&format!("0-{}", data - 1))?; }
+                        let mut h = multi.add2(e)?;
                         token += 1;
                         h.set_token(token)?;
                         active.insert(token, (h, i, attempt));
@@ -240,9 +254,13 @@ impl Source {
                         let mut e = multi.remove2(h)?;
                         st.requests += 1;
                         let code = e.response_code().unwrap_or(0);
-                        let body = std::mem::take(&mut e.get_mut().buf);
-                        if ok && code == 200 && body.len() == items[i].1 {
+                        let mut body = std::mem::take(&mut e.get_mut().buf);
+                        let (_, len, data) = items[i];
+                        let fits = (code == 200 && body.len() == len) || (code == 206 && data < len && body.len() == data);
+                        if ok && fits {
                             st.bytes += body.len() as u64;
+                            if code == 206 { st.ranged += 1; st.saved += (len - data) as u64; }
+                            body.resize(len, 0);
                             batch_bytes += body.len();
                             batch.push((i, body));
                         } else if attempt + 1 < ATTEMPTS && code != 404 {
