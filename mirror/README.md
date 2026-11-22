@@ -1,66 +1,92 @@
-# btrpkg mirrors: Omarchy's edge repository, Arch's core and extra
+# btrpkg mirrors
 
 `repo-mirror.sh` keeps one repository's mirror in step with its upstream (through pacoloco):
 upstream's database plus btrpkg data for the wanted packages (`ALL=1`: every package).
-`mirror-all.sh` runs it for every line of `repos.conf`:
+`mirror-all.sh` runs it for every line of `repos.conf`, then `btrpkg gc` once per btrparts
+directory. Served by caddy at `http://192.168.2.2:1764/` from `~/Work/btrpkg-repo`:
 
-| repo | lab URL | wanted |
-|---|---|---|
-| omarchy | `http://192.168.2.2:1764/omarchy-mirror/$arch` | `wanted.txt`: installed on any lab machine, plus omarchy-iso's root image (58) |
-| core | `http://192.168.2.2:1764/arch-mirror/$repo/os/$arch` | `core.wanted`: omarchy-iso's root image (201) |
-| extra | `http://192.168.2.2:1764/arch-mirror/$repo/os/$arch` | `extra.wanted`: omarchy-iso's root image (627) |
+| repo | arch | path | wanted | btrparts |
+|---|---|---|---|---|
+| omarchy | x86_64 | `omarchy-mirror/x86_64` | `wanted.txt` (58) | `omarchy-mirror/btrparts` |
+| omarchy | aarch64 | `omarchy-mirror/aarch64` | `omarchy-aarch64.wanted` (96) | `omarchy-mirror/btrparts` |
+| core | x86_64 | `arch-mirror/core/os/x86_64` | `core.wanted` (201) | `arch-mirror/btrparts` |
+| extra | x86_64 | `arch-mirror/extra/os/x86_64` | `extra.wanted` (627) | `arch-mirror/btrparts` |
+| core | aarch64 (ALARM) | `arch-mirror/core/os/aarch64` | `core-aarch64.wanted` (204) | `arch-mirror/btrparts` |
+| extra | aarch64 (ALARM) | `arch-mirror/extra/os/aarch64` | `extra-aarch64.wanted` (715) | `arch-mirror/btrparts` |
+| alarm | aarch64 | `arch-mirror/alarm/os/aarch64` | `alarm.wanted` (1) | `arch-mirror/btrparts` |
+| asahi-alarm | aarch64 | `arch-mirror/asahi-alarm/os/aarch64` | `asahi-alarm.wanted` (9) | `arch-mirror/btrparts` |
 
-The root image's lists are the dependency closure of omarchy-iso's x86_64 edge image
-(`builder/archinstall.packages` without the per-machine firmware, `builder/image.packages`,
-Omarchy's `omarchy-base.packages`, omarchy-dev, omarchy-settings-dev and omarchy-nvim), 878
-packages, resolved with `pacman -Sp --print-format '%r %n'` against an empty database. Arch
-packages are checked against `/usr/share/pacman/keyrings/archlinux.gpg`, Omarchy's against
-`omarchy.gpg`. First run: core 201 packages in about 20 minutes, extra 627 in 18 minutes
-(1.89 GB of chunks). That was `publish` writing every chunk file with its own fsync, in sequence;
-since it writes in parallel with one syncfs, converting core takes 15 s (see the README).
+Client URLs: `http://192.168.2.2:1764/omarchy-mirror/$arch` and
+`http://192.168.2.2:1764/arch-mirror/$repo/os/$arch`. asahi-alarm comes straight from its GitHub
+releases, the others through pacoloco (`127.0.0.1:9129`). Keyrings: Arch's and Omarchy's from
+`/usr/share/pacman/keyrings/`, ALARM's and asahi-alarm's in `keyrings/`.
 
-Each run:
-1. Fetches upstream's `omarchy.db` through pacoloco (conditional GET). If it hasn't changed and the
-   last run succeeded, the run stops there; that takes 0.4 s.
-2. Downloads the `.pkg.tar.zst` and `.sig` of the wanted packages the mirror doesn't have yet.
-3. Runs `btrpkg repo-update --db-in`. Every new file is checked against the database's SHA-256 and
-   Omarchy's OpenPGP signature (`gpgv` with `/usr/share/pacman/keyrings/omarchy.gpg`, dearmored),
-   then converted. Its chunks and the index (signed with the mirror's key) are published, and the
-   served `omarchy.db` is replaced last by upstream's with three `btrpkg.*` lines in `%DATA%` per
-   converted package.
+Wanted lists: Omarchy x86_64 is what's installed on any lab machine plus omarchy-iso's root image;
+core/extra x86_64 are the root image's dependency closure (omarchy-iso's archinstall and image
+package lists, Omarchy's base packages, omarchy-dev, omarchy-settings-dev, omarchy-nvim: 878
+packages, resolved with `pacman -Sp` against an empty database); the aarch64 lists come from
+`pacman -Sl` on macmini-m1 and galaxybook (what they have installed), plus the x86_64 lists.
 
-The mirror signs an index only after Omarchy's own signature has checked out, so a client that
-trusts the mirror's key gets nothing Omarchy didn't sign.
+## Layout
+
+```
+omarchy-mirror/
+├── x86_64/
+│   ├── omarchy.db -> omarchy.db.tar.zst      upstream's database with btrpkg fields
+│   ├── NAME.pkg.tar.zst (+ .sig)             upstream's package file (stock pacman, fallback)
+│   ├── NAME.pkg.btr (+ .sig)                 the index, signed with the mirror's key
+│   ├── NAME.pkg.btr.src                      SHA-256 of the package file it was made from
+│   ├── .upstream.db, .done, .lock, .wanted-learned
+├── aarch64/
+└── btrparts/xx/HASH, btrparts/.raw/xx/HASH   shared by both architectures
+```
+
+Arch's repositories use `$repo/os/$arch` and share `arch-mirror/btrparts`
+(`btrpkg.parts=../../../btrparts`).
+
+## Each run
+
+1. Fetches upstream's database (conditional GET). If it hasn't changed, the last run finished, and
+   nothing new is wanted, the run stops there (well under a second).
+2. Downloads the `.pkg.tar.*` and `.sig` of the wanted packages the mirror doesn't have yet. A run
+   counts as finished (`.done`) only if every download worked, so failed ones are retried.
+3. Runs `btrpkg repo-update --keep-going --db-in .upstream.db`. Every new file is checked against
+   the database's SHA-256 and upstream's OpenPGP signature (gpgv), converted, its btrparts and
+   signed index published, and the served database replaced last by upstream's with four
+   `btrpkg.*` lines in `%DATA%` per converted package. A package that can't be converted (e.g. no
+   `.sig` upstream: Omarchy aarch64's obsidian) keeps its plain entry.
+4. After all repositories: `btrpkg gc --keep 2` per btrparts directory (skipped if any repository
+   failed; `NO_GC=1`, `GC_KEEP=N`). Each package keeps its current version, anything newer and one
+   older; other versions lose index, signature, `.src` and package file, then unreferenced btrparts
+   and raw map entries go. Nothing younger than an hour is removed; repository locks are held.
+
+The mirror signs an index only after upstream's own signature has checked out, so a client that
+trusts the mirror's key gets nothing upstream didn't sign.
 
 Packages that aren't converted keep their plain entry. pacman downloads those as usual: the
-mirror doesn't have the file (404), so pacman tries the next `Server`. A client therefore lists
-the mirror first and Omarchy's servers after it:
+mirror doesn't have the file (404), so pacman tries the next `Server`. A client lists the mirror
+first and upstream after it:
 
     [omarchy]
     Server = http://192.168.2.2:1764/omarchy-mirror/$arch
     Server = http://desktop.lab:9129/repo/omarchy-edge-$arch
     Server = https://pkgs.omarchy.org/edge/$arch
 
-The stock pacman reads the same database and ignores the btrpkg lines. `pacman-btrpkg` installs the
-converted packages as btrpkg packages.
+The mirror also learns from misses: each package whose `.pkg.tar.*` a client asked the mirror for
+and got a 404 goes into `.wanted-learned` (read from caddy's access log), and the next run converts
+it. A file the mirror stores but didn't convert is served plain and not learned.
 
-`wanted.txt`: the Omarchy packages installed on any lab machine (51; 0.91 GB of `.pkg.tar.zst`,
-895 MB of chunks). The whole repository would be 306 packages and 17.4 GB.
+## Services and maintenance
 
-The mirror also learns from misses. Every run reads caddy's access log, and each package whose
-`.pkg.tar.zst` a client requested from the mirror and got a 404 for goes into
-`.wanted-learned`; the run converts it. After p14s's update installed fantasi, flowtunes and
-omarchy-themes-loops (fetched from Omarchy's servers through the fallback), the next run
-converted them in 4 s. A machine's next update of those packages then comes through btrpkg.
-
-Old versions stay, so a client with a slightly older database can still fetch them. Nothing is
-removed yet; deleting unused files and chunks belongs to the repo pipeline (PLAN step 7).
-
-Services (systemd user units in `systemd/`, installed in `~/.config/systemd/user/`, with lingering
-on so they run without a login):
+Systemd user units in `systemd/`, installed in `~/.config/systemd/user/`, lingering on:
 - `btrpkg-repo.service`: caddy serving `~/Work/btrpkg-repo` (`:8790` local, `:1764` lab,
   `:1763` TLS). Dotfiles, `keys/`, logs and the Caddyfile are hidden.
-- `btrpkg-mirror.timer`: runs the mirror 2 minutes after boot, then 10 minutes after each run
+- `btrpkg-mirror.timer`: runs `mirror-all.sh` 2 minutes after boot, then 10 minutes after each run
   ends.
 
 Check: `systemctl --user list-timers btrpkg-mirror.timer`, `journalctl --user -u btrpkg-mirror`.
+Stop the timer and wait for the service to go idle before changing a repository by hand.
+
+One-off migrations (already run on these repositories): `migrate-btrparts.py` (btrparts into the
+shared directory), `migrate-sibling-index.py REPODIR...` (`index/NAME.btridx` to `NAME.pkg.btr`;
+hard links, database rewritten atomically under `.lock`, then `index/` removed).

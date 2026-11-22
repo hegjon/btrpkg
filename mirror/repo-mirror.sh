@@ -14,8 +14,8 @@
 #      relative to M: shared by the mirror's repositories) and the index signed with
 #      the mirror's key, then replace the served REPO.db with upstream's plus btrpkg %DATA%.
 # Packages not converted keep their plain entry; pacman downloads them as usual, from the next
-# server when the mirror has no file. Old versions stay (clients with an older database can still
-# fetch them); removing unused files and btrparts is the repo pipeline's job (PLAN step 7).
+# server when the mirror has no file. Old versions stay until mirror-all.sh's btrpkg gc removes
+# them (current + one older version per package are kept).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 REPO=${REPO:-omarchy}

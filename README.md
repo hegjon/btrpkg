@@ -1,93 +1,200 @@
-# btrpkg (spike)
+# btrpkg
 
-A trial package format for Omarchy: a post-processor turns a pacman `.pkg.tar.zst` into a
-`.btrpkg` whose file data is already in btrfs's on-disk form, made of zstd frames of up to 128 KiB,
-one set of extents per file. On a btrfs system:
+A package format, repository tool and pacman integration for Omarchy (and Arch) on btrfs. A
+package's large files are stored as **btrparts**: pieces of up to 128 KiB of one file's data,
+each already in btrfs's on-disk form (a zstd frame, or raw data). The client writes them into the
+pacman cache with `BTRFS_IOC_ENCODED_WRITE`, so the kernel neither decompresses nor recompresses
+them, and installs files by reflinking them from the cache file. A file's data is never read,
+written or compressed again at install time, and the installed files share their extents with the
+cache. Btrparts are content-addressed, so an upgrade downloads only those it can't take from the
+installed version or an older cache file.
 
-1. **fetch** streams the package into the package cache. Header, manifest and chunk table are
-   written as plain data. Every zstd frame goes to disk unchanged through
-   `BTRFS_IOC_ENCODED_WRITE`: the kernel neither decompresses nor recompresses it. The cache file
-   reads back as an uncompressed image of all the package's large files, each at a 4 KiB-aligned
-   offset.
-2. **install** creates each large file by `FICLONERANGE` from the cache file, rounding the length up
-   to 4 KiB and truncating afterwards. Small files come from a solid-compressed blob in the
-   manifest and are written normally. A file's data is never read, written or compressed at install
-   time, and the installed files share their extents with the cache.
+Repositories keep the plain `.pkg.tar.zst` beside the btrpkg data: stock pacman reads the same
+database and ignores the btrpkg fields, and pacman-btrpkg falls back to the package file whenever
+the btrpkg path can't be used.
 
-Two variants of the same file:
+**Status (2026-11-22): lab trial.** A mirror on the desktop serves Omarchy's edge repository and
+Arch's core/extra for x86_64, and Omarchy, ALARM and asahi-alarm for aarch64, at
+`http://192.168.2.2:1764/`. Five lab machines (p14s, x200, t460s, t490, macmini-m1) run
+pacman-btrpkg from the `[btrpkg]` CI repository. Signing uses a test key, and the CI packages are
+unsigned. The rest of this file below "History" is the lab notebook, newest first.
 
-- **`.pkg.btr`**: chunks are already btrfs zstd frames (level 19 on the build server). `fetch`
-  does no compression work, but the download is 15–32% bigger than `.pkg.tar.zst`.
-- **`.pkg.btr.zst`**: a `.pkg.btr` with *raw* chunks, wrapped in one solid zstd stream
-  (`-19 --long=27`, with checksum). The download is smaller than `.pkg.tar.zst`. `fetch`
-  decompresses it while streaming, compresses each 128 KiB chunk into a btrfs frame on all cores
-  (`-l`, default 3), and writes the frames with encoded writes. Wrapping already-framed chunks in
-  zstd ("double compression") saves only about 4%, so the inner chunks stay raw.
+Contents: [Repository layout](#repository-layout) · [File forms](#file-forms) ·
+[Trust](#trust) · [Client: pacman-btrpkg](#client-pacman-btrpkg) ·
+[Repository side](#repository-side) · [Commands](#commands) · [Packages and CI](#packages-and-ci) ·
+[Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps) ·
+[History](#history-lab-notebook-newest-first)
 
-```sh
-cargo build --release
-btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.pkg.btr          # post-processor
-btrpkg convert [--outer-level 19] [--frames N] [--min-frame B] in.pkg.tar.zst out.pkg.btr.zst  # raw chunks, solid zstd
-btrpkg keygen NAME                                                        # NAME.sec + NAME.pub (signify format)
-btrpkg sign --key NAME.sec x.pkg.btr                                      # x.pkg.btr.sig over the header
-btrpkg publish [--key NAME.sec] x.pkg.btr STORE                           # chunks, signature, index
-btrpkg fetch TRUST [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
-btrpkg pull TRUST STORE NAME /var/cache/pacman/pkg/x.pkg.btr
-btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # reflinks, falls back to copy
-btrpkg info x.pkg.btr
-# TRUST: --id HEX (header ID from the repo db) | --sig FILE [--keys DIR] (default IN.sig or the
-#        store's NAME.btridx.sig, keys in /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified
+Other documents: `libalpm/README.md` (the pacman patches), `mirror/README.md` (the mirror),
+`packaging/README.md` (the packages), `PLAN.md` (plans and status), `src/format.rs` (the format,
+in full).
+
+## Repository layout
+
+One package (gliff 0.4.3-1, x86_64) on the mirror:
+
+```
+omarchy-mirror/
+├── x86_64/
+│   ├── omarchy.db                                 pacman database, btrpkg fields in %DATA%
+│   ├── gliff-0.4.3-1-x86_64.pkg.tar.zst (+ .sig)  the package file: stock pacman, fallback
+│   ├── gliff-0.4.3-1-x86_64.pkg.btr     (+ .sig)  the index (thin .pkg.btr), signify signature
+│   └── gliff-0.4.3-1-x86_64.pkg.btr.src           mirrors: SHA-256 of the package file it came from
+├── aarch64/                                       the same layout
+└── btrparts/                                      shared by x86_64 and aarch64
+    ├── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
+    └── .raw/fa/faa6e2b2d20f…                      raw map: unencoded hash -> "compression length stored-hash"
 ```
 
-`fetch` and `pull` check the header first, against an expected ID or a signature, and refuse to
-go on without one (`--unverified` is for benchmarks). Then they check the index (chunk table,
-entries, small-file blob, each against its hash in the header), then every chunk before writing
-it: the hash of its stored bytes (which the signed index covers) and, for a zstd chunk, the frame
-header btrfs relies on (one frame, no dictionary ID or checksum flag, content size = unencoded
-length). `--verify-data` also decodes every frame the way btrfs will (window at most 128 KiB) and
-checks the unencoded hash; `publish` always does. The client doesn't need it for safety: data is
-only ever reused (from an older cache file or an installed file) after reading it back and
-checking its unencoded hash, and on a CPU without SHA instructions the full check cost 7 s of 27 s
-for the 315-package set (t460s).
-`install` resolves every path from a root directory fd with `openat2(RESOLVE_BENEATH |
-RESOLVE_NO_SYMLINKS)`, so nothing is written, changed or linked through a symlink, whether the
-package made it or it was on disk (pacman refuses to extract through a symlink too); hardlinks may
-only point at earlier files of the same package. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
-compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
-trailing data, and on any failure removes its partial file.
+The database entry keeps every stock field and adds:
 
-## HTTP/1.1 vs HTTP/2 vs HTTP/3 (2026-11-21)
+```
+%DATA%
+btrpkg.index=gliff-0.4.3-1-x86_64.pkg.btr
+btrpkg.id=ef575023…48d2        SHA-256 of the index header (the package's ID)
+btrpkg.size=6169373            index + all btrparts: a full download (the .pkg.tar.zst is 6,591,746)
+btrpkg.parts=../btrparts       where the btrparts are, relative to the repository URL
+```
 
-`bench/proto-bench.sh`: the 10 upgrades of the lab runs, downloaded three ways per protocol:
-btrpkg with reuse from the installed versions (a real upgrade), btrpkg without reuse (every
-chunk, 332 MB in 3,846 requests), and the `.pkg.tar.zst` files with `curl --parallel
---parallel-max 5` (pacman's `ParallelDownloads = 5`, 335 MB in 10 requests). Server: caddy 2.11
-on the desktop, plain http (h1, h2c) and https (h1, h2, h3 over QUIC; caddy's internal CA).
-Client: libcurl 8.23 (nghttp2, ngtcp2, OpenSSL 4.1). Medians of 3 rounds, in seconds; the
-access log confirmed each protocol. btrpkg: 8 connections over HTTP/1.1, 64 requests in flight
-over HTTP/2 and 3.
+- `btrpkg.parts` lets architectures (and Arch's `$repo/os/$arch` repositories, with
+  `../../../btrparts`) share one btrparts directory. Without the field it is `btrparts` inside the
+  repository (the ISO's offline repository).
+- The `.raw/` map lets the publisher reuse an existing btrpart when a new build has the same data,
+  instead of storing it again compressed differently.
+- A btrpkg repository must not be a pacman `CacheDir`: its thin `NAME.pkg.btr` files have the
+  names of cache files.
 
-| link | protocol | btrpkg, real upgrade | btrpkg, every chunk | .pkg.tar.zst |
-|---|---|---:|---:|---:|
-| p14s wired, 0.4 ms RTT | http/1.1 · h2c · https/1.1 · h2 · h3 | 1.03 · 1.03 · 1.07 · 1.06 · 1.09 | 3.08 · 3.09 · 3.12 · 3.14 · 3.21 | 2.87 · 2.87 · 2.88 · 2.88 · 2.93 |
-| p14s + 30 ms (netem) | same | 9.11 · 3.26 · 9.75 · 3.92 · 3.31 | 21.57 · 5.97 · 21.92 · 6.62 · 17.96 | 3.35 · 3.95 · 3.44 · 3.96 · 4.68 |
-| t460s Wi-Fi, 1.8 ms | same | 4.94 · 3.89 · 5.14 · 4.05 · 8.26 | 7.23 · 5.03 · 7.42 · 5.25 · 13.90 | 4.48 · 4.36 · 4.47 · 4.40 · 12.05 |
-| x200 Wi-Fi, 3.0 ms | same | 17.40 · 16.46 · 17.08 · 15.93 · 21.07 | 22.42 · 21.15 · 22.64 · 21.98 · 31.10 | 19.63 · 20.31 · 20.04 · 19.88 · 28.34 |
+## File forms
 
-- At LAN latency the protocol doesn't matter (p14s), or the link does (x200 at ~16 MB/s).
-- With internet-like latency (30 ms) btrpkg needs a multiplexing protocol: over HTTP/1.1 its
-  thousands of chunk requests take 2.8-3.6x longer than over HTTP/2. Whole packages don't care
-  (few large requests; HTTP/1.1 is even a little faster). A btrpkg mirror must speak HTTP/2.
-- HTTP/3 (quic-go server, ngtcp2 client) is the slowest wherever there is much to download:
-  every chunk at 30 ms 18.0 s vs 6.6 s for HTTP/2 over TLS, and 2-3x slower on Wi-Fi even for
-  whole packages; it also costs the most CPU (x200: 20 s CPU for the full download vs 13 s for
-  h2). With more requests in flight it improves but stays behind (30 ms, every chunk: h3
-  26.3/20.2/18.3/12.6 s at 8/32/64/128 in flight, h2 19.7/7.1/6.6/5.7 s), so it is the QUIC
-  connection's throughput, not request concurrency. HTTP/2 stays btrpkg's default.
-- The Wi-Fi links have only 2-3 ms RTT: they show bandwidth and loss, not internet latency;
-  netem's delay is clean (no loss or reordering).
-- HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
-  far-away mirrors.
+The same index starts all three forms; they are told apart by their length (the header records
+the index length and the image length):
+
+| form | where | layout | length |
+|---|---|---|---|
+| thin (index) | repository `NAME.pkg.btr` | header, btrpart table, entries, small-file blob | index length |
+| transport | `btrpkg convert` output (`.pkg.btr`, or `.pkg.btr.zst` with one outer zstd stream) | index, then every btrpart's stored bytes | index + stored lengths |
+| cache | pacman cache `NAME.pkg.btr` | index, zeros up to 4 KiB, then the image (each large file 4 KiB-aligned, as encoded extents) | `align(index) + image length` |
+
+Reading an index parses only its first bytes, so any form works as an index. Whatever needs a cache
+file checks the length: `open_cache()`/`cache_head()` in Rust (exact), libalpm's `read_index` (at
+least that long: "cache file shorter than its index says"). Details: "Format (version 1)" below
+and `src/format.rs`.
+
+## Trust
+
+- The database's `btrpkg.id` is the SHA-256 of the index header; the header holds the SHA-256 of
+  the btrpart table, entries and blob, and the table holds each btrpart's stored-bytes hash and
+  unencoded hash. Each section is checked before the next is read, each btrpart before it is
+  written.
+- The index header is signed with signify (Ed25519; `NAME.pkg.btr.sig`). Keys: `/etc/btrpkg/keys`,
+  `/usr/share/btrpkg/keys`. pacman-btrpkg checks it as `SigLevel` asks and records
+  `btrpkg-validation=signify:KEYFILE`; `%VALIDATION%` says `sha256`.
+- The mirror converts and signs a package only after its upstream OpenPGP signature (gpgv) and the
+  database's SHA-256 checked out, so a client that trusts the mirror's key gets nothing upstream
+  didn't sign.
+- Local data (installed files, older cache files) is reused only after reading it back and checking
+  its unencoded hash. Installation resolves every path beneath the root with `openat2`
+  (`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`).
+
+## Client: pacman-btrpkg
+
+`pacman-btrpkg` is Arch's pacman 7.1.0 (`54d94116`) plus 10 libalpm patches (`libalpm/README.md`),
+installed beside the system pacman (`/usr/bin/pacman-btrpkg`, `/etc/pacman-btrpkg.conf`, which
+includes `/etc/pacman.conf` and sets `BtrPkgHelper = /usr/bin/btrpkg`). With a helper set and the
+cache on btrfs, a sync target with btrpkg fields comes as `NAME.pkg.btr`:
+
+1. `_alpm_sync_prepare`: `btrpkg fetch-ids --index-only` fetches the indexes, `pull-ids --plan`
+   reports what local data can't cover; the summary shows the real download size.
+2. Download: `fetch-ids` (network, as `DownloadUser`, seccomp + Landlock, writes only to
+   `CACHEDIR/download-btrpkg/`) fetches the missing btrparts from the servers in order
+   (CacheServer first); `pull-ids` (root, no network) checks everything and assembles the cache
+   files with encoded writes and reflinks. With the sandbox off (pacstrap) one root `pull-ids` does
+   both.
+3. Install: pacman's own extraction over a tar stream made from the index; large files are
+   reflinked from the cache file. Scripts, backups/`.pacnew`, hooks and the database work as usual.
+
+Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no server has the index
+(a database older than what the servers keep), or the btrpkg download of a repository fails. A
+`.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors). Entries in an older layout
+(`index/NAME.btridx`) count as unusable btrpkg data and also fall back.
+
+Also: `pacman -U NAME.pkg.btr` (signify `.sig`), `pacstrap-btrpkg` (new systems, see
+"pacstrap-btrpkg" below), `btrpkg cache-clean` (paccache for `.pkg.btr`), and `pacbtr` /
+`btrpkg upgrade`, the standalone upgrader from iteration 1 (metadata packages + `pacman -U
+--dbonly`).
+
+## Repository side
+
+- `btrpkg repo-update [--db-in UPSTREAM.db] DIR REPO`: converts and publishes every new package
+  file in DIR (checked against the database's SHA-256 and, unless `--no-gpg`, its OpenPGP
+  signature), signs the indexes (`--key`), and writes REPO.db last with the btrpkg fields.
+  Unchanged packages are recognised by `NAME.pkg.btr.src`.
+- `mirror/` (details in `mirror/README.md`): `mirror-all.sh` runs `repo-mirror.sh` for each line of
+  `repos.conf` every 10 minutes (systemd user timer): upstream database through pacoloco, the
+  wanted packages (lists plus 404s learned from caddy's log), `repo-update`, then `btrpkg gc` per
+  btrparts directory.
+- `btrpkg gc BTRPARTS`: in every repository sharing the directory, keeps each package's current
+  version, anything newer and one older (`--keep 2`), removes the other indexes and package files,
+  then the btrparts no kept index names. Nothing younger than an hour goes; mirror locks are held.
+- Migrations, run once: `mirror/migrate-btrparts.py` (shared btrparts directory),
+  `mirror/migrate-sibling-index.py` (the index next to the package file).
+
+## Commands
+
+`btrpkg` with no arguments prints the full usage. In short:
+
+| | commands |
+|---|---|
+| package files | `convert`, `info`, `dump`, `keygen`, `sign` |
+| client, by hand | `fetch` (transport → cache), `pull` (store → cache), `install` (cache → root), `cache-clean`, `upgrade` (= `pacbtr`) |
+| client, for pacman | `fetch-ids` (unprivileged network half), `pull-ids` (root half; `--plan`, `--fetch-via`) |
+| repository | `publish`, `repo-update`, `gc` |
+
+Trust options (`--id`, `--sig`, `--unverified`) and network options (`--http h1|h2|h3`, `--h2c`,
+`--cacert`) are in the usage text.
+
+## Packages and CI
+
+- `btrpkg-git` (`/usr/bin/btrpkg`, `/usr/bin/pacbtr`) and `pacman-btrpkg`, built by
+  `.github/workflows/packages.yml` for x86_64 and aarch64 on every push and published as the
+  `[btrpkg]` repository: `Server = https://github.com/hegjon/btrpkg/releases/download/$arch`,
+  `SigLevel = Optional` (unsigned for now).
+- A machine joins with `packaging/use-btrpkg-repo.sh` (adds the section, refreshes only
+  `btrpkg.db`). Local builds: `packaging/build.sh` (container), `packaging/build-local-toolchain.sh`.
+- The pacman patches live on the `btrpkg` branch of `~/Work/pacman` and are exported to
+  `libalpm/00*.patch`; the PKGBUILD applies all of them.
+
+## Tests
+
+- `cargo test`: 22 tests (format: every bit flip and truncation rejected; convert/fetch/install;
+  publish/pull with reuse; repo-update; gc; HTTP Range). Two need btrfs and skip elsewhere.
+- libalpm: `meson test -C build pacman:btrpkg` (73 subtests on real and crafted indexes), pacman's
+  own suite.
+- On p14s: `bench/pacman-robust.sh` (sandbox roles, resume, dead and corrupt servers,
+  DisableSandbox, fallbacks, `-Sc`; 12 checks), `bench/pacman-gaps-test.sh NAME` (`-U`, signatures,
+  validation records; 16), `bench/plan-count.sh` (each btrpkg step runs once).
+- Clients: `bench/btrparts-client-check.sh` (throwaway dbpath download), `bench/scratch-root-compare.sh`
+  (stock vs btrpkg into scratch roots, compared file by file).
+
+## Open decisions and known gaps
+
+- **Signing and publishing** (needs Jonny): a real signify key and keyring package, signed `[btrpkg]`
+  packages, where an Omarchy btrpkg repository would be published (R2/S3), database signing.
+- **p14s daily trial**: how it should update unattended (`omarchy update` needs sudo).
+- **ISO**: the `btrpkg` branch of omarchy-iso is ready but unbuilt (the build formats loop images,
+  which the agent doesn't run; or a fork's CI).
+- **Left for later**: one multi-server source for fetch-ids, pull-ids and `pacbtr` (server fallback
+  is written three ways); committing per package so one bad package doesn't send its repository to
+  package files; splitting `store::pull_many` and `upgrade()`; one fork/exec helper in libalpm;
+  fetching indexes over one connection; libalpm's cache-file length check (exact, and before the
+  "already in the cache" shortcut).
+- Code identifiers still say "chunk" for btrpart.
+
+# History (lab notebook, newest first)
+
+The sections below were written as the work went; older ones describe earlier layouts (`index/`,
+`.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
+is at the end ("The spike").
 
 ## The index is NAME.pkg.btr next to the package file (2026-11-22)
 
@@ -328,6 +435,39 @@ every repository that shares a btrparts directory, then removes the btrparts no 
 - A client whose database is older than the previous version gets no index. pacman-btrpkg then
   fails the transaction instead of falling back to the `.pkg.tar.zst` from another server. That is
   the same outcome as a stale db against an Arch mirror (404), but the fallback would be better.
+
+## HTTP/1.1 vs HTTP/2 vs HTTP/3 (2026-11-21)
+
+`bench/proto-bench.sh`: the 10 upgrades of the lab runs, downloaded three ways per protocol:
+btrpkg with reuse from the installed versions (a real upgrade), btrpkg without reuse (every
+chunk, 332 MB in 3,846 requests), and the `.pkg.tar.zst` files with `curl --parallel
+--parallel-max 5` (pacman's `ParallelDownloads = 5`, 335 MB in 10 requests). Server: caddy 2.11
+on the desktop, plain http (h1, h2c) and https (h1, h2, h3 over QUIC; caddy's internal CA).
+Client: libcurl 8.23 (nghttp2, ngtcp2, OpenSSL 4.1). Medians of 3 rounds, in seconds; the
+access log confirmed each protocol. btrpkg: 8 connections over HTTP/1.1, 64 requests in flight
+over HTTP/2 and 3.
+
+| link | protocol | btrpkg, real upgrade | btrpkg, every chunk | .pkg.tar.zst |
+|---|---|---:|---:|---:|
+| p14s wired, 0.4 ms RTT | http/1.1 · h2c · https/1.1 · h2 · h3 | 1.03 · 1.03 · 1.07 · 1.06 · 1.09 | 3.08 · 3.09 · 3.12 · 3.14 · 3.21 | 2.87 · 2.87 · 2.88 · 2.88 · 2.93 |
+| p14s + 30 ms (netem) | same | 9.11 · 3.26 · 9.75 · 3.92 · 3.31 | 21.57 · 5.97 · 21.92 · 6.62 · 17.96 | 3.35 · 3.95 · 3.44 · 3.96 · 4.68 |
+| t460s Wi-Fi, 1.8 ms | same | 4.94 · 3.89 · 5.14 · 4.05 · 8.26 | 7.23 · 5.03 · 7.42 · 5.25 · 13.90 | 4.48 · 4.36 · 4.47 · 4.40 · 12.05 |
+| x200 Wi-Fi, 3.0 ms | same | 17.40 · 16.46 · 17.08 · 15.93 · 21.07 | 22.42 · 21.15 · 22.64 · 21.98 · 31.10 | 19.63 · 20.31 · 20.04 · 19.88 · 28.34 |
+
+- At LAN latency the protocol doesn't matter (p14s), or the link does (x200 at ~16 MB/s).
+- With internet-like latency (30 ms) btrpkg needs a multiplexing protocol: over HTTP/1.1 its
+  thousands of chunk requests take 2.8-3.6x longer than over HTTP/2. Whole packages don't care
+  (few large requests; HTTP/1.1 is even a little faster). A btrpkg mirror must speak HTTP/2.
+- HTTP/3 (quic-go server, ngtcp2 client) is the slowest wherever there is much to download:
+  every chunk at 30 ms 18.0 s vs 6.6 s for HTTP/2 over TLS, and 2-3x slower on Wi-Fi even for
+  whole packages; it also costs the most CPU (x200: 20 s CPU for the full download vs 13 s for
+  h2). With more requests in flight it improves but stays behind (30 ms, every chunk: h3
+  26.3/20.2/18.3/12.6 s at 8/32/64/128 in flight, h2 19.7/7.1/6.6/5.7 s), so it is the QUIC
+  connection's throughput, not request concurrency. HTTP/2 stays btrpkg's default.
+- The Wi-Fi links have only 2-3 ms RTT: they show bandwidth and loss, not internet latency;
+  netem's delay is clean (no loss or reordering).
+- HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
+  far-away mirrors.
 
 ## Shared btrparts directory beside the architectures (2026-11-21)
 
@@ -871,7 +1011,7 @@ identical everywhere:
 
 | form | layout |
 |---|---|
-| index (`.btridx`) | header, chunk table, entries, small-file blob |
+| index (`.btridx` then, now the repository's thin `NAME.pkg.btr`) | header, chunk table, entries, small-file blob |
 | transport (`.pkg.btr`) | index, then the chunk data in table order |
 | cache file | index, zero padding up to `image_base = align(index length)`, then the image |
 
@@ -1185,6 +1325,10 @@ Prototype limits:
 - `install` doesn't remove files that a new version dropped.
 
 ## Repository layout, S3 and signatures (design; signatures not implemented)
+
+*Historical design (2026-11-20). Since then: signatures are implemented (signify over the index
+header), indexes are `NAME.pkg.btr` next to the package files, and btrparts live in a shared
+`btrparts/` directory; see "Repository layout" at the top.*
 
 ### What a published package is
 
@@ -1562,3 +1706,63 @@ Not covered yet:
   (delta downloads).
 - Hostile input: the kernel decompresses frames that userspace supplied. A signature check must
   happen before install, and `fetch` must keep refusing to install unverified files.
+
+## The spike (2026-11-19)
+
+A trial package format for Omarchy: a post-processor turns a pacman `.pkg.tar.zst` into a
+`.btrpkg` whose file data is already in btrfs's on-disk form, made of zstd frames of up to 128 KiB,
+one set of extents per file. On a btrfs system:
+
+1. **fetch** streams the package into the package cache. Header, manifest and chunk table are
+   written as plain data. Every zstd frame goes to disk unchanged through
+   `BTRFS_IOC_ENCODED_WRITE`: the kernel neither decompresses nor recompresses it. The cache file
+   reads back as an uncompressed image of all the package's large files, each at a 4 KiB-aligned
+   offset.
+2. **install** creates each large file by `FICLONERANGE` from the cache file, rounding the length up
+   to 4 KiB and truncating afterwards. Small files come from a solid-compressed blob in the
+   manifest and are written normally. A file's data is never read, written or compressed at install
+   time, and the installed files share their extents with the cache.
+
+Two variants of the same file:
+
+- **`.pkg.btr`**: chunks are already btrfs zstd frames (level 19 on the build server). `fetch`
+  does no compression work, but the download is 15–32% bigger than `.pkg.tar.zst`.
+- **`.pkg.btr.zst`**: a `.pkg.btr` with *raw* chunks, wrapped in one solid zstd stream
+  (`-19 --long=27`, with checksum). The download is smaller than `.pkg.tar.zst`. `fetch`
+  decompresses it while streaming, compresses each 128 KiB chunk into a btrfs frame on all cores
+  (`-l`, default 3), and writes the frames with encoded writes. Wrapping already-framed chunks in
+  zstd ("double compression") saves only about 4%, so the inner chunks stay raw.
+
+```sh
+cargo build --release
+btrpkg convert [-l 19] [--small 4096] in.pkg.tar.zst out.pkg.btr          # post-processor
+btrpkg convert [--outer-level 19] [--frames N] [--min-frame B] in.pkg.tar.zst out.pkg.btr.zst  # raw chunks, solid zstd
+btrpkg keygen NAME                                                        # NAME.sec + NAME.pub (signify format)
+btrpkg sign --key NAME.sec x.pkg.btr                                      # x.pkg.btr.sig over the header
+btrpkg publish [--key NAME.sec] x.pkg.btr STORE                           # chunks, signature, index
+btrpkg fetch TRUST [--no-encoded] [-l 3] [--sha256 HEX] IN|- /var/cache/pacman/pkg/x.pkg.btr   # root
+btrpkg pull TRUST STORE NAME /var/cache/pacman/pkg/x.pkg.btr
+btrpkg install /var/cache/pacman/pkg/x.pkg.btr /                          # reflinks, falls back to copy
+btrpkg info x.pkg.btr
+# TRUST: --id HEX (header ID from the repo db) | --sig FILE [--keys DIR] (default IN.sig or the
+#        store's NAME.btridx.sig, keys in /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified
+```
+
+`fetch` and `pull` check the header first, against an expected ID or a signature, and refuse to
+go on without one (`--unverified` is for benchmarks). Then they check the index (chunk table,
+entries, small-file blob, each against its hash in the header), then every chunk before writing
+it: the hash of its stored bytes (which the signed index covers) and, for a zstd chunk, the frame
+header btrfs relies on (one frame, no dictionary ID or checksum flag, content size = unencoded
+length). `--verify-data` also decodes every frame the way btrfs will (window at most 128 KiB) and
+checks the unencoded hash; `publish` always does. The client doesn't need it for safety: data is
+only ever reused (from an older cache file or an installed file) after reading it back and
+checking its unencoded hash, and on a CPU without SHA instructions the full check cost 7 s of 27 s
+for the 315-package set (t460s).
+`install` resolves every path from a root directory fd with `openat2(RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS)`, so nothing is written, changed or linked through a symlink, whether the
+package made it or it was on disk (pacman refuses to extract through a symlink too); hardlinks may
+only point at earlier files of the same package. For `.pkg.btr.zst` the outer zstd checksum is checked too. `--sha256` optionally
+compares the downloaded file with the repo database's value. `fetch` refuses truncated input and
+trailing data, and on any failure removes its partial file.
+
+

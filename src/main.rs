@@ -1,13 +1,7 @@
-//! btrpkg spike: pacman packages whose file data is shipped as btrfs zstd extents.
+//! btrpkg: pacman packages whose file data is shipped as btrfs encoded extents (btrparts).
 //!
-//!   btrpkg convert [-l LEVEL] IN.pkg.tar.zst OUT.pkg.btr
-//!   btrpkg fetch [--no-encoded] IN.pkg.btr|- CACHEFILE     (needs CAP_SYS_ADMIN for encoded writes)
-//!   btrpkg install [--copy] CACHEFILE ROOT
-//!   btrpkg info FILE
-//!   btrpkg publish IN.pkg.btr STORE            (content-addressed chunk store, see store.rs)
-//!   btrpkg pull [--no-encoded] [--sha256 HEX] STORE NAME CACHEFILE
-//!
-//! The format is described in format.rs (version 1) and README.md.
+//! Commands: see USAGE below (`btrpkg` with no arguments). The format is described in format.rs
+//! (version 1); the repository layout, the pacman integration and the trust model in README.md.
 
 use anyhow::{bail, ensure, Context, Result};
 use rayon::prelude::*;
@@ -714,12 +708,12 @@ const USAGE: &str = "usage:
        fetch-ids --want FILE. pull-ids --plan checks local data the same way, writes nothing and
        prints need NAME CHUNK_BYTES INDEX_BYTES per package: the download size)
   btrpkg cache-clean [--keep N] [--dry-run] CACHEDIR
+      (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg gc [--keep N] [--min-age SECS] [--dry-run] BTRPARTS
        repository side: in every repository under BTRPARTS's parent (they share it), keep each
        package's current version, anything newer, and N-1 older ones (default 2: current +
        previous); remove the other indexes and package files, then the btrparts no kept index
        names. Nothing younger than --min-age (default 3600) goes; busy mirror locks stop it.
-      (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO

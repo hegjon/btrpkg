@@ -1,3 +1,29 @@
+# btrpkg: status (2026-11-22)
+
+Done since the iteration 3 plan (details in README, "History"):
+- Packages from CI for x86_64 and aarch64, published as the `[btrpkg]` repository; all five lab
+  clients (p14s, x200, t460s, t490, macmini-m1) upgrade from it.
+- Mirrors for aarch64 beside x86_64 (Omarchy, ALARM core/extra/alarm, asahi-alarm); btrparts shared
+  by architectures and repositories (`btrpkg.parts`); 35% of aarch64 data was already there from
+  x86_64.
+- Step 7, partly: `btrpkg gc` removes old versions and unreferenced btrparts on every mirror pass.
+- Fallback to the package file when no server has an index or a btrpkg download fails.
+- HTTP Range for raw btrparts (no trailing zeros sent).
+- The index is `NAME.pkg.btr` next to the package file (was `index/NAME.btridx`).
+- A cleanup pass: five bugs fixed (double planning, hidden curl errors, gc on unreadable entries,
+  mirror retries, the release db), duplicated code merged.
+
+Open, waiting for a decision from Jonny:
+- Step 6, the unattended daily update on p14s.
+- Step 7, the rest: a real signing key and keyring package, signed `[btrpkg]` packages, where an
+  Omarchy btrpkg repository is published (R2/S3), database signing.
+- Building the btrpkg ISO (the build formats loop images; or a fork's CI).
+
+Open, no decision needed (each its own task): one multi-server source for fetch-ids, pull-ids and
+pacbtr; per-package commit in pull_many; splitting pull_many and upgrade(); one fork/exec helper in
+libalpm; indexes over one connection; step 8, adopting existing installs.
+
+
 # btrpkg: iteration 3 plan (2026-11-21)
 
 Goal: make the patched pacman safe and unsurprising for someone else to run. Format version 1 stays.
@@ -17,7 +43,7 @@ Goal: make the patched pacman safe and unsurprising for someone else to run. For
    daily update (needs a choice: passwordless sudo for `a`, or a root timer bypassing Omarchy's
    flow).
 7. Repo pipeline (Omarchy publish step, R2/S3, chunk deletion, real key, keyring package): needs a
-   decision from Jonny.
+   decision from Jonny. (2026-11-22: deletion done, `btrpkg gc`; the rest still open.)
 8. Adopt existing installs.
 9. ~~pacstrap with btrpkg~~: `pacstrap-btrpkg` (omarchy-iso's and archinstall's flags), Arch
    core/extra mirrors for the root image's closure. Next for the ISO: an offline mirror of `.pkg.btr`

@@ -56,6 +56,27 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
      database warn about every such package. A `btrpkg-validation` entry in a package's own
      `.PKGINFO` is dropped, so a package can't claim a check it didn't get.
 
+7. `libalpm: btrpkg: btrparts where the database says (btrpkg.parts)`: the helpers get `--parts`
+   from the database's `btrpkg.parts` (default `btrparts`), so several repositories can share one
+   btrparts directory (`../btrparts`, `../../../btrparts`). A value that isn't a plain relative
+   path makes the package's btrpkg data unusable. Downloads are grouped per repository and
+   btrparts path.
+
+8. `libalpm: btrpkg: fall back to the package file`: a package no server has an index for
+   (`fetch-ids --index-only --skip-missing` leaves it out) is downloaded as its `.pkg.tar.*`,
+   checked by sha256sum and OpenPGP like any package; so is every package of a repository whose
+   btrpkg download fails. Planning does the first part, so the summary shows the real sizes. Only
+   a broken download directory still fails the transaction.
+
+9. `libalpm: btrpkg: plan each package once`: `_alpm_sync_load` planned the targets again after
+   `_alpm_sync_prepare` (a second `fetch-ids --index-only` and `pull-ids --plan` per repository,
+   hashing all reusable local data again).
+
+10. `libalpm: btrpkg: the index is NAME.pkg.btr next to the package file`: `btrpkg.index` must be
+    `NAME.pkg.btr` (no `/`), the repository's thin `.pkg.btr` beside `NAME.pkg.tar.zst`; the
+    cache file takes the same name and the same signature. The older `index/NAME.btridx` form is
+    unusable data, so such a database gets package files.
+
 How it was checked:
 - `test/btrpkg/btrtar` (libalpm's view of an archive): for all 315 packages of the set, the tar
   stream from the btrpkg cache file equals the original `.pkg.tar.zst`, entry for entry, data
@@ -73,8 +94,14 @@ How it was checked:
 Known gaps: libalpm changes the sync package's file name in place, which a long-running libalpm
 client would see after the transaction; `-U` takes cache files (what `-Sw` and `btrpkg pull`
 leave), not transport files; `-Sp` URLs are the repository's `.pkg.tar.*` ones, which a
-btrpkg-only server (the ISO's offline mirror) doesn't have. Patch 6 is checked by
-`bench/pacman-gaps-test.sh` on p14s (16 checks).
+btrpkg-only server (the ISO's offline mirror) doesn't have; "already in the cache" checks only
+that `NAME.pkg.btr` exists, so a thin index in a CacheDir is caught later, by the length check
+("cache file shorter than its index says"), instead of being downloaded again.
+
+On p14s, after each release: `bench/pacman-gaps-test.sh NAME` (patch 6, 16 checks),
+`bench/pacman-robust.sh` (patches 3, 5, 8: sandbox roles, resume, failover, fallbacks, `-Sc`; 12
+checks), `bench/plan-count.sh` (patch 9). Check first that the installed libalpm has the new
+patch: pacman-btrpkg 8 was built without patch 10 (the PKGBUILD's patch glob missed `0010`).
 
 Cross-checks run against this repo's reader (see PLAN, iteration 2 milestone 2): `btrpkg dump`
 and `btrdump` print identical text for all 384 real indexes (51 in the omarchy test repo, 18 in
