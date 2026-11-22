@@ -37,6 +37,32 @@ Install (on a lab machine):
     pacman-btrpkg -Syu                    # like pacman -Syu; btrpkg packages where the repo has them
     systemctl enable --now btrpkg-cache-clean.timer     # optional
 
+## makebtrpkg
+
+`/usr/bin/makebtrpkg` (in `pacman-btrpkg`) is makepkg built from the same patched pacman source
+(patch 11), using the system's libmakepkg and `/etc/makepkg.conf`. It builds exactly like makepkg,
+the `.pkg.tar.zst` included (the fallback, `%SHA256SUM%` and the OpenPGP `.sig` need it), then
+puts each package (split and debug packages too) into a btrpkg repository directory:
+
+    makebtrpkg                                          # PKGDEST gets NAME.pkg.btr, btrparts/, PKGFILE.sha256sum
+    BTRDEST=~/repo BTRREPO=local makebtrpkg -s          # ~/repo: package files, btrpkg files, local.db with btrpkg fields
+    BTRPKG_KEY=~/keys/me.sec makebtrpkg                 # NAME.pkg.btr.sig (signify; btrpkg keygen)
+    makebtrpkg --nobtrpkg                               # plain makepkg
+
+| variable | default | |
+|---|---|---|
+| `BTRDEST` | `PKGDEST` | repository directory; package files and `.sig` are reflinked there when it differs |
+| `BTRPARTS` | `btrparts` | btrparts directory, relative to `BTRDEST` |
+| `BTRPKG_KEY` | unset | signify secret key for `NAME.pkg.btr.sig` |
+| `BTRREPO` | unset | also `repo-add` to `BTRDEST/BTRREPO.db.tar.zst` and `btrpkg repo-update --no-gpg` it |
+
+`PKGFILE.sha256sum` is written after each conversion, so a later `btrpkg repo-update` of the
+directory takes the packages as converted and only writes the database fields. A missing `btrpkg`
+(or `repo-add` with `BTRREPO`) is reported before building. Checked with a split test package:
+signed and unsigned, `BTRDEST` elsewhere and `BTRREPO` (repo-update afterwards: 2 unchanged), the
+pulled and installed tree equal to the plain package's, `--nobtrpkg` writing only the plain
+packages.
+
 ## pacstrap-btrpkg
 
 `/usr/bin/pacstrap-btrpkg` (in `pacman-btrpkg`, needs `arch-install-scripts`) is Arch's pacstrap,

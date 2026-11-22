@@ -127,8 +127,8 @@ Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no se
 (a database older than what the servers keep), or the btrpkg download of a repository fails. A
 `.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors).
 
-Also: `pacman -U NAME.pkg.btr` (a cache file, signify `.sig`), `pacstrap-btrpkg` (new systems), `btrpkg
-cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
+Also: `pacman -U NAME.pkg.btr` (a cache file, signify `.sig`), `pacstrap-btrpkg` (new systems), `makebtrpkg`
+(makepkg that also converts the packages), `btrpkg cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
 (metadata packages + `pacman -U --dbonly`).
 
 ## Upgrades: what gets downloaded
@@ -204,6 +204,8 @@ kernel modules and headers, which move to a new `/usr/lib/modules/VERSION/`).
   signature), signs the indexes (`--key`), and writes REPO.db last with the btrpkg fields.
   Unchanged packages are recognised by `PKGFILE.sha256sum` (written after a conversion, sha256sum's
   format, so `sha256sum -c` checks the package file too).
+- `makebtrpkg` (in pacman-btrpkg, details in `packaging/README.md`): makepkg that also puts the
+  packages into a btrpkg repository directory, and with `BTRREPO` into its database.
 - `mirror/` (details in `mirror/README.md`): `mirror-all.sh` runs `repo-mirror.sh` for each line of
   `repos.conf` every 10 minutes (systemd user timer): upstream database through pacoloco, the
   wanted packages (lists plus 404s learned from caddy's log), `repo-update`, then `btrpkg gc` per

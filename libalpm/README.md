@@ -76,6 +76,8 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
     `NAME.pkg.btr` (no `/`), the repository's thin `.pkg.btr` beside `NAME.pkg.tar.zst`; the
     cache file takes the same name and the same signature. The older `index/NAME.btridx` form is
     unusable data, so such a database gets package files.
+11. `makepkg: also convert the packages to btrpkg (installed as makebtrpkg)`: not libalpm; see
+    `packaging/README.md` (makebtrpkg).
 
 How it was checked:
 - `test/btrpkg/btrtar` (libalpm's view of an archive): for all 315 packages of the set, the tar
