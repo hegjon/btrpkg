@@ -79,10 +79,7 @@ pub(crate) fn cache_clean(dir: &Path, keep: usize, dry_run: bool) -> Result<Clea
         let n = e.file_name();
         let Some(stem) = n.to_str().and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
         if !e.file_type().is_ok_and(|t| t.is_file()) { continue; }
-        let name = store::pkgname(stem);
-        // NAME-VERSION-REL-ARCH: the version is what lies between NAME- and -ARCH
-        let Some(rest) = stem.strip_prefix(name).and_then(|r| r.strip_prefix('-')) else { continue };
-        let Some((ver, _arch)) = rest.rsplit_once('-') else { continue };
+        let Some((name, ver)) = store::split_stem(stem) else { continue };
         by_pkg.entry(name.to_string()).or_default().push((ver.to_string(), stem.to_string()));
     }
     let mut st = CleanStats::default();
@@ -91,12 +88,10 @@ pub(crate) fn cache_clean(dir: &Path, keep: usize, dry_run: bool) -> Result<Clea
         for (k, (_, stem)) in v.iter().enumerate() {
             if k < keep { st.kept += 1; continue; }
             for p in [dir.join(format!("{stem}.pkg.btr")), dir.join(format!("{stem}.pkg.btr.sig"))] {
-                if let Ok(m) = fs::symlink_metadata(&p) {
-                    use std::os::unix::fs::MetadataExt;
-                    st.bytes += m.blocks() * 512;
+                if fs::symlink_metadata(&p).is_ok() {
                     println!("{}{}", if dry_run { "would remove " } else { "removed " }, p.display());
-                    if !dry_run { fs::remove_file(&p)?; }
                 }
+                crate::gc::remove(&p, dry_run, &mut st.bytes)?;
             }
             st.removed += 1;
         }

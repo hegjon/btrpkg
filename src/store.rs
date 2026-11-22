@@ -20,9 +20,32 @@
 use super::*;
 use std::os::unix::ffi::OsStrExt;
 
-pub(crate) fn hpath(store: &Path, kind: &str, h: &[u8]) -> PathBuf {
+/// A btrpart's (or raw map entry's) path in its directory, "xx/HASH" (also the key in --want files).
+pub(crate) fn part_rel(h: &[u8]) -> String {
     let x = hex(h);
-    store.join(kind).join(&x[..2]).join(x)
+    format!("{}/{x}", &x[..2])
+}
+
+pub(crate) fn hpath(dir: &Path, h: &[u8]) -> PathBuf { dir.join(part_rel(h)) }
+
+/// The index of package file NAME (NAME-VER-REL-ARCH) in a repository, as the database's
+/// btrpkg.index names it; and back.
+pub(crate) fn index_rel(name: impl std::fmt::Display) -> String { format!("index/{name}.btridx") }
+pub(crate) fn index_name(rel: &str) -> Option<&str> { rel.strip_prefix("index/")?.strip_suffix(".btridx") }
+
+/// NAME-VER-REL-ARCH -> (NAME, VER-REL)
+pub(crate) fn split_stem(stem: &str) -> Option<(&str, &str)> {
+    let name = pkgname(stem);
+    let rest = stem.strip_prefix(name)?.strip_prefix('-')?;
+    let (ver, _arch) = rest.rsplit_once('-')?;
+    Some((name, ver))
+}
+
+/// syncfs(2) on the filesystem of directory `p`.
+pub(crate) fn syncfs_dir(p: &Path) -> Result<()> {
+    let d = File::open(p).with_context(|| p.display().to_string())?;
+    ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs {}: {}", p.display(), io::Error::last_os_error());
+    Ok(())
 }
 
 pub(crate) fn unhex(s: &str) -> Result<Hash> {
@@ -86,7 +109,7 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
     // once, then one syncfs; the index that points at the chunks is written (and synced) last.
     enum Act<'a> { Remap(Chunk), Same, New(&'a [u8]) }
     let acts: Vec<(Chunk, Act)> = items.par_iter().map(|&(c, d)| -> Result<(Chunk, Act)> {
-        let rp = hpath(&raw, "", &c.raw);
+        let rp = hpath(&raw, &c.raw);
         match fs::read_to_string(&rp) {
             Ok(s) => {
                 // Same unencoded data published before: reuse that chunk, even if this
@@ -95,7 +118,7 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
                 let f: Vec<&str> = s.split_whitespace().collect();
                 ensure!(f.len() == 3, "bad raw map entry {}", rp.display());
                 let c2 = Chunk { compression: f[0].parse()?, encoded_len: f[1].parse()?, stored: unhex(f[2])?, ..c };
-                let cd = fs::read(hpath(parts, "", &c2.stored)).context("raw map points at a missing chunk")?;
+                let cd = fs::read(hpath(parts, &c2.stored)).context("raw map points at a missing chunk")?;
                 // check_chunk_full covers the raw hash: a mapped chunk with other data is refused
                 check_chunk_full(0, &c2, &cd).context("raw map points at a bad chunk")?;
                 Ok((c2, Act::Remap(c)))
@@ -103,7 +126,7 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 // an existing chunk is reused only if it is intact; a damaged one is replaced
                 // (identical bytes, so the full check above covers them)
-                if fs::read(hpath(parts, "", &c.stored)).is_ok_and(|old| old == d) { Ok((c, Act::Same)) } else { Ok((c, Act::New(d))) }
+                if fs::read(hpath(parts, &c.stored)).is_ok_and(|old| old == d) { Ok((c, Act::Same)) } else { Ok((c, Act::New(d))) }
             }
             Err(e) => Err(e.into()),
         }
@@ -135,18 +158,15 @@ pub(crate) fn publish(input: &Path, store: &Path, parts: &Path, key: Option<(&si
         }
         out.push(*c2);
     }
-    chunk_writes.par_iter().try_for_each(|(h, d)| write_atomic_nosync(&hpath(parts, "", h), d))?;
-    raw_writes.par_iter().try_for_each(|(h, l)| write_atomic_nosync(&hpath(&raw, "", h), l.as_bytes()))?;
-    if !chunk_writes.is_empty() || !raw_writes.is_empty() {
-        let d = File::open(parts)?;
-        ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
-    }
+    chunk_writes.par_iter().try_for_each(|(h, d)| write_atomic_nosync(&hpath(parts, h), d))?;
+    raw_writes.par_iter().try_for_each(|(h, l)| write_atomic_nosync(&hpath(&raw, h), l.as_bytes()))?;
+    if !chunk_writes.is_empty() || !raw_writes.is_empty() { syncfs_dir(parts)?; }
     let ib = if out == idx.chunks { idx.bytes.clone() } else { idx.with_chunks(&out) };
     parse_index(&ib).context("rebuilt index")?;
     st.index_bytes = ib.len() as u64;
     let name = input.file_name().context("no file name")?.to_string_lossy();
     let name = name.trim_end_matches(".btrpkg").trim_end_matches(".pkg.btr").to_string();
-    let ip = store.join("index").join(format!("{name}.btridx"));
+    let ip = store.join(index_rel(&name));
     let sp = store.join("index").join(format!("{name}.btridx.sig"));
     match key {
         Some((k, kname)) => write_atomic(&sp, k.sign(&ib[..HDR], kname).as_bytes())?,
@@ -202,7 +222,7 @@ const MAX_INDEX: usize = 256 << 20;
 
 /// Index and signature of NAME from a source.
 pub(crate) fn fetch_index(src: &net::Source, name: &str, ns: &mut net::NetStats) -> Result<(Vec<u8>, Option<String>)> {
-    let ib = src.get(&format!("index/{name}.btridx"), MAX_INDEX, ns)?.with_context(|| format!("no index for {name}"))?;
+    let ib = src.get(&index_rel(name), MAX_INDEX, ns)?.with_context(|| format!("no index for {name}"))?;
     let sig = src.get(&format!("index/{name}.btridx.sig"), 4096, ns)?.map(|b| String::from_utf8_lossy(&b).into_owned());
     Ok((ib, sig))
 }
@@ -268,6 +288,13 @@ pub(crate) struct PullOpts<'a> {
     /// where the source's btrparts are, relative to it (net::DEFAULT_PARTS unless the
     /// repository's database says otherwise)
     pub parts: &'a str,
+}
+
+impl Default for PullOpts<'_> {
+    fn default() -> Self {
+        PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None,
+            plan_only: false, progress: false, parts: net::DEFAULT_PARTS }
+    }
 }
 
 /// Pull NAME from a source into CACHE. The index must pass `trust` before anything is written.
@@ -467,8 +494,7 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
         let files: Vec<HashMap<u64, (Vec<u8>, u64, u64)>> = jobs.iter().map(|j| chunk_files(&j.idx)).collect();
         let items: Vec<(String, usize, usize)> = missing.iter().map(|&(j, i)| {
             let c = &jobs[j].idx.chunks[i];
-            let x = hex(&c.stored);
-            (format!("{}/{x}", &x[..2]), c.encoded_len as usize, data_len(c, &files[j]))
+            (part_rel(&c.stored), c.encoded_len as usize, data_len(c, &files[j]))
         }).collect();
         // progress: bytes each package still needs from the source
         let mut need = vec![0u64; jobs.len()];

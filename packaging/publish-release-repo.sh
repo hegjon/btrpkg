@@ -25,7 +25,12 @@ for d in "$src"/packages-*; do
   gh release view "$arch" -R "$gh_repo" >/dev/null 2>&1 ||
     gh release create "$arch" -R "$gh_repo" --title "btrpkg repository ($arch)" --latest=false \
       --notes "pacman repository for btrpkg-git and pacman-btrpkg ($arch), built and tested by CI. Server = https://github.com/$gh_repo/releases/download/\$arch (SigLevel = Optional: packages are not signed yet)."
-  gh release download "$arch" -R "$gh_repo" -p btrpkg.db -D "$w" 2>/dev/null && mv "$w/btrpkg.db" "$w/btrpkg.db.tar.zst" || true
+  # a release without a database starts one; a database that can't be downloaded stops the run
+  # (building it again from this build's packages alone would drop, and delete, all the others)
+  if gh release view "$arch" -R "$gh_repo" --json assets -q '.assets[].name' | grep -qxF btrpkg.db; then
+    gh release download "$arch" -R "$gh_repo" -p btrpkg.db -D "$w"
+    mv "$w/btrpkg.db" "$w/btrpkg.db.tar.zst"
+  fi
   old=$( [[ -s $w/btrpkg.db.tar.zst ]] && filenames "$w/btrpkg.db.tar.zst" || true)
   new=()
   for f in "$d"/*.pkg.tar.*; do

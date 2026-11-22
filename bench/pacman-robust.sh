@@ -57,7 +57,7 @@ clean; conf "" ""
 r0=$(rx); $PAC --config $BC -Sw --noconfirm $T >/tmp/r3a.log 2>&1 & P=$!
 while ! pgrep -f 'fetch-ids --want' >/dev/null; do sleep 0.02; kill -0 $P 2>/dev/null || break; done
 sleep 0.25; kill -INT $P; pkill -INT -f 'fetch-ids --want'; wait $P; rca=$?; r1=$(rx)
-part=$(find $CACHE/download-btrpkg/chunks -type f 2>/dev/null | wc -l)
+part=$(find $CACHE/download-btrpkg/btrparts -type f 2>/dev/null | wc -l)
 $PAC --config $BC -Sw --noconfirm $T >/tmp/r3b.log 2>&1; rc=$?; r2=$(rx)
 first=$(( (r1-r0)/1000000 )); second=$(( (r2-r1)/1000000 ))
 [[ $rc == 0 && $(cnt) -ge $N ]] && ok "resume: first run stopped (rc $rca, $part chunks kept, $first MB), second run $second MB, together $((first+second)) MB" || { no "resume rc=$rc"; tail -5 /tmp/r3b.log; }

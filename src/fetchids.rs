@@ -66,11 +66,6 @@ fn say(on: bool, line: String) {
     }
 }
 
-/// A btrpart's path in a btrparts directory (and its key in --want files).
-fn chunk_rel(stored: &Hash) -> String {
-    let x = hex(stored);
-    format!("{}/{x}", &x[..2])
-}
 
 pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Hash)], o: &FetchOpts) -> Result<()> {
     ensure!(!servers.is_empty(), "no server");
@@ -78,7 +73,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
     // 1. indexes (and signatures), each checked against its ID before it is kept
     let mut idxs: Vec<Index> = Vec::new();
     for (name, id) in pkgs {
-        let ip = dir.join("index").join(format!("{name}.btridx"));
+        let ip = dir.join(store::index_rel(name));
         let trust = sign::Trust::Id(*id);
         if let Ok(b) = fs::read(&ip) {
             if let Ok(idx) = read_index_checked(&mut &b[..], &|h| trust.check(h)) { idxs.push(idx); continue; }
@@ -123,7 +118,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
         };
         let files = store::chunk_files(idx);
         for c in &idx.chunks {
-            let rel = chunk_rel(&c.stored);
+            let rel = store::part_rel(&c.stored);
             if let Some(w) = &want { if !w.contains(rel.as_str()) { continue; } }
             else {
                 if local.contains(&(c.raw, c.unencoded_len)) { continue; }
@@ -144,7 +139,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
 
     // 3. fetch, server after server; every chunk is checked against its stored hash first
     let by_rel: HashMap<String, Chunk> = idxs.iter()
-        .flat_map(|idx| idx.chunks.iter().map(|c| (chunk_rel(&c.stored), *c))).collect();
+        .flat_map(|idx| idx.chunks.iter().map(|c| (store::part_rel(&c.stored), *c))).collect();
     let mut got = vec![0u64; pkgs.len()];
     let mut done: HashSet<String> = HashSet::new();
     let mut left: Vec<(String, usize, usize)> = need;

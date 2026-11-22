@@ -105,6 +105,7 @@ pub fn keygen(prefix: &Path) -> Result<KeyNum> {
     Ok(keynum)
 }
 
+#[derive(Clone)]
 pub struct Keyring { keys: HashMap<KeyNum, (VerifyingKey, PathBuf)>, revoked: Vec<KeyNum> }
 
 impl Keyring {

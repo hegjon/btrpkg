@@ -40,10 +40,10 @@ pub struct NetStats {
     pub saved: u64,
 }
 
-struct Collector { buf: Vec<u8>, max: usize }
+struct Collector { buf: Vec<u8>, max: usize, over: bool }
 impl Handler for Collector {
     fn write(&mut self, data: &[u8]) -> std::result::Result<usize, WriteError> {
-        if self.buf.len() + data.len() > self.max { return Ok(0); } // aborts the transfer
+        if self.buf.len() + data.len() > self.max { self.over = true; return Ok(0); } // aborts the transfer
         self.buf.extend_from_slice(data);
         Ok(data.len())
     }
@@ -148,7 +148,7 @@ impl Source {
 
     fn easy(&self, rel: &str, max: usize) -> Result<Easy2<Collector>> {
         let Source::Http { base, h2c, .. } = self else { unreachable!() };
-        let mut e = Easy2::new(Collector { buf: Vec::new(), max });
+        let mut e = Easy2::new(Collector { buf: Vec::new(), max, over: false });
         e.url(&format!("{base}/{rel}"))?;
         let tls = base.starts_with("https://");
         e.http_version(match (options().version.as_deref(), tls) {
@@ -177,19 +177,28 @@ impl Source {
                 Err(e) => Err(e).with_context(|| format!("read {rel}")),
             },
             Source::Http { .. } => {
-                let mut last = None;
+                let mut last = String::new();
                 for _ in 0..ATTEMPTS {
-                    let e = self.easy(rel, max)?;
-                    e.perform().map_err(anyhow::Error::from).ok();
+                    let mut e = self.easy(rel, max)?;
+                    let r = e.perform();
                     st.requests += 1;
+                    ensure!(!e.get_ref().over, "{rel}: larger than {max} bytes");
                     let code = e.response_code().unwrap_or(0);
-                    match code {
-                        200 => { st.bytes += e.get_ref().buf.len() as u64; return Ok(Some(e.get_ref().buf.clone())); }
-                        404 | 410 => return Ok(None),
-                        c => { last = Some(c); st.retries += 1; std::thread::sleep(Duration::from_millis(300)); }
+                    match (r, code) {
+                        // a body cut off mid-transfer comes with 200 too: only a finished one counts
+                        (Ok(()), 200) => {
+                            let b = std::mem::take(&mut e.get_mut().buf);
+                            st.bytes += b.len() as u64;
+                            return Ok(Some(b));
+                        }
+                        (_, 404 | 410) => return Ok(None),
+                        (Err(err), _) => last = err.to_string(),
+                        (Ok(()), c) => last = format!("HTTP {c}"),
                     }
+                    st.retries += 1;
+                    std::thread::sleep(Duration::from_millis(300));
                 }
-                bail!("{rel}: HTTP {}", last.unwrap_or(0))
+                bail!("{rel}: {last}")
             }
         }
     }

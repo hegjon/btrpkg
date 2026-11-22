@@ -1,0 +1,57 @@
+From 1b3fcb8cf0fd3abc2f9cc39a578f3a597d9c9ba4 Mon Sep 17 00:00:00 2001
+From: Jonny Heggheim <hegjon@gmail.com>
+Date: Sun, 22 Nov 2026 12:30:38 +0200
+Subject: [PATCH 9/9] libalpm: btrpkg: plan each package once
+
+_alpm_sync_load ran btr_plan again after _alpm_sync_prepare had already
+planned the targets: one more fetch-ids --index-only and pull-ids --plan
+per repository, which reads and hashes all reusable local data again.
+Skip packages already planned. Also drop btr_download's ret, which was
+never set.
+---
+ lib/libalpm/sync.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
+index b4c4bb54..997f1db0 100644
+--- a/lib/libalpm/sync.c
++++ b/lib/libalpm/sync.c
+@@ -576,7 +576,8 @@ static void btr_plan(alpm_handle_t *handle, const char *cachedir, alpm_list_t *t
+ 	for(alpm_list_t *i = targets; i; i = i->next) {
+ 		alpm_pkg_t *p = i->data;
+ 		char *fpath;
+-		if(!p->btr || p->origin != ALPM_PKG_FROM_SYNCDB) {
++		/* planned already (sync_prepare, then again from sync_load) */
++		if(!p->btr || p->btr_planned || p->origin != ALPM_PKG_FROM_SYNCDB) {
+ 			continue;
+ 		}
+ 		if((fpath = _alpm_filecache_find(handle, p->filename))) {
+@@ -672,7 +673,6 @@ static void btr_rmtree(const char *dir)
+ static int btr_download(alpm_handle_t *handle, const char *cachedir, alpm_list_t **files)
+ {
+ 	alpm_list_t *btr = NULL, *rest = NULL;
+-	int ret = 0;
+ 	for(alpm_list_t *i = *files; i; i = i->next) {
+ 		alpm_pkg_t *p = i->data;
+ 		if(p->btr) {
+@@ -696,7 +696,7 @@ static int btr_download(alpm_handle_t *handle, const char *cachedir, alpm_list_t
+ 		return -1;
+ 	}
+ 
+-	while(btr && ret == 0) {
++	while(btr) {
+ 		alpm_list_t *mine = btr_take_repo(&btr);
+ 		alpm_db_t *db = ((alpm_pkg_t *)mine->data)->origin_data.db;
+ 		const char **ex = NULL;
+@@ -759,7 +759,7 @@ next:
+ 		alpm_list_free(mine);
+ 	}
+ 	alpm_list_free(btr);
+-	return ret;
++	return 0;
+ }
+ 
+ /* The check of a btrpkg cache file that replaces the sha256sum and OpenPGP checks: the index
+-- 
+2.56.1
+

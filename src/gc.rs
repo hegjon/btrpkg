@@ -56,37 +56,31 @@ struct Repo {
 fn find_repos(root: &Path, parts: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
     if depth > 5 || root == parts { return Ok(()); }
     if root.join("index").is_dir() { out.push(root.to_path_buf()); }
-    for e in fs::read_dir(root).with_context(|| root.display().to_string())?.flatten() {
+    // errors stop gc here, before anything is removed: a repository it can't see isn't marked
+    for e in fs::read_dir(root).with_context(|| root.display().to_string())? {
+        let e = e?;
         let n = e.file_name();
         if n.to_string_lossy().starts_with('.') || n == "index" { continue; }
         // real directories only: a symlinked repository would be marked twice, which is harmless,
         // but a symlink loop isn't
-        if e.file_type().is_ok_and(|t| t.is_dir()) { find_repos(&e.path(), parts, depth + 1, out)?; }
+        if e.file_type()?.is_dir() { find_repos(&e.path(), parts, depth + 1, out)?; }
     }
     Ok(())
 }
 
 fn read_repo(dir: &Path, parts: &Path) -> Result<Repo> {
-    let dbs: Vec<PathBuf> = fs::read_dir(dir)?.flatten().map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "db") && !p.file_name().unwrap().to_string_lossy().starts_with('.'))
+    let dbs: Vec<PathBuf> = fs::read_dir(dir)?.map(|e| e.map(|e| e.path())).collect::<std::io::Result<Vec<_>>>()?
+        .into_iter().filter(|p| p.extension().is_some_and(|x| x == "db") && !p.file_name().unwrap().to_string_lossy().starts_with('.'))
         .collect();
     ensure!(dbs.len() == 1, "{}: {} databases (*.db), expected one", dir.display(), dbs.len());
     let (_, tarb) = repo::read_db(&dbs[0])?;
     let mut current = HashSet::new();
     let (mut ours, mut other) = (0usize, 0usize);
-    for e in tar::Archive::new(&tarb[..]).entries()? {
-        let mut e = e?;
-        if !e.path_bytes().ends_with(b"/desc") { continue; }
-        let mut s = String::new();
-        e.read_to_string(&mut s)?;
-        let d = repo::Desc::parse(&s);
-        let Some(data) = d.fields.iter().find(|f| f.0 == "%DATA%") else { continue };
-        let get = |k: &str| data.1.iter().find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix('=')));
-        let Some(idx) = get("btrpkg.index") else { continue };
-        let stem = idx.strip_prefix("index/").and_then(|s| s.strip_suffix(".btridx"))
-            .with_context(|| format!("{}: odd btrpkg.index {idx:?}", dbs[0].display()))?;
+    for d in repo::descs(&tarb)? {
+        let Some(idx) = d.data("btrpkg.index") else { continue };
+        let stem = store::index_name(idx).with_context(|| format!("{}: odd btrpkg.index {idx:?}", dbs[0].display()))?;
         current.insert(stem.to_string());
-        let p = get("btrpkg.parts").unwrap_or(net::DEFAULT_PARTS);
+        let p = d.data("btrpkg.parts").unwrap_or(net::DEFAULT_PARTS);
         if crate::parts_dir(dir, p).ok().and_then(|q| q.canonicalize().ok()).as_deref() == Some(parts) { ours += 1 } else { other += 1 }
     }
     if other > 0 || ours == 0 {
@@ -95,20 +89,12 @@ fn read_repo(dir: &Path, parts: &Path) -> Result<Repo> {
     Ok(Repo { dir: dir.to_path_buf(), current, prune: ours > 0 && other == 0 })
 }
 
-/// NAME-VER-REL-ARCH -> (NAME, VER-REL)
-fn split_stem(stem: &str) -> Option<(&str, &str)> {
-    let name = store::pkgname(stem);
-    let rest = stem.strip_prefix(name)?.strip_prefix('-')?;
-    let (ver, _arch) = rest.rsplit_once('-')?;
-    Some((name, ver))
-}
-
 fn young(m: &fs::Metadata, o: &GcOpts, now: SystemTime) -> bool {
     m.modified().map(|t| now.duration_since(t).unwrap_or_default() < o.min_age).unwrap_or(true)
 }
 
 /// Remove P (if there) and count it; `dry` only counts.
-fn remove(p: &Path, dry: bool, bytes: &mut u64) -> Result<bool> {
+pub(crate) fn remove(p: &Path, dry: bool, bytes: &mut u64) -> Result<bool> {
     let Ok(m) = fs::symlink_metadata(p) else { return Ok(false) };
     *bytes += m.blocks() * 512;
     if !dry { fs::remove_file(p).with_context(|| p.display().to_string())?; }
@@ -139,10 +125,11 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     let mut kept: Vec<PathBuf> = Vec::new();             // index files to mark from
     for r in &repos {
         let mut by_name: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new(); // name -> (ver, stem)
-        for e in fs::read_dir(r.dir.join("index"))?.flatten() {
+        for e in fs::read_dir(r.dir.join("index"))? {
+            let e = e?; // an index not seen would not be marked
             let n = e.file_name().to_string_lossy().into_owned();
             let Some(stem) = n.strip_suffix(".btridx") else { continue };
-            match split_stem(stem) {
+            match store::split_stem(stem) {
                 Some((name, ver)) => by_name.entry(name.to_string()).or_default().push((ver.to_string(), stem.to_string())),
                 None => kept.push(e.path()), // not NAME-VER-REL-ARCH: keep it, never guess
             }
@@ -156,7 +143,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
                     Some(c) if k <= c => true, // current, or newer than it
                     _ => if older_left > 0 { older_left -= 1; true } else { false },
                 };
-                let ip = r.dir.join("index").join(format!("{stem}.btridx"));
+                let ip = r.dir.join(store::index_rel(stem));
                 let too_young = fs::metadata(&ip).map(|m| young(&m, o, now)).unwrap_or(true);
                 if keep || !r.prune || too_young { kept.push(ip); } else { doomed.push((r.dir.clone(), stem.clone())); }
             }
@@ -174,7 +161,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
 
     // 3. old versions: index, signature, source record, and the mirror's package file
     for (dir, stem) in &doomed {
-        println!("{}{}", if o.dry_run { "would remove " } else { "removed " }, dir.join("index").join(format!("{stem}.btridx")).display());
+        println!("{}{}", if o.dry_run { "would remove " } else { "removed " }, dir.join(store::index_rel(stem)).display());
         for f in [format!("index/{stem}.btridx.sig"), format!("index/{stem}.src"), format!("index/{stem}.btridx")] {
             remove(&dir.join(f), o.dry_run, &mut st.bytes_removed)?;
         }
@@ -195,9 +182,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
         for e in fs::read_dir(sub.path())?.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
             if !is_hash(&n) { continue; } // .tmp files of a running publish and the like
-            let mut h = [0u8; 32];
-            for (k, b) in h.iter_mut().enumerate() { *b = u8::from_str_radix(&n[2 * k..2 * k + 2], 16).unwrap(); }
-            if live.contains(&h) { st.parts_kept += 1; continue; }
+            if live.contains(&store::unhex(&n)?) { st.parts_kept += 1; continue; }
             let m = e.metadata()?;
             if young(&m, o, now) { st.parts_young += 1; continue; }
             remove(&e.path(), o.dry_run, &mut st.bytes_removed)?;
@@ -222,10 +207,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
             }
         }
     }
-    if !o.dry_run && st.parts_removed > 0 {
-        let d = File::open(&parts)?;
-        unsafe { libc::syncfs(d.as_raw_fd()) };
-    }
+    if !o.dry_run && st.parts_removed > 0 { store::syncfs_dir(&parts)?; }
     drop(locks);
     Ok(st)
 }

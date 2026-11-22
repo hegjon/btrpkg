@@ -93,5 +93,6 @@ log "downloaded $got files ($failed failed)"
 # --keep-going: a package that can't be converted (no .sig upstream, bad signature) is logged and
 # left to pacman (no btrpkg fields); the database is still published and the run counts as done
 "$B" repo-update --keep-going --key "$KEY" --gpg-keyring "$KR" --db-in "$cur" --jobs "$JOBS" --parts "$PARTS" "$M" "$REPO"
-touch "$M/.done"
+# done only if every download worked: otherwise the next run (upstream unchanged) retries them
+if (( failed == 0 )); then touch "$M/.done"; else log "$REPO: $failed downloads failed, retried next run"; fi
 log "$REPO published: $(bsdtar -xOf "$M/$REPO.db" '*/desc' | grep -c '^btrpkg.id=') of $(wc -l < "$list") packages with btrpkg data"

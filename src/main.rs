@@ -229,7 +229,7 @@ fn convert(input: &Path, output: &Path, level: i32, outer_level: i32, small_max:
 
     let chunks: Vec<Chunk> = compressed.iter().map(|(c, _)| *c).collect();
     let index = build_index(&entries, &small, &chunks, cursor)?;
-    let tmp = { let mut t = output.as_os_str().to_owned(); t.push(".part"); PathBuf::from(t) };
+    let tmp = part_path(output);
     // .pkg.btr.zst: the whole .pkg.btr wrapped in one solid zstd stream (long window).
     let outer = output.extension().is_some_and(|e| e == "zst");
     let file = File::create(&tmp)?;
@@ -735,10 +735,9 @@ fn pull_ids(s: &str, parts: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], pa
     let mut ns = net::NetStats::default();
     let mut got: Vec<(String, Vec<u8>, Option<String>, PathBuf, sign::Trust)> = Vec::new();
     for p in pkgs {
-        let (name, id) = p.split_once('=').with_context(|| format!("{p}: want NAME=IDHEX"))?;
-        ensure!(!name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\0']), "{name}: bad package file name");
-        let (ib, sig) = store::fetch_index(&src, name, &mut ns)?;
-        got.push((name.to_string(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(store::unhex(id)?)));
+        let (name, id) = parse_name_id(p)?;
+        let (ib, sig) = store::fetch_index(&src, &name, &mut ns)?;
+        got.push((name.clone(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(id)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
         verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress"), parts };
@@ -769,20 +768,22 @@ fn pull_ids(s: &str, parts: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], pa
         return Ok(());
     }
     for ((n, _, sig, c, _), st) in got.iter().zip(&st) {
-        let sp = PathBuf::from(format!("{}.sig", c.display()));
+        let sp = repo::part_sig(c);
         match sig {
-            Some(text) => {
-                let tmp = PathBuf::from(format!("{}.part", sp.display()));
-                fs::write(&tmp, text.as_bytes())?;
-                fs::rename(&tmp, &sp)?;
-            }
+            Some(text) => store::write_atomic_nosync(&sp, text.as_bytes())?,
             None => { let _ = fs::remove_file(&sp); }
         }
         println!("download\t{n}\t{}\t{}\t{}\t{}\t{}\t{}", st.index_bytes, st.fetched_chunks, st.fetched_bytes, st.reused_chunks, st.reused_bytes, st.installed_chunks);
     }
-    let d = File::open(cdir)?;
-    ensure!(unsafe { libc::syncfs(d.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
-    Ok(())
+    store::syncfs_dir(cdir)
+}
+
+/// NAME=IDHEX (pull-ids, fetch-ids): a package file name that stays inside the directories it
+/// names files in, and its database ID.
+fn parse_name_id(p: &str) -> Result<(String, Hash)> {
+    let (name, id) = p.split_once('=').with_context(|| format!("{p}: want NAME=IDHEX"))?;
+    ensure!(!name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\0']), "{name}: bad package file name");
+    Ok((name.to_string(), store::unhex(id)?))
 }
 
 /// A btrparts directory REL (relative) resolved against store directory STORE, as clients
@@ -983,12 +984,7 @@ fn main() -> Result<()> {
             if flags.contains(&"--landlock") { fetchids::landlock_writes_to(dir)?; }
             ensure!(!servers.is_empty(), "fetch-ids needs --server URL (repeat for more, tried in order)");
             let srcs: Vec<net::Source> = servers.iter().map(|s| net::Source::parse(s, flags.contains(&"--h2c"), parallel)).collect();
-            let mut ids = Vec::new();
-            for p in pkgs.iter() {
-                let (name, id) = p.split_once('=').with_context(|| format!("{p}: want NAME=IDHEX"))?;
-                ensure!(!name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\0']), "{name}: bad package file name");
-                ids.push((name.to_string(), store::unhex(id)?));
-            }
+            let ids = pkgs.iter().map(|p| parse_name_id(p)).collect::<Result<Vec<_>>>()?;
             let w = match &want { Some(p) => Some(fs::read_to_string(p)?.lines().filter(|l| !l.is_empty()).map(String::from).collect()), None => None };
             let o = fetchids::FetchOpts { installed: installed.as_deref(), cachedir: cachedir.as_deref(), want: w, progress: flags.contains(&"--progress"),
                 index_only: flags.contains(&"--index-only"), skip_missing: flags.contains(&"--skip-missing"), parts: parts.as_deref().unwrap_or(net::DEFAULT_PARTS) };
@@ -1024,7 +1020,7 @@ mod tests {
     const U: sign::Trust = sign::Trust::Unverified;
 
     fn pull_dir(store: &Path, name: &str, cache: &Path, trust: &sign::Trust) -> Result<store::PullStats> {
-        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS })
+        store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts::default())
     }
 
     /// btrfs at P? Encoded writes and reflinks need it; CI runners (overlayfs on ext4) and a
@@ -1282,7 +1278,7 @@ mod tests {
         let (_, b) = store::publish(&t.0.join("s-1-1.pkg.btr"), &arm, &parts_dir(&arm, "../btrparts").unwrap(), None).unwrap();
         assert!(a.new_chunks > 0 && b.new_chunks == 0, "{a:?} {b:?}");
         assert!(!x86.join("btrparts").exists() && !arm.join("btrparts").exists());
-        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: "../btrparts" };
+        let o = store::PullOpts { parts: "../btrparts", ..Default::default() };
         for d in [&x86, &arm] {
             let c = t.0.join(format!("c-{}.pkg.btr", d.file_name().unwrap().to_string_lossy()));
             let st = store::pull(&net::Source::Dir(d.to_path_buf()), "s-1-1", &c, &U, &o).unwrap();
@@ -1316,7 +1312,7 @@ mod tests {
             fetch(out.to_str().unwrap(), &cache, false, 3, Some(&digest), &U).unwrap();
             fs::remove_file(&cache).unwrap();
             assert!(fetch(out.to_str().unwrap(), &cache, false, 3, Some(&"0".repeat(64)), &U).is_err());
-            assert!(!cache.exists() && !cache.with_extension("part").exists());
+            assert!(!cache.exists() && !part_path(&cache).exists());
         }
         // the large file is deduplicated: one copy in the image
         // (parse_index reads the index at the start of the transport file)
@@ -1350,12 +1346,12 @@ mod tests {
             fs::write(&bad, &c).unwrap();
             let e = fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U);
             assert!(e.is_err(), "{what}: accepted");
-            assert!(!cache.exists() && !cache.with_extension("part").exists(), "{what}: left a file");
+            assert!(!cache.exists() && !part_path(&cache).exists(), "{what}: left a file");
         }
         for (what, c) in [("truncated", b[..b.len() - 1].to_vec()), ("trailing", [b.as_slice(), b"x"].concat())] {
             fs::write(&bad, &c).unwrap();
             assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U).is_err(), "{what}: accepted");
-            assert!(!cache.exists() && !cache.with_extension("part").exists(), "{what}: left a file");
+            assert!(!cache.exists() && !part_path(&cache).exists(), "{what}: left a file");
         }
         // the outer-zstd form: a flipped byte anywhere is caught
         let gz = t.0.join("p.pkg.btr.zst");
@@ -1366,7 +1362,7 @@ mod tests {
             c[pos] ^= 0x01;
             fs::write(&bad, &c).unwrap();
             assert!(fetch(bad.to_str().unwrap(), &cache, true, 3, None, &U).is_err(), "zst byte {pos}: accepted");
-            assert!(!cache.exists() && !cache.with_extension("part").exists());
+            assert!(!cache.exists() && !part_path(&cache).exists());
         }
     }
 
@@ -1611,7 +1607,7 @@ mod tests {
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
         let caches: Vec<PathBuf> = names.iter().map(|n| cdir.join(format!("{n}.pkg.btr"))).collect();
-        let o = store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS };
+        let o = store::PullOpts::default();
         let items = |caches: &[PathBuf]| -> Vec<(String, Vec<u8>, PathBuf)> {
             names.iter().zip(&ibs).zip(caches).map(|((n, ib), c)| (n.to_string(), ib.clone(), c.clone())).collect()
         };
@@ -1666,7 +1662,7 @@ mod tests {
         fs::remove_dir_all(&other).unwrap();
         let cdir = t.0.join("cache");
         fs::create_dir_all(&cdir).unwrap();
-        let o = store::PullOpts { use_encoded: true, installed: Some(&root), level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS };
+        let o = store::PullOpts { installed: Some(&root), ..Default::default() };
         let src = net::Source::Dir(store.clone());
         let p = store::pull(&src, "q-2-1-x86_64", &cdir.join("q-2-1-x86_64.pkg.btr"), &U, &o).unwrap();
         // tool (300 kB, 3 chunks) is unchanged and comes from the installed file

@@ -80,46 +80,20 @@ fn read_conf(p: &Path) -> Result<Conf> {
 }
 
 #[derive(Debug, Clone, Default)]
-struct DbEntry { name: String, version: String, filename: String, data: Vec<String>, backup: Vec<String>, dir: String }
-
-fn parse_desc(text: &str) -> DbEntry {
-    let mut e = DbEntry::default();
-    let mut key = "";
-    for l in text.lines() {
-        if l.starts_with('%') && l.ends_with('%') { key = l; continue; }
-        if l.is_empty() { continue; }
-        match key {
-            "%NAME%" => e.name = l.into(),
-            "%VERSION%" => e.version = l.into(),
-            "%FILENAME%" => e.filename = l.into(),
-            "%DATA%" => e.data.push(l.into()),
-            "%BACKUP%" => e.backup.push(l.into()),
-            _ => {}
-        }
-    }
-    e
-}
+struct DbEntry { name: String, version: String, data: Vec<String>, backup: Vec<String>, dir: String }
 
 impl DbEntry {
-    fn field(&self, k: &str) -> Option<&str> {
-        self.data.iter().find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix('=')))
+    fn from_desc(d: &repo::Desc) -> DbEntry {
+        let one = |k| d.get(k).unwrap_or_default().to_string();
+        DbEntry { name: one("%NAME%"), version: one("%VERSION%"),
+            data: d.lines("%DATA%").to_vec(), backup: d.lines("%BACKUP%").to_vec(), dir: String::new() }
     }
+    fn field(&self, k: &str) -> Option<&str> { repo::data_field(&self.data, k) }
 }
 
 fn read_sync_db(p: &Path) -> Result<Vec<DbEntry>> {
-    let b = fs::read(p).with_context(|| format!("read {}", p.display()))?;
-    let tarb = if b.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) { zstd::stream::decode_all(&b[..])? }
-        else if b.starts_with(&[0x1f, 0x8b]) { let mut o = Vec::new(); flate2::read::MultiGzDecoder::new(&b[..]).read_to_end(&mut o)?; o }
-        else { b };
-    let mut out = vec![];
-    for e in tar::Archive::new(&tarb[..]).entries()? {
-        let mut e = e?;
-        if !e.path_bytes().ends_with(b"/desc") { continue; }
-        let mut s = String::new();
-        e.read_to_string(&mut s)?;
-        out.push(parse_desc(&s));
-    }
-    Ok(out)
+    let (_, tarb) = repo::read_db(p)?;
+    Ok(repo::descs(&tarb)?.iter().map(DbEntry::from_desc).collect())
 }
 
 /// Installed packages: name -> (desc, files with dirs ending in '/').
@@ -128,7 +102,7 @@ fn read_local(db_path: &Path) -> Result<BTreeMap<String, (DbEntry, Vec<String>)>
     for d in fs::read_dir(db_path.join("local"))? {
         let d = d?.path();
         if !d.is_dir() { continue; }
-        let mut e = parse_desc(&fs::read_to_string(d.join("desc"))?);
+        let mut e = DbEntry::from_desc(&repo::Desc::parse(&fs::read_to_string(d.join("desc"))?));
         e.dir = d.file_name().unwrap().to_string_lossy().into();
         let files = fs::read_to_string(d.join("files")).unwrap_or_default();
         let mut in_files = false;
@@ -140,11 +114,6 @@ fn read_local(db_path: &Path) -> Result<BTreeMap<String, (DbEntry, Vec<String>)>
         m.insert(e.name.clone(), (e, list));
     }
     Ok(m)
-}
-
-fn vercmp(a: &str, b: &str) -> Result<i32> {
-    let o = Command::new("vercmp").arg(a).arg(b).output().context("run vercmp")?;
-    Ok(String::from_utf8_lossy(&o.stdout).trim().parse()?)
 }
 
 /// The bytes of a package's own entry (small file from the blob, large file from the cache file).
@@ -234,7 +203,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
     for (name, (old, _)) in &local {
         if !want.is_empty() && !want.contains(name) { continue; }
         let Some((ri, new)) = sync.get(name) else { continue };
-        if vercmp(&new.version, &old.version)? <= 0 { continue; }
+        if cache::vercmp(&new.version, &old.version).is_le() { continue; }
         if new.field("btrpkg.index").is_none() || new.field("btrpkg.id").is_none() {
             no_data.entry(conf.repos[*ri].name.as_str()).or_default().push(name.as_str());
             st.left_to_pacman += 1;
@@ -249,13 +218,14 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
     }
     if cands.is_empty() { log("nothing to upgrade through btrpkg"); return Ok(st); }
     let keyring_dirs: Vec<PathBuf> = if o.keys.is_empty() { sign::DEFAULT_KEY_DIRS.iter().map(PathBuf::from).collect() } else { o.keys.clone() };
+    let keyring = sign::Keyring::load(&keyring_dirs)?;
 
     // 2./3. indexes, trust, eligibility
     let mut ns = net::NetStats::default();
     let mut targets: Vec<Target> = vec![];
     for (name, ri, old, new) in cands {
         let rel = new.field("btrpkg.index").unwrap().to_string();
-        let file = rel.trim_start_matches("index/").trim_end_matches(".btridx").to_string();
+        let file = store::index_name(&rel).with_context(|| format!("{name}: odd btrpkg.index {rel:?}"))?.to_string();
         let id = store::unhex(new.field("btrpkg.id").unwrap())?;
         let mut got = None;
         for s in &conf.repos[ri].servers {
@@ -266,8 +236,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
             }
         }
         let (ib, sig) = got.with_context(|| format!("{name}: no server has its index"))?;
-        let k = sign::Keyring::load(&keyring_dirs)?;
-        let trust = sign::Trust::All(vec![sign::Trust::Id(id), sign::Trust::Signed(k, sig.clone().with_context(|| format!("{name}: index not signed"))?)]);
+        let trust = sign::Trust::All(vec![sign::Trust::Id(id), sign::Trust::Signed(keyring.clone(), sig.clone().with_context(|| format!("{name}: index not signed"))?)]);
         let idx = read_index_checked(&mut &ib[..], &|h| trust.check(h)).with_context(|| name.clone())?;
         st.index_bytes += ib.len() as u64;
         let pi = String::from_utf8_lossy(&entry_bytes(&idx, None, b".PKGINFO")?.context("no .PKGINFO in the index's small files")?).into_owned();
@@ -337,7 +306,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         let mut groups: Vec<(usize, String)> = targets.iter().map(|t| (t.repo, parts_of(t))).collect();
         groups.sort(); groups.dedup();
         for (r, parts) in groups {
-            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), level: 3, verify_data: false, fsync: false, before_fetch: None, plan_only: false, progress: false, parts: &parts };
+            let po = store::PullOpts { use_encoded: o.use_encoded, installed: Some(&o.root), fsync: false, parts: &parts, ..Default::default() };
             let src = net::Source::parse(&conf.repos[r].servers[0], o.h2c, o.parallel).parts(&parts)?;
             let items: Vec<store::PullItem> = targets.iter().enumerate().filter(|(_, t)| t.repo == r && parts_of(t) == parts)
                 .map(|(k, t)| store::PullItem { name: &t.file, ib: &t.idx.bytes, cache: &caches[k], trust: &trusts[k] }).collect();
@@ -350,7 +319,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         }
         for (k, t) in targets.iter().enumerate() {
             if metas[k].as_os_str().is_empty() {
-                let (_, f) = open_cache(&conf.cache_dir.join(format!("{}.pkg.btr", t.file)))?;
+                let (_, f) = open_cache(&caches[k])?;
                 let m = work.join(format!("{}.pkg.tar.zst", t.file));
                 meta_package(&t.idx, Some(&f), &m)?;
                 metas[k] = m;
@@ -358,8 +327,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         }
         // --print stops after pacman's transaction preparation (dependencies, conflicts, replaces)
         // the cache files are on disk before any installed file refers to their extents
-        let cd = File::open(&conf.cache_dir)?;
-        ensure!(unsafe { libc::syncfs(cd.as_raw_fd()) } == 0, "syncfs: {}", io::Error::last_os_error());
+        store::syncfs_dir(&conf.cache_dir)?;
         lap(&mut st, "pull");
         let p = pacman(&o.conf, &["-U", "--noconfirm", "--print", "--print-format", "%n %v"], &metas)?;
         ensure!(p.status.success(), "pacman's dependency check failed:\n{}{}", String::from_utf8_lossy(&p.stdout), String::from_utf8_lossy(&p.stderr));
@@ -379,7 +347,7 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
         let r = (|| -> Result<()> {
             for (k, t) in targets.iter().enumerate() {
                 if o.fail_after == Some(k) { bail!("failure injected after {k} packages (BTRPKG_FAIL_AFTER)"); }
-                install(&conf.cache_dir.join(format!("{}.pkg.btr", t.file)), &o.root, false).with_context(|| format!("placing {}", t.name))?;
+                install(&caches[k], &o.root, false).with_context(|| format!("placing {}", t.name))?;
             }
             // the old versions' files that no new version has and no other package owns
             let mut gone: Vec<&str> = vec![];

@@ -30,9 +30,12 @@ impl Desc {
         }
         Desc { fields }
     }
-    fn get(&self, k: &str) -> Option<&str> {
-        self.fields.iter().find(|f| f.0 == k).and_then(|f| f.1.first()).map(|s| s.as_str())
+    pub(crate) fn get(&self, k: &str) -> Option<&str> { self.lines(k).first().map(|s| s.as_str()) }
+    pub(crate) fn lines(&self, k: &str) -> &[String] {
+        self.fields.iter().find(|f| f.0 == k).map(|f| &f.1[..]).unwrap_or(&[])
     }
+    /// The value of KEY=VALUE in %DATA% (btrpkg.index and the like).
+    pub(crate) fn data(&self, key: &str) -> Option<&str> { data_field(self.lines("%DATA%"), key) }
     /// Replace this tool's `%DATA%` lines, keeping any others.
     fn set_btrpkg(&mut self, lines: &[String]) {
         if let Some(f) = self.fields.iter_mut().find(|f| f.0 == "%DATA%") {
@@ -53,6 +56,23 @@ impl Desc {
         }
         s
     }
+}
+
+pub(crate) fn data_field<'a>(lines: &'a [String], key: &str) -> Option<&'a str> {
+    lines.iter().find_map(|l| l.strip_prefix(key).and_then(|r| r.strip_prefix('=')))
+}
+
+/// The desc entries of a (decompressed) database tar.
+pub(crate) fn descs(tarb: &[u8]) -> Result<Vec<Desc>> {
+    let mut out = vec![];
+    for e in tar::Archive::new(tarb).entries()? {
+        let mut e = e?;
+        if !e.path_bytes().ends_with(b"/desc") { continue; }
+        let mut s = String::new();
+        e.read_to_string(&mut s)?;
+        out.push(Desc::parse(&s));
+    }
+    Ok(out)
 }
 
 pub(crate) enum Comp { Zstd, Gzip, None }
@@ -91,7 +111,7 @@ fn gpgv(keyring: &Path, file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn part_sig(p: &Path) -> PathBuf { let mut s = p.as_os_str().to_owned(); s.push(".sig"); PathBuf::from(s) }
+pub(crate) fn part_sig(p: &Path) -> PathBuf { let mut s = p.as_os_str().to_owned(); s.push(".sig"); PathBuf::from(s) }
 
 pub(crate) struct RepoOpts<'a> {
     pub key: Option<(&'a sign::SecretKey, &'a str)>,
@@ -160,7 +180,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
         }
         let name = fname.trim_end_matches(".pkg.tar.zst").trim_end_matches(".pkg.tar.xz").to_string();
         let r = (|| -> Result<(Hash, u64, bool)> {
-            let ip = dir.join("index").join(format!("{name}.btridx"));
+            let ip = dir.join(store::index_rel(&name));
             let srcp = dir.join("index").join(format!("{name}.src"));
             if fs::read_to_string(&srcp).is_ok_and(|s| s.trim() == want) && ip.exists() {
                 let ib = fs::read(&ip)?;
@@ -187,7 +207,7 @@ pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoSt
             Ok((id, size, converted)) => {
                 let mut s = st.lock().unwrap();
                 if converted { s.converted += 1 } else { s.unchanged += 1 }
-                d.set_btrpkg(&[format!("btrpkg.index=index/{name}.btridx"), format!("btrpkg.id={}", hex(&id)), format!("btrpkg.size={size}"),
+                d.set_btrpkg(&[format!("btrpkg.index={}", store::index_rel(&name)), format!("btrpkg.id={}", hex(&id)), format!("btrpkg.size={size}"),
                     format!("btrpkg.parts={}", o.parts)]);
             }
             Err(e) => {

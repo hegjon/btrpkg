@@ -1,7 +1,7 @@
 From 25a8e60472ae124131d3a97927aca91968ff9120 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 11:51:35 +0200
-Subject: [PATCH 8/8] libalpm: btrpkg: fall back to the package file
+Subject: [PATCH 8/9] libalpm: btrpkg: fall back to the package file
 
 A package no server has a btrpkg index for (its database is older than
 what the servers keep, or a server lost it) is downloaded as its
