@@ -19,6 +19,9 @@ ok() { echo "ok   - $*"; pass=$((pass + 1)); }
 bad() { echo "FAIL - $*"; fail=$((fail + 1)); }
 check() { local what=$1; shift; if "$@"; then ok "$what"; else bad "$what"; fi; }
 
+# not in the cache (another test's cleanup may have removed it): download it again, as btrpkg
+[[ -e $P && -e $P.sig ]] || $PACBTR -Sw --noconfirm "$name" >/dev/null 2>&1
+[[ -e $P && -e $P.sig ]] || { echo "FAIL - no input: $P (and its .sig)"; exit 1; }
 rm -rf "$W"; mkdir -p "$W"/{signed,nosig,bad,badsig,fake/usr/share/btrgaps-fake}
 cp "$P" "$P.sig" "$W/signed/"
 cp "$P" "$W/nosig/"

@@ -89,6 +89,38 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Cleanup pass: bugs found, duplicated code removed (2026-11-22)
+
+Four reviews (reuse, quality, efficiency, altitude) of the Rust code, the libalpm patches and the
+scripts. Applied: the bugs and the safe duplication fixes; format and CLI unchanged.
+
+- **Planned twice** (libalpm patch 9): `_alpm_sync_load` ran `btr_plan` again after
+  `_alpm_sync_prepare`, so every upgrade ran `fetch-ids --index-only` and `pull-ids --plan` (which
+  reads and hashes all reusable local data) twice per repository. `bench/plan-count.sh` (a
+  logging BtrPkgHelper, one repository) on p14s: -6 ran `fetch-ids --index-only` 3 times and
+  `pull-ids --plan` 2 times; -7 runs them 2 and 1 times (the second `--index-only` is the download step's, which finds
+  the checked indexes already in DIR).
+- **net::get** ignored curl's own error: DNS/TLS failures showed as "HTTP 0", and a body cut off
+  mid-transfer (with status 200) would have been accepted.
+- **gc** skipped directory entries it couldn't read on the marking side; their btrparts would
+  have been swept. Now it stops before removing anything.
+- **repo-mirror.sh** marked a pass done even when downloads failed, so they were retried only
+  when upstream changed. **publish-release-repo.sh** treated a failed db download like "no db
+  yet": it would have rebuilt `[btrpkg]` from one build's packages and deleted the others.
+- Tests that couldn't fail: the no-temp-file checks used the wrong name, and the robust test
+  counted `download-btrpkg/chunks` (it is `btrparts` since the rename).
+- Duplication: `upgrade.rs` had its own db reader, desc parser and a `vercmp` process per
+  package; it now uses `repo::read_db`/`descs`/`Desc` and `cache::vercmp`. Shared helpers in
+  `store.rs` (`part_rel`, `index_rel`/`index_name`, `split_stem`, `syncfs_dir`,
+  `PullOpts::default`) replace about 20 hand-written copies; `parse_name_id` replaces the copied
+  NAME=IDHEX check in pull-ids and fetch-ids.
+- p14s with btrpkg-git r69 and pacman-btrpkg 7 from `[btrpkg]`: robust 12/12, option tests 16/16.
+  The option test now downloads its input (as btrpkg) when another test's cleanup removed it.
+- Left for later (each its own task): one multi-server source for fetch-ids, pull-ids and
+  pacbtr (server fallback is written three ways today); committing per package so one bad
+  package doesn't send its whole repository to package files; splitting `store::pull_many` and
+  `upgrade()`; one fork/exec helper in sync.c; fetching indexes over one connection.
+
 ## Range requests, fallback to package files, all clients on [btrpkg] (2026-11-22)
 
 - **Raw btrparts without their trailing zeros.** A raw btrpart at a file's end is padded with

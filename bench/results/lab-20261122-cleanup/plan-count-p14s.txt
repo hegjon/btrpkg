@@ -1,0 +1,9 @@
+upgrading btrpkg-git...
+upgrading pacman-btrpkg...
+btrpkg-git 0.0.1.r69.g4b2f862-1
+pacman-btrpkg 7.1.0.r9.g54d9411-7
+Pacman v7.1.0 pacman-btrpkg 7.1.0.r9.g54d9411-7: rc 0
+  fetch-ids --index-only: 2
+  pull-ids --plan:        1
+  fetch-ids (data):       1
+  pull-ids (assemble):    1
