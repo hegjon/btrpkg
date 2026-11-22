@@ -1,0 +1,13 @@
+== galaxybook: Oryon BIOS Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Oryon(TM) CPU 446 CPU @ 3.4GHz | 12 threads | aes-ni yes | cipher: aes-xts-plain64 4096 [bytes]  | 7.3.0-71-omarchy
+level 3 round 1: wall 1.104 s | zstd 12873 calls 2.725 s | crypt 13551 calls 0.206 s
+level 3 round 2: wall 1.038 s | zstd 12895 calls 2.679 s | crypt 13597 calls 0.200 s
+level 3 round 3: wall 1.065 s | zstd 12966 calls 2.796 s | crypt 13707 calls 0.210 s
+level 12 round 1: wall 1.063 s | zstd 12908 calls 2.698 s | crypt 13553 calls 0.201 s
+level 12 round 2: wall 1.048 s | zstd 12908 calls 2.712 s | crypt 13557 calls 0.205 s
+level 12 round 3: wall 1.031 s | zstd 12908 calls 2.703 s | crypt 13553 calls 0.203 s
+level 15 round 1: wall 1.239 s | zstd 12920 calls 3.438 s | crypt 13551 calls 0.209 s
+level 15 round 2: wall 1.200 s | zstd 12920 calls 3.484 s | crypt 13554 calls 0.213 s
+level 15 round 3: wall 1.155 s | zstd 12924 calls 3.332 s | crypt 13569 calls 0.208 s
+level 19 round 1: wall 1.250 s | zstd 12926 calls 3.539 s | crypt 13587 calls 0.211 s
+level 19 round 2: wall 1.154 s | zstd 12926 calls 3.444 s | crypt 13586 calls 0.206 s
+level 19 round 3: wall 1.230 s | zstd 12922 calls 3.559 s | crypt 13571 calls 0.212 s

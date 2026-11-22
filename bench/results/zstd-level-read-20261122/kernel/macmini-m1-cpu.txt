@@ -1,0 +1,20 @@
+/var/tmp/kz2/level-read-bench.sh: line 14: compsize: command not found
+level 3: 
+/var/tmp/kz2/level-read-bench.sh: line 14: compsize: command not found
+level 12: 
+/var/tmp/kz2/level-read-bench.sh: line 14: compsize: command not found
+level 15: 
+/var/tmp/kz2/level-read-bench.sh: line 14: compsize: command not found
+level 19: 
+round 1 level 3: real 1.829 s, cat sys 0.185 s, machine CPU 2.04 s
+round 1 level 12: real 1.669 s, cat sys 0.167 s, machine CPU 1.84 s
+round 1 level 15: real 1.:00 s, cat sys 0.191 s, machine CPU 2.40 s
+round 1 level 19: real 1.803 s, cat sys 0.174 s, machine CPU 2.15 s
+round 2 level 3: real 1.761 s, cat sys 0.190 s, machine CPU 1.95 s
+round 2 level 12: real 1.701 s, cat sys 0.176 s, machine CPU 1.89 s
+round 2 level 15: real 1.735 s, cat sys 0.171 s, machine CPU 2.16 s
+round 2 level 19: real 1.669 s, cat sys 0.152 s, machine CPU 2.07 s
+round 3 level 3: real 1.771 s, cat sys 0.184 s, machine CPU 2.02 s
+round 3 level 12: real 1.688 s, cat sys 0.177 s, machine CPU 1.90 s
+round 3 level 15: real 1.540 s, cat sys 0.140 s, machine CPU 1.93 s
+round 3 level 19: real 1.800 s, cat sys 0.176 s, machine CPU 2.24 s

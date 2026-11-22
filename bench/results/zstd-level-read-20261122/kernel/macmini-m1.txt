@@ -1,0 +1,9 @@
+== macmini-m1: Icestorm-M1 BIOS CPU @ 0.0GHz Firestorm-M1 BIOS CPU @ 0.0GHz | 8 threads | aes-ni yes | cipher: aes-xts-plain64 512 [bytes]  | 7.2.11-16-1-ARCH
+/var/tmp/kz/kernel-decode-bench.sh: line 23: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 23: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 23: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 23: /sys/kernel/tracing/function_profile_enabled: Permission denied
+/var/tmp/kz/kernel-decode-bench.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied

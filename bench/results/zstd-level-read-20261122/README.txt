@@ -49,3 +49,30 @@ Decode speed on every lab machine (2026-11-22, bench/level-decode-lab.sh; MB/s, 
   chromebook  Intel(R) Celeron(R) CPU  N2840  @ 2.       267   267   223   214       259   259   215   210   0.84
   turbox      Intel(R) Core(TM)2 CPU         T5500       214   207   174   171         -     -     -     -   0.84
 Every machine: L12 decodes as fast as L3; L15 is 15-21% slower than L12; L19 another 2-6% slower than L15.
+
+Kernel (btrfs) decode, every lab machine (bench/kernel-decode-lab.sh, bench/kernel-decode-bench.sh):
+cache files written with encoded writes (chattr +m: only the btrparts' own zstd extents), cold reads
+(drop_caches), ftrace function profiler on zstd_decompress_bio (thread time, sleep excluded) and
+crypt_convert (dm-crypt decryption, every root is LUKS2 aes-xts-plain64). Full 8-package set, median of 3.
+MB/s = unencoded zstd bytes / summed zstd_decompress_bio time (one core's worth).
+  host        AES-NI  LUKS sector  L3   L12  L15  L19 MB/s  L15/L12  decrypt s L12/L15  decrypt/decompress at L12
+  p14s        yes      4096       827  883  710  676      0.80     0.16/0.16        0.15
+  t490        yes      4096       513  503  405  401      0.81     0.17/0.16        0.09
+  t460s       yes      4096       456  450  361  347      0.80     0.18/0.17        0.09
+  t550        yes       512       396  381  307  299      0.81     0.46/0.43        0.18
+  xps         yes       512       380  371  301  292      0.81     0.48/0.46        0.18
+  galaxybook  yes      4096       356  360  283  275      0.79     0.20/0.21        0.08
+  x200        no       4096       282  276  233  225      0.84     5.63/5.19        1.59
+  samsung-i5  yes      4096       253  252  212  206      0.84     0.41/0.39        0.11
+  chromebook  no        512       234  232  195  190      0.84     9.40/8.99        2.24
+  hp-amd      yes      4096       192  190  166  160      0.87     0.51/0.46        0.10
+  turbox      no       4096       168  171  143  139      0.84     8.22/7.86        1.44
+  macmini-m1: its kernel has no function tracer (CONFIG_FUNCTION_TRACER not set); machine CPU time of
+  the cold read instead (level-read-bench.sh, 3 rounds): L3 1.95-2.04 s, L12 1.84-1.90, L15 1.93-2.40, L19 2.07-2.24.
+- The kernel's zstd decodes at 46-71% of userspace libzstd's speed on the 2013-2021 x86 laptops, 83-99% on the
+  oldest/smallest CPUs (x200, turbox, chromebook), and 32% on the Snapdragon X Elite (galaxybook).
+- L15 is 13-21% slower than L12 in the kernel too; L12 is as fast as L3.
+- LUKS: with AES-NI decryption costs 8-18% of the decompression time (at L12) (4 KiB sectors 2.5x cheaper than 512 B:
+  t460s 0.18 s vs t550/xps 0.46 s). Without AES-NI (x200, turbox, chromebook) decryption costs more than
+  decompression (1.4-2.2x). L15's smaller data saves 0.36-0.44 s of decryption there but costs 0.66-1.13 s more
+  decompression: L12 still needs less CPU in total on every machine.

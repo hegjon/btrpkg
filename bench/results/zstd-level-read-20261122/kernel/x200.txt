@@ -1,0 +1,13 @@
+== x200: Intel(R) Core(TM)2 Duo CPU     P8400  @ 2.26GHz | 2 threads | aes-ni no | cipher: aes-xts-plain64 4096 [bytes]  | 7.2.15-2-omarchy
+level 3 round 1: wall 7.720 s | zstd 12871 calls 3.435 s | crypt 13597 calls 5.706 s
+level 3 round 2: wall 7.727 s | zstd 12885 calls 3.442 s | crypt 13625 calls 5.724 s
+level 3 round 3: wall 7.734 s | zstd 12871 calls 3.410 s | crypt 13612 calls 5.722 s
+level 12 round 1: wall 8.861 s | zstd 13165 calls 3.531 s | crypt 14017 calls 5.627 s
+level 12 round 2: wall 9.138 s | zstd 13695 calls 3.935 s | crypt 14790 calls 6.434 s
+level 12 round 3: wall 7.441 s | zstd 12910 calls 3.515 s | crypt 13645 calls 5.440 s
+level 15 round 1: wall 7.547 s | zstd 12922 calls 4.166 s | crypt 13608 calls 5.188 s
+level 15 round 2: wall 7.571 s | zstd 12936 calls 4.183 s | crypt 13637 calls 5.201 s
+level 15 round 3: wall 7.561 s | zstd 12922 calls 4.225 s | crypt 13609 calls 5.193 s
+level 19 round 1: wall 7.524 s | zstd 12924 calls 4.341 s | crypt 13606 calls 5.157 s
+level 19 round 2: wall 7.545 s | zstd 12924 calls 4.376 s | crypt 13609 calls 5.154 s
+level 19 round 3: wall 7.545 s | zstd 12924 calls 4.341 s | crypt 13603 calls 5.149 s

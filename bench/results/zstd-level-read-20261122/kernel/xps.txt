@@ -1,0 +1,13 @@
+== xps: Intel(R) Core(TM) i5-5300U CPU @ 2.30GHz | 4 threads | aes-ni yes | cipher: aes-xts-plain64 512 [bytes]  | 7.2.15-2-omarchy
+level 3 round 1: wall 1.452 s | zstd 12871 calls 2.552 s | crypt 13676 calls 0.499 s
+level 3 round 2: wall 1.455 s | zstd 12871 calls 2.545 s | crypt 13677 calls 0.496 s
+level 3 round 3: wall 1.462 s | zstd 12871 calls 2.565 s | crypt 13675 calls 0.499 s
+level 12 round 1: wall 1.446 s | zstd 12910 calls 2.636 s | crypt 13676 calls 0.478 s
+level 12 round 2: wall 1.444 s | zstd 12910 calls 2.610 s | crypt 13679 calls 0.474 s
+level 12 round 3: wall 1.453 s | zstd 12910 calls 2.626 s | crypt 13677 calls 0.477 s
+level 15 round 1: wall 1.542 s | zstd 12922 calls 3.245 s | crypt 13659 calls 0.455 s
+level 15 round 2: wall 1.556 s | zstd 12922 calls 3.235 s | crypt 13678 calls 0.455 s
+level 15 round 3: wall 1.559 s | zstd 12922 calls 3.222 s | crypt 13676 calls 0.456 s
+level 19 round 1: wall 1.565 s | zstd 12924 calls 3.356 s | crypt 13689 calls 0.457 s
+level 19 round 2: wall 1.576 s | zstd 12924 calls 3.343 s | crypt 13683 calls 0.456 s
+level 19 round 3: wall 1.579 s | zstd 12924 calls 3.325 s | crypt 13686 calls 0.456 s
