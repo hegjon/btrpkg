@@ -69,8 +69,9 @@ MB/s = unencoded zstd bytes / summed zstd_decompress_bio time (one core's worth)
   turbox      no       4096       168  171  143  139      0.84     8.22/7.86        1.44
   macmini-m1: its kernel has no function tracer (CONFIG_FUNCTION_TRACER not set); machine CPU time of
   the cold read instead (level-read-bench.sh, 3 rounds): L3 1.95-2.04 s, L12 1.84-1.90, L15 1.93-2.40, L19 2.07-2.24.
-- The kernel's zstd decodes at 46-71% of userspace libzstd's speed on the 2013-2021 x86 laptops, 83-99% on the
-  oldest/smallest CPUs (x200, turbox, chromebook), and 32% on the Snapdragon X Elite (galaxybook).
+- (Corrected below, "Why the kernel looked slower") The kernel numbers are MB/s per decode thread with btrfs's
+  8 endio workers decoding in parallel, the userspace ones a single thread alone: 46-71% (x86), 32% (Snapdragon)
+  is mostly that difference, not a slower kernel zstd. The per-level comparison is unaffected.
 - L15 is 13-21% slower than L12 in the kernel too; L12 is as fast as L3.
 - LUKS: with AES-NI decryption costs 8-18% of the decompression time (at L12) (4 KiB sectors 2.5x cheaper than 512 B:
   t460s 0.18 s vs t550/xps 0.46 s). Without AES-NI (x200, turbox, chromebook) decryption costs more than
@@ -98,3 +99,20 @@ BMI2 probe per context (Phoronix, 2026-08-26): on p14s, level 12, zstd_init_dstr
 compressed extent; it runs the CPUID probe) took 1.5 ms for 12,910 calls (0.12 us each) against ~1.2 s of
 decompression: 0.13%. zstd_decompress_stream ran ~25 times per extent (318k calls: btrfs hands zstd one
 4 KiB output page at a time).
+
+Why the kernel looked slower (p14s, Ryzen 7 PRO 5850U, linux-omarchy 7.2.15, level 12; bench/kzstd/)
+  kernel, thread_pool=8 (default): wall 0.72 s, 1.128 s of decode thread time -> 863 MB/s per thread
+  kernel, thread_pool=1:           wall 1.13 s, 0.875 s                       -> 1113 MB/s per thread
+  userspace libzstd 1.5.7, one thread, kernel's compiler flags (zb-k-full):       1235 MB/s
+  userspace, plain -O2 no SIMD no asm, fed and drained 4 KiB at a time:           1279 MB/s (with SIMD+asm 1246-1309)
+  userspace, 8 copies (one per core) / 16 copies (every SMT thread):               789 / 386 MB/s per thread
+- Alone, the kernel decodes at 90% of userspace. With 8 workers each one runs at all-core clocks (2.9-3.3 GHz
+  instead of 3.7+) and shares its core with the SMT sibling or other I/O work (perf: IPC 3.0 vs 3.5); userspace
+  under the same load is slower than the kernel (789 MB/s).
+- The rest, ~10%: memcpy of the 4 KiB output into the new page-cache folios (perf: 0.50 Gcycles, IPC 0.22,
+  cache misses on the destination; init_on_alloc zeroes the folios first, clear_pages 0.43 Gcycles in the
+  readahead) and the kernel's flags, 3.5% (zb-k-full vs zb-k-o2base; one flag group at a time: SRSO safe-RET
+  thunk, UBSAN bounds/shift, stack zeroing, stack protector, layout flags each within +-2%).
+- Not a cause: feeding zstd 4 KiB of output per call (userspace stream4k is within 4% of one-shot decoding),
+  no SIMD/asm in the kernel (within 3%), the BMI2 probe (0.13%). There is no zstd kernel patch to make here;
+  what costs is parallel decoding on shared cores, which still gives the shortest wall time (0.72 vs 1.13 s).
