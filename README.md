@@ -175,8 +175,33 @@ The first conversion pass took 3m29s (8 jobs; most package files were already do
     `mirror/keyrings/archlinuxarm.gpg` holds a copy of macmini-m1's.
   - btrpkg's `check()` runs the tests in `$srcdir`, because they need btrfs and `/tmp` is often
     tmpfs.
-- Not mirrored: Arch Linux ARM's `alarm` repo and `asahi-alarm` (kernels, firmware, Asahi
-  packages).
+- **alarm and asahi-alarm (later the same day).** Arch Linux ARM's `alarm` and `asahi-alarm` are
+  now mirrored too, under `arch-mirror/{alarm,asahi-alarm}/os/aarch64`. They share
+  `arch-mirror/btrparts` with core and extra, so one `Server = …/arch-mirror/$repo/os/$arch`
+  serves all four aarch64 Arch repos. asahi-alarm comes straight from its GitHub releases
+  (`repo-mirror.sh` follows redirects now); its key is `mirror/keyrings/asahi-alarm.gpg`.
+  - **Wanted lists:** the aarch64 repos have their own (`*-aarch64.wanted`, `alarm.wanted`,
+    `asahi-alarm.wanted`). Each is the x86_64 list plus everything macmini-m1 and galaxybook have
+    installed from that repo.
+  - **Coverage:** 992 of the 993 packages those two machines have installed from omarchy, core,
+    extra, alarm and asahi-alarm have btrpkg data. The one left is `ffmpeg`, which Omarchy's
+    current aarch64 repo no longer has; extra's is covered.
+  - **Growth:** omarchy-mirror/btrparts 2.16 → 2.76 GB, arch-mirror/btrparts 4.30 → 5.61 GB. The
+    aurora kernel, mesa and m1n1 builds account for most of Omarchy's 0.60 GB.
+  - **m1 client test:** 16 packages (linux-aurora + headers, mesa-aurora, m1n1-aurora,
+    uboot-aurora, all 9 asahi-alarm packages, libpisp) in scratch roots: 18,810 package-owned
+    files identical to stock, `-Qkk` 0 altered.
+  - **Packages in both repos.** In that test, 5 came plain: bankstown, lzfse, speakersafetyd,
+    triforce-lv2 and widevine are in both Omarchy's aarch64 repo and asahi-alarm. pacman takes
+    Omarchy's, since that repo comes first. m1 still had asahi-alarm's builds from an older sync,
+    so the generated list had them under asahi-alarm only. The 404s taught the mirror three of
+    them; bankstown and lzfse had been served as plain files, so no 404 would ever teach those.
+    All asahi-alarm names are now in the Omarchy aarch64 list as well, and all five have btrpkg
+    data. Lesson: a list built from installed packages has to follow pacman's repo order, not
+    the repo a machine happened to install from.
+  - `bench/scratch-root-compare.sh` now has the second servers real clients have (pacoloco,
+    GitHub). The mirror's db lists all of upstream's packages but it only stores the ones it
+    converts; a 404 sends pacman to the next server and teaches the mirror.
 
 ## Cleanup: `btrpkg gc` (2026-11-22)
 

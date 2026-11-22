@@ -42,7 +42,8 @@ fi
 
 # 1. upstream database
 cur=$M/.upstream.db; unchanged=
-code=$(curl -sS -o "$cur.new" -w '%{http_code}' -z "$cur" "$UP/$REPO.db" || echo 000)
+# -L: GitHub release downloads (asahi-alarm) redirect
+code=$(curl -sSL -o "$cur.new" -w '%{http_code}' -z "$cur" "$UP/$REPO.db" || echo 000)
 case $code in
   200) mv "$cur.new" "$cur" ;;
   304) rm -f "$cur.new"
@@ -83,7 +84,7 @@ while read -r name file; do
   if [[ -z ${ALL:-} ]] && ! grep -qxF "$name" "$WANT" "$learned"; then continue; fi
   for f in "$file" "$file.sig"; do
     [[ -s $M/$f ]] && continue
-    if curl -sSf -o "$M/$f.part" "$UP/$f"; then mv "$M/$f.part" "$M/$f"; got=$((got+1)); else rm -f "$M/$f.part"; failed=$((failed+1)); log "download failed: $f"; fi
+    if curl -sSfL -o "$M/$f.part" "$UP/$f"; then mv "$M/$f.part" "$M/$f"; got=$((got+1)); else rm -f "$M/$f.part"; failed=$((failed+1)); log "download failed: $f"; fi
   done
 done < "$list"
 log "downloaded $got files ($failed failed)"

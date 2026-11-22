@@ -1,0 +1,8 @@
+stock: exit 0, from the mirror: 4 404s, 4.6 s, cache: 0 .pkg.btr, 16 .pkg.tar
+btr: exit 0, from the mirror: 4 404s, 2.6 s, cache: 11 .pkg.btr, 5 .pkg.tar
+entries: 18813 / 18813; package-owned: 18810; local db entries: 52
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 0
+pacman -Qkk in the btrpkg root: 16 packages, 0 altered files
+stock repos: 16 installed
+btr repos: 16 installed
+alsa-ucm-conf-aurora asahi-alarm-keyring asahi-fwextract asahi-scripts avd-fw bankstown libpisp linux-aurora linux-aurora-headers lzfse m1n1-aurora mesa-aurora speakersafetyd triforce-lv2 uboot-aurora widevine 
