@@ -152,6 +152,38 @@ damaged file just means a download. Matches from cache files are reflinked into 
 file; from installed files whole pieces are reflinked and a file's last piece is compressed again.
 Only the same package's cache files and installed files are searched, not other packages.
 
+### Reading installed files
+
+btrfs isn't asked for anything here: an installed file is opened by its path, read and hashed like
+any file; btrfs only comes in for the reflink.
+
+1. Path and offset come from the new index: `chunk_files` maps each btrpart's image offset to
+   (path, offset in file, data length), e.g. btrpart 37 → `ROOT/usr/bin/Hyprland`, offset
+   4,718,592, 131,072 bytes (large files are consecutive 128 KiB btrparts). ROOT is what libalpm
+   passes (`--installed /`).
+2. `open(O_RDONLY | O_NOFOLLOW | O_NONBLOCK)` (no symlink at the last component, no hang on a
+   FIFO), then `fstat`: a regular file, at least offset + data length long.
+3. `pread` at the offset, zero-padded to the btrpart's length (only a file's last piece is shorter),
+   SHA-256 compared with the btrpart's uncompressed hash from the signed index. Candidates are
+   checked in parallel; `--plan` stops here.
+4. A whole piece is reflinked (`FICLONERANGE`) from the same descriptor that was hashed into the
+   cache file at the btrpart's image offset, so a file replaced after the check can't slip in;
+   nothing is written or compressed. A file's last piece can't be reflinked (reflinks need 4
+   KiB-aligned lengths except at end of file, and it would end mid cache file), so the bytes
+   already read are compressed at level 12 and written as an encoded extent. Without reflink
+   support the data is written instead; still no download.
+
+If stock pacman installed the old version on a `compress=zstd:3` mount, the cache file shares those
+zstd:3 extents; the data is the same, only the on-disk compression differs, until a later version
+downloads that data. Reading kernel-compressed files makes btrfs decompress them, which the 0.04 s
+above (files in memory) doesn't include.
+
+Installed files are only looked for at the new path, so data that moved is downloaded again when
+the old cache file is gone (the cache-file lookup is by content and finds it).
+`bench/moved-files.py` over the 24 packages with two versions on the mirror: 244.0 MB of the
+1,107.5 MB download is at the same path in the old version, another 117.3 MB moved (almost all
+kernel modules and headers, which move to a new `/usr/lib/modules/VERSION/`).
+
 The same pass serves both steps of a transaction: `pull-ids --plan` counts the missing bytes (the
 download size pacman shows), and `pull-ids --fetch-via FILE` lists the missing btrparts for the
 unprivileged `fetch-ids --want FILE`, which downloads exactly those and checks each against its
