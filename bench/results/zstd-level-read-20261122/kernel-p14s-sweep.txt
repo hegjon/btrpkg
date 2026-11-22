@@ -1,0 +1,24 @@
+level 3: on disk 458776576 of 1026088960 bytes (44%)
+level 12: on disk 435777536 of 1026088960 bytes (42%)
+level 15: on disk 417103872 of 1026088960 bytes (40%)
+level 19: on disk 413749248 of 1026088960 bytes (40%)
+round 1 level 3: real 0.749 s, cat sys 0.432 s, machine CPU 2.03 s
+round 1 level 12: real 0.705 s, cat sys 0.424 s, machine CPU 1.94 s
+round 1 level 15: real 0.711 s, cat sys 0.419 s, machine CPU 2.26 s
+round 1 level 19: real 0.729 s, cat sys 0.426 s, machine CPU 2.23 s
+round 2 level 3: real 0.732 s, cat sys 0.420 s, machine CPU 1.76 s
+round 2 level 12: real 0.717 s, cat sys 0.431 s, machine CPU 2.01 s
+round 2 level 15: real 0.720 s, cat sys 0.422 s, machine CPU 2.09 s
+round 2 level 19: real 0.731 s, cat sys 0.436 s, machine CPU 2.40 s
+round 3 level 3: real 0.746 s, cat sys 0.432 s, machine CPU 2.08 s
+round 3 level 12: real 0.718 s, cat sys 0.434 s, machine CPU 2.00 s
+round 3 level 15: real 0.714 s, cat sys 0.424 s, machine CPU 2.15 s
+round 3 level 19: real 0.713 s, cat sys 0.424 s, machine CPU 2.10 s
+round 4 level 3: real 0.754 s, cat sys 0.422 s, machine CPU 1.80 s
+round 4 level 12: real 0.725 s, cat sys 0.420 s, machine CPU 1.83 s
+round 4 level 15: real 0.723 s, cat sys 0.425 s, machine CPU 2.16 s
+round 4 level 19: real 0.720 s, cat sys 0.429 s, machine CPU 2.12 s
+round 5 level 3: real 0.771 s, cat sys 0.439 s, machine CPU 2.12 s
+round 5 level 12: real 0.730 s, cat sys 0.427 s, machine CPU 1.96 s
+round 5 level 15: real 0.730 s, cat sys 0.433 s, machine CPU 2.27 s
+round 5 level 19: real 0.722 s, cat sys 0.430 s, machine CPU 2.26 s
