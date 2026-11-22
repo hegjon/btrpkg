@@ -2,14 +2,22 @@
 #
 # pacman-btrpkg's -U of .pkg.btr files and its validation record, on a lab machine (root).
 #
-#   pacman-gaps-test.sh PKGFILE.pkg.btr
+#   pacman-gaps-test.sh PKGFILE.pkg.btr | NAME
 #
+# NAME: the package's current version from the sync databases, installed through btrpkg first if
+# another version is installed (its cache file then is the input).
 # PKGFILE: a cache file whose package is installed at that version (the tests reinstall it), with
 # its .sig next to it, signed by a key in /etc/btrpkg/keys.
 # PACBTR: the pacman under test (default: /usr/bin/pacman-btrpkg). Its config needs BtrPkgHelper.
 set -uo pipefail
 P=$1
 PACBTR=${PACBTR:-/usr/bin/pacman-btrpkg}
+if [[ $P != */* ]]; then
+  f=$($PACBTR -Sp --print-format %f "$P") || exit 1
+  [[ $(pacman -Q "$P" 2>/dev/null | cut -d' ' -f2) == "$($PACBTR -Sp --print-format %v "$P")" ]] ||
+    $PACBTR -S --noconfirm "$P" >/dev/null 2>&1
+  P=/var/cache/pacman/pkg/${f%.pkg.tar.*}.pkg.btr
+fi
 W=/var/tmp/btrpkg-gaps
 name=$(basename "$P" | sed -E 's/-[^-]+-[^-]+-[^-]+\.pkg\.btr$//')
 desc() { cat /var/lib/pacman/local/"$1"-[0-9]*/desc; }

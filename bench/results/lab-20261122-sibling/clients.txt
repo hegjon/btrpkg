@@ -1,0 +1,15 @@
+== x200
+ok   owe-lockfeed: owe-lockfeed-0.2.18-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+ok   gliff: gliff-0.4.3-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+== t460s
+ok   owe-lockfeed: owe-lockfeed-0.2.18-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+ok   gliff: gliff-0.4.3-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+== t490
+ok   owe-lockfeed: owe-lockfeed-0.2.18-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+ok   gliff: gliff-0.4.3-1-x86_64.pkg.btr (btrpkg.parts=../btrparts)
+== macmini-m1
+stock: exit 0, from the mirror: 0 404s, 1.0 s, cache: 0 .pkg.btr, 5 .pkg.tar
+btr: exit 0, from the mirror: 0 404s, 0.9 s, cache: 5 .pkg.btr, 0 .pkg.tar
+entries: 918 / 918; package-owned: 915; local db entries: 15
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 0
+pacman -Qkk in the btrpkg root: 5 packages, 0 altered files

@@ -89,6 +89,39 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## The index is NAME.pkg.btr next to the package file (2026-11-22)
+
+Repositories keep each package's index beside its package file instead of in `index/`:
+
+```
+x86_64/
+├── omarchy.db                                 btrpkg.index=gliff-0.4.3-1-x86_64.pkg.btr
+├── gliff-0.4.3-1-x86_64.pkg.tar.zst (+ .sig)  the package file (fallback, stock pacman)
+├── gliff-0.4.3-1-x86_64.pkg.btr     (+ .sig)  the index (was index/….btridx)
+└── gliff-0.4.3-1-x86_64.pkg.btr.src           mirrors: sha256 of the package file it came from
+btrparts/                                      unchanged
+```
+
+- The index is a `.pkg.btr` without its data: a cache file starts with exactly the same bytes
+  (checked: 26,007 bytes of omarchy-local-ai on p14s) and has the same `.sig`. The client fetches
+  NAME.pkg.btr and fills the data in under the same name. No format change: index bytes, IDs and
+  signatures are the same.
+- `mirror/migrate-sibling-index.py` moved the 11 live repositories (hard links, the database
+  rewritten atomically under the mirror's `.lock`, then `index/` removed): 5,931 files, 1,958
+  database entries, a few seconds in total. gc finds repositories by their `*.pkg.btr` files; its
+  next pass kept the same 1,749 + 161 indexes.
+- libalpm patch 10 takes only `btrpkg.index=NAME.pkg.btr`. Clients before pacman-btrpkg 9 see the
+  new field as unusable and download the package files instead (that is the fallback path, so
+  nothing breaks).
+- Tested with pacman-btrpkg 9 / btrpkg r72 from `[btrpkg]`: x200, t460s, t490 download as btrpkg;
+  macmini-m1's 5 packages in scratch roots identical to stock; p14s robust 12/12, option tests
+  16/16, and omarchy-local-ai upgraded to 0.10.0 through btrpkg (97 files, 0 altered). The option
+  test now takes a package NAME (its current version), since upstream releases moved 0.9.0 on.
+- A btrpkg repository must not be a pacman CacheDir: its thin NAME.pkg.btr files have the cache
+  files' names. (The ISO's btrpkg build uses its mirror as a Server only.)
+- pacman-btrpkg 8 was built without patch 10: the PKGBUILD applied `btrpkg-000*.patch`, which
+  doesn't match `0010`. Version 9 applies `btrpkg-[0-9][0-9][0-9][0-9]-*.patch`.
+
 ## Cleanup pass: bugs found, duplicated code removed (2026-11-22)
 
 Four reviews (reuse, quality, efficiency, altitude) of the Rust code, the libalpm patches and the

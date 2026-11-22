@@ -11,7 +11,7 @@ Two Arch packages, built in a clean container by `packaging/build.sh [OUTDIR]` (
   this checkout instead. It links the system's libzstd: zstd-sys would otherwise compile its own
   copy with makepkg's `-flto` CFLAGS into GCC LTO objects that Rust's linker (lld) can't read.
 - **`pacman-btrpkg`** (`pacman-btrpkg/`): Arch's pacman package (the same commit `54d94116`, the
-  same four Arch patches, the same meson options) plus `libalpm/000*.patch` from this repository,
+  same four Arch patches, the same meson options) plus `libalpm/00*.patch` from this repository,
   installed **beside** the system pacman:
   - `/usr/bin/pacman-btrpkg` → `/usr/lib/pacman-btrpkg/pacman`, which finds its own
     `libalpm.so.16` in `/usr/lib/pacman-btrpkg/` through RUNPATH (the soname is the same as the
