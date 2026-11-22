@@ -1,10 +1,16 @@
 //! Where `pull` reads a store from: a directory, or an HTTP(S) URL fetched with libcurl's multi
 //! interface (the same library pacman downloads with). Over HTTP/2 many requests share one
 //! connection; over HTTP/1.1 each request in flight needs its own connection.
+//!
+//! Every request of a thread goes through one curl multi handle that lives as long as the
+//! thread (`with_multi`), so its connections stay open from one request to the next: the
+//! indexes, their signatures and then the btrparts of a whole run share one connection per server
+//! (HTTP/2) instead of a new TCP and TLS handshake per object.
 use anyhow::{bail, ensure, Context, Result};
 use curl::easy::{Easy2, Handler, HttpVersion, WriteError};
 use curl::multi::{Easy2Handle, Multi};
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -38,6 +44,8 @@ pub struct NetStats {
     /// objects fetched without their trailing zeros (HTTP Range), and the zero bytes not sent
     pub ranged: u64,
     pub saved: u64,
+    /// new connections opened (TCP, and TLS over https)
+    pub connects: u64,
 }
 
 struct Collector { buf: Vec<u8>, max: usize, over: bool }
@@ -51,6 +59,38 @@ impl Handler for Collector {
 
 const ATTEMPTS: u32 = 3;
 const BATCH_BYTES: usize = 16 << 20;
+
+thread_local! {
+    /// This thread's multi handle, kept for the life of the thread: its connection cache is what
+    /// lets one request reuse the connection of the one before.
+    static MULTI: RefCell<Option<Multi>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with this thread's multi handle (made on first use). A transfer started from inside
+/// another one's callback gets a multi handle of its own (and its own connections).
+fn with_multi<R>(f: impl FnOnce(&mut Multi) -> Result<R>) -> Result<R> {
+    fn new_multi() -> Result<Multi> {
+        let mut m = Multi::new();
+        m.pipelining(false, true)?;
+        // connections kept open between transfers (curl closes idle ones after ~2 minutes)
+        m.set_max_connects(16)?;
+        Ok(m)
+    }
+    MULTI.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut slot) => {
+            if slot.is_none() { *slot = Some(new_multi()?); }
+            f(slot.as_mut().unwrap())
+        }
+        Err(_) => f(&mut new_multi()?),
+    })
+}
+
+/// One object to fetch: at most `max` bytes, or with `exact = Some((len, data))` exactly `len`
+/// bytes of which only the first `data` are asked for (the rest are zeros, see `get_many`).
+struct Req<'a> { rel: &'a str, max: usize, exact: Option<(usize, usize)> }
+
+/// How a request ended (after its retries).
+enum Got { Body(Vec<u8>), Missing, Failed(String) }
 
 /// Chunks a directory store doesn't have (store paths), from `get_many` on a directory.
 #[derive(Debug)]
@@ -176,31 +216,97 @@ impl Source {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e).with_context(|| format!("read {rel}")),
             },
-            Source::Http { .. } => {
-                let mut last = String::new();
-                for _ in 0..ATTEMPTS {
-                    let mut e = self.easy(rel, max)?;
-                    let r = e.perform();
-                    st.requests += 1;
-                    ensure!(!e.get_ref().over, "{rel}: larger than {max} bytes");
-                    let code = e.response_code().unwrap_or(0);
-                    match (r, code) {
-                        // a body cut off mid-transfer comes with 200 too: only a finished one counts
-                        (Ok(()), 200) => {
-                            let b = std::mem::take(&mut e.get_mut().buf);
-                            st.bytes += b.len() as u64;
-                            return Ok(Some(b));
-                        }
-                        (_, 404 | 410) => return Ok(None),
-                        (Err(err), _) => last = err.to_string(),
-                        (Ok(()), c) => last = format!("HTTP {c}"),
-                    }
-                    st.retries += 1;
-                    std::thread::sleep(Duration::from_millis(300));
-                }
-                bail!("{rel}: {last}")
-            }
+            Source::Http { .. } => self.get_all(&[(rel.to_string(), max)], st).pop().unwrap(),
         }
+    }
+
+    /// Several objects of unknown length (at most `max` bytes each), fetched in parallel; one
+    /// result per request, in order: the bytes, None if the server doesn't have it, or an error.
+    pub fn get_all(&self, reqs: &[(String, usize)], st: &mut NetStats) -> Vec<Result<Option<Vec<u8>>>> {
+        if let Source::Dir(_) = self { return reqs.iter().map(|(rel, max)| self.get(rel, *max, st)).collect(); }
+        let rq: Vec<Req> = reqs.iter().map(|(rel, max)| Req { rel, max: *max, exact: None }).collect();
+        let mut out: Vec<Option<Result<Option<Vec<u8>>>>> = (0..reqs.len()).map(|_| None).collect();
+        let r = self.transfer(&rq, st, |i, got| {
+            out[i] = Some(match got {
+                Got::Body(b) => Ok(Some(b)),
+                Got::Missing => Ok(None),
+                Got::Failed(m) => Err(anyhow::anyhow!("{}: {m}", reqs[i].0)),
+            });
+            Ok(())
+        });
+        out.into_iter().enumerate().map(|(i, o)| o.unwrap_or_else(|| Err(match &r {
+            Err(e) => anyhow::anyhow!("{}: {e:#}", reqs[i].0),
+            Ok(()) => anyhow::anyhow!("{}: not fetched", reqs[i].0),
+        }))).collect()
+    }
+
+    /// Run `reqs` on this thread's multi handle, `parallel` at a time, retrying what fails (not
+    /// what is missing or too large) up to ATTEMPTS times; `done` gets each request's end, in no
+    /// particular order. Transfers still running when this returns early are dropped (detached).
+    fn transfer(&self, reqs: &[Req], st: &mut NetStats, mut done: impl FnMut(usize, Got) -> Result<()>) -> Result<()> {
+        let Source::Http { parallel, h2c, base } = self else { unreachable!() };
+        let multiplexed = match options().version.as_deref() {
+            Some("h1") => false,
+            Some(_) => true,
+            None => *h2c || base.starts_with("https://"),
+        };
+        with_multi(|multi| {
+            // HTTP/2: requests wait for the open connection (pipewait) rather than open more
+            multi.set_max_host_connections(if multiplexed { 4 } else { *parallel })?;
+            let mut next = 0usize;
+            let mut active: HashMap<usize, (Easy2Handle<Collector>, usize, u32)> = HashMap::new();
+            let mut retry: Vec<(usize, u32)> = Vec::new();
+            let mut token = 0usize;
+            loop {
+                while active.len() < *parallel && (next < reqs.len() || !retry.is_empty()) {
+                    let (i, attempt) = retry.pop().unwrap_or_else(|| { next += 1; (next - 1, 0) });
+                    let rq = &reqs[i];
+                    let mut e = self.easy(rq.rel, rq.exact.map_or(rq.max, |(len, _)| len))?;
+                    if let Some((len, data)) = rq.exact { if data < len && data > 0 { e.range(&format!("0-{}", data - 1))?; } }
+                    let mut h = multi.add2(e)?;
+                    token += 1;
+                    h.set_token(token)?;
+                    active.insert(token, (h, i, attempt));
+                }
+                if active.is_empty() { return Ok(()); }
+                multi.perform()?;
+                let mut fin = Vec::new();
+                multi.messages(|m| { if let Some(r) = m.result() { fin.push((m.token().unwrap_or(0), r.err().map(|e| e.to_string()))); } });
+                for (t, err) in fin {
+                    let (h, i, attempt) = active.remove(&t).context("unknown transfer")?;
+                    let mut e = multi.remove2(h)?;
+                    st.requests += 1;
+                    st.connects += e.num_connects().unwrap_or(0);
+                    let code = e.response_code().unwrap_or(0);
+                    let over = e.get_ref().over;
+                    let mut body = std::mem::take(&mut e.get_mut().buf);
+                    let rq = &reqs[i];
+                    // a body cut off mid-transfer comes with 200 too: only a finished one counts
+                    let fits = match rq.exact {
+                        None => code == 200,
+                        Some((len, data)) => (code == 200 && body.len() == len) || (code == 206 && data < len && body.len() == data),
+                    };
+                    if over {
+                        done(i, Got::Failed(format!("larger than {} bytes", rq.exact.map_or(rq.max, |(l, _)| l))))?;
+                    } else if err.is_none() && fits {
+                        st.bytes += body.len() as u64;
+                        if let (206, Some((len, data))) = (code, rq.exact) { st.ranged += 1; st.saved += (len - data) as u64; body.resize(len, 0); }
+                        done(i, Got::Body(body))?;
+                    } else if matches!(code, 404 | 410) {
+                        done(i, Got::Missing)?;
+                    } else if attempt + 1 < ATTEMPTS {
+                        st.retries += 1;
+                        retry.push((i, attempt + 1));
+                    } else {
+                        done(i, Got::Failed(match err {
+                            Some(m) => m,
+                            None => format!("HTTP {code}, {} bytes", body.len()),
+                        }))?;
+                    }
+                }
+                if !active.is_empty() { multi.wait(&mut [], Duration::from_millis(200))?; }
+            }
+        })
     }
 
     /// Many objects of known exact length, as (path, length, data length): bytes after the data
@@ -228,63 +334,22 @@ impl Source {
                 }
                 Ok(())
             }
-            Source::Http { parallel, .. } => {
-                let mut multi = Multi::new();
-                multi.pipelining(false, true)?;
-                let multiplexed = match options().version.as_deref() {
-                    Some("h1") => false,
-                    Some(_) => true,
-                    None => matches!(self, Source::Http { base, h2c, .. } if *h2c || base.starts_with("https://")),
-                };
-                multi.set_max_host_connections(if multiplexed { 4 } else { *parallel })?;
-                let mut next = 0usize;
-                let mut active: HashMap<usize, (Easy2Handle<Collector>, usize, u32)> = HashMap::new();
-                let mut retry: Vec<(usize, u32)> = Vec::new();
-                let mut token = 0usize;
+            Source::Http { .. } => {
+                let rq: Vec<Req> = items.iter().map(|(rel, len, data)| Req { rel, max: *len, exact: Some((*len, *data)) }).collect();
                 let mut batch: Vec<(usize, Vec<u8>)> = Vec::new();
                 let mut batch_bytes = 0usize;
-                loop {
-                    while active.len() < *parallel && (next < items.len() || !retry.is_empty()) {
-                        let (i, attempt) = retry.pop().unwrap_or_else(|| { next += 1; (next - 1, 0) });
-                        let (rel, len, data) = &items[i];
-                        let mut e = self.easy(rel, *len)?;
-                        if data < len && *data > 0 { e.range(&format!("0-{}", data - 1))?; }
-                        let mut h = multi.add2(e)?;
-                        token += 1;
-                        h.set_token(token)?;
-                        active.insert(token, (h, i, attempt));
-                    }
-                    if active.is_empty() { break; }
-                    multi.perform()?;
-                    let mut done = Vec::new();
-                    multi.messages(|m| { if let Some(r) = m.result() { done.push((m.token().unwrap_or(0), r.is_ok())); } });
-                    for (t, ok) in done {
-                        let (h, i, attempt) = active.remove(&t).context("unknown transfer")?;
-                        let mut e = multi.remove2(h)?;
-                        st.requests += 1;
-                        let code = e.response_code().unwrap_or(0);
-                        let mut body = std::mem::take(&mut e.get_mut().buf);
-                        let (_, len, data) = items[i];
-                        let fits = (code == 200 && body.len() == len) || (code == 206 && data < len && body.len() == data);
-                        if ok && fits {
-                            st.bytes += body.len() as u64;
-                            if code == 206 { st.ranged += 1; st.saved += (len - data) as u64; }
-                            body.resize(len, 0);
-                            batch_bytes += body.len();
-                            batch.push((i, body));
-                        } else if attempt + 1 < ATTEMPTS && code != 404 {
-                            st.retries += 1;
-                            retry.push((i, attempt + 1));
-                        } else {
-                            bail!("{}: HTTP {code}{}", items[i].0, if ok { format!(", {} bytes", body.len()) } else { ", transfer failed".into() });
+                self.transfer(&rq, st, |i, got| {
+                    match got {
+                        Got::Body(b) => {
+                            batch_bytes += b.len();
+                            batch.push((i, b));
+                            if batch_bytes >= BATCH_BYTES { batch_bytes = 0; f(std::mem::take(&mut batch))?; }
+                            Ok(())
                         }
+                        Got::Missing => bail!("{}: HTTP 404", items[i].0),
+                        Got::Failed(m) => bail!("{}: {m}", items[i].0),
                     }
-                    if batch_bytes >= BATCH_BYTES {
-                        f(std::mem::take(&mut batch))?;
-                        batch_bytes = 0;
-                    }
-                    if !active.is_empty() { multi.wait(&mut [], Duration::from_millis(200))?; }
-                }
+                })?;
                 if !batch.is_empty() { f(batch)?; }
                 Ok(())
             }

@@ -1,0 +1,13 @@
+ok - download (10 cache files)
+ok - fetch-ids ran as alpm only
+ok - pull-ids ran as root
+ok - download directory removed after success
+ok - dead CacheServer: fell back to Server (4 MB)
+/tmp/pacman-robust.sh: line 59: kill: (3075955) - No such process
+ok - resume: first run stopped (rc 0, 0 chunks kept, 4 MB), second run 0 MB, together 4 MB
+ok - corrupt chunk on the first server: taken from the next
+ok - DisableSandbox: works without the download user
+ok - no index anywhere: mise-bin as its package file, the other 9 as btrpkg
+ok - btrpkg download failed: all 10 as package files
+ok - no index, DisableSandbox: mise-bin as its package file, the other 9 as btrpkg
+ok - -Sc removes the leftover download directory (and keeps other files)

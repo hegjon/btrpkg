@@ -223,18 +223,32 @@ pub(crate) fn upgrade(want: &[String], o: &UpgradeOpts) -> Result<UpgradeStats> 
     // 2./3. indexes, trust, eligibility
     let mut ns = net::NetStats::default();
     let mut targets: Vec<Target> = vec![];
-    for (name, ri, old, new) in cands {
-        let rel = new.field("btrpkg.index").unwrap().to_string();
-        let file = store::index_name(&rel).with_context(|| format!("{name}: odd btrpkg.index {rel:?}"))?.to_string();
-        let id = store::unhex(new.field("btrpkg.id").unwrap())?;
-        let mut got = None;
+    let mut files: Vec<String> = Vec::new();
+    for (name, _, _, new) in &cands {
+        let rel = new.field("btrpkg.index").unwrap();
+        files.push(store::index_name(rel).with_context(|| format!("{name}: odd btrpkg.index {rel:?}"))?.to_string());
+    }
+    // all indexes of a repository at once, server after server for what is still missing
+    let mut fetched: Vec<Option<(Vec<u8>, Option<String>)>> = (0..cands.len()).map(|_| None).collect();
+    for ri in 0..conf.repos.len() {
+        let mut left: Vec<usize> = (0..cands.len()).filter(|&k| cands[k].1 == ri).collect();
         for s in &conf.repos[ri].servers {
+            if left.is_empty() { break; }
             let src = net::Source::parse(s, o.h2c, o.parallel);
-            match store::fetch_index(&src, &file, &mut ns) {
-                Ok(x) => { got = Some(x); break; }
-                Err(e) => log(&format!("{name}: {s}: {e:#}")),
+            let names: Vec<&str> = left.iter().map(|&k| files[k].as_str()).collect();
+            let res = store::fetch_indexes(&src, &names, &mut ns);
+            let mut still = Vec::new();
+            for (&k, r) in left.iter().zip(res) {
+                match r {
+                    Ok(x) => fetched[k] = Some(x),
+                    Err(e) => { log(&format!("{}: {s}: {e:#}", cands[k].0)); still.push(k); }
+                }
             }
+            left = still;
         }
+    }
+    for ((name, ri, old, new), (file, got)) in cands.into_iter().zip(files.into_iter().zip(fetched)) {
+        let id = store::unhex(new.field("btrpkg.id").unwrap())?;
         let (ib, sig) = got.with_context(|| format!("{name}: no server has its index"))?;
         let trust = sign::Trust::All(vec![sign::Trust::Id(id), sign::Trust::Signed(keyring.clone(), sig.clone().with_context(|| format!("{name}: index not signed"))?)]);
         let idx = read_index_checked(&mut &ib[..], &|h| trust.check(h)).with_context(|| name.clone())?;

@@ -70,40 +70,52 @@ fn say(on: bool, line: String) {
 pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Hash)], o: &FetchOpts) -> Result<()> {
     ensure!(!servers.is_empty(), "no server");
     let mut ns = net::NetStats::default();
-    // 1. indexes (and signatures), each checked against its ID before it is kept
-    let mut idxs: Vec<Index> = Vec::new();
-    for (name, id) in pkgs {
-        let ip = dir.join(store::index_rel(name));
+    // 1. indexes (and signatures), each checked against its ID before it is kept; those not in
+    // DIR yet are asked for all at once, server after server for what is still missing
+    let mut got: Vec<Option<Index>> = (0..pkgs.len()).map(|_| None).collect();
+    let mut left: Vec<usize> = Vec::new();
+    for (j, (name, id)) in pkgs.iter().enumerate() {
         let trust = sign::Trust::Id(*id);
-        if let Ok(b) = fs::read(&ip) {
-            if let Ok(idx) = read_index_checked(&mut &b[..], &|h| trust.check(h)) { idxs.push(idx); continue; }
+        match fs::read(dir.join(store::index_rel(name))).ok().and_then(|b| read_index_checked(&mut &b[..], &|h| trust.check(h)).ok()) {
+            Some(idx) => got[j] = Some(idx),
+            None => left.push(j),
         }
-        let mut got = None;
-        for s in servers {
-            match store::fetch_index(s, name, &mut ns) {
-                Ok((ib, sig)) => {
-                    match read_index_checked(&mut &ib[..], &|h| trust.check(h)) {
-                        Ok(idx) => { got = Some((idx, ib, sig)); break; }
-                        Err(e) => eprintln!("btrpkg: {name} from {}: {e:#}", s.describe()),
-                    }
+    }
+    for s in servers {
+        if left.is_empty() { break; }
+        let names: Vec<&str> = left.iter().map(|&j| pkgs[j].0.as_str()).collect();
+        let res = store::fetch_indexes(s, &names, &mut ns);
+        let mut still = Vec::new();
+        for (&j, r) in left.iter().zip(res) {
+            let (name, id) = &pkgs[j];
+            let trust = sign::Trust::Id(*id);
+            match r.and_then(|(ib, sig)| Ok((read_index_checked(&mut &ib[..], &|h| trust.check(h))?, ib, sig))) {
+                Ok((idx, ib, sig)) => {
+                    // no fsync: DIR is a download directory, and an index in it is checked again
+                    // against its ID before anything uses it (here on a rerun, and by pull-ids)
+                    store::write_atomic_nosync(&dir.join(store::index_rel(name)), &ib)?;
+                    let sp = dir.join(store::sig_rel(name));
+                    match sig { Some(t) => store::write_atomic_nosync(&sp, t.as_bytes())?, None => { let _ = fs::remove_file(&sp); } }
+                    got[j] = Some(idx);
                 }
-                Err(e) => eprintln!("btrpkg: {name} from {}: {e:#}", s.describe()),
+                Err(e) => { eprintln!("btrpkg: {name} from {}: {e:#}", s.describe()); still.push(j); }
             }
         }
-        let Some((idx, ib, sig)) = got else {
-            ensure!(o.skip_missing && o.index_only, "{name}: no server has its index");
-            // no stale index (one that failed its check above) for pacman to mistake for one
-            let _ = fs::remove_file(&ip);
-            let _ = fs::remove_file(dir.join(store::sig_rel(name)));
-            continue;
-        };
-        store::write_atomic(&ip, &ib)?;
-        let sp = dir.join(store::sig_rel(name));
-        match sig { Some(t) => store::write_atomic(&sp, t.as_bytes())?, None => { let _ = fs::remove_file(&sp); } }
-        idxs.push(idx);
+        left = still;
     }
+    for &j in &left {
+        let name = &pkgs[j].0;
+        ensure!(o.skip_missing && o.index_only, "{name}: no server has its index");
+        // no stale index (one that failed its check above) for pacman to mistake for one
+        let _ = fs::remove_file(dir.join(store::index_rel(name)));
+        let _ = fs::remove_file(dir.join(store::sig_rel(name)));
+    }
+    let idxs: Vec<Index> = got.into_iter().flatten().collect();
 
-    if o.index_only { return Ok(()); }
+    if o.index_only {
+        if std::env::var_os("BTRPKG_NETSTATS").is_some() { eprintln!("btrpkg: {ns:?}"); }
+        return Ok(());
+    }
 
     // 2. which chunks to fetch: (path in a btrparts directory, length, owning package)
     let parts = dir.join(net::DEFAULT_PARTS);
@@ -172,6 +184,7 @@ pub(crate) fn fetch_ids(servers: &[net::Source], dir: &Path, pkgs: &[(String, Ha
         bail!("{} chunks not available from any server (first: {})", left.len(), left[0].0);
     }
     for (name, _) in pkgs { say(o.progress, format!("done\t{name}")); }
+    if std::env::var_os("BTRPKG_NETSTATS").is_some() { eprintln!("btrpkg: {ns:?}"); }
     Ok(())
 }
 

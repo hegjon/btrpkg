@@ -229,9 +229,19 @@ const MAX_INDEX: usize = 256 << 20;
 
 /// Index and signature of NAME from a source.
 pub(crate) fn fetch_index(src: &net::Source, name: &str, ns: &mut net::NetStats) -> Result<(Vec<u8>, Option<String>)> {
-    let ib = src.get(&index_rel(name), MAX_INDEX, ns)?.with_context(|| format!("no index for {name}"))?;
-    let sig = src.get(&sig_rel(name), 4096, ns)?.map(|b| String::from_utf8_lossy(&b).into_owned());
-    Ok((ib, sig))
+    fetch_indexes(src, &[name], ns).pop().unwrap()
+}
+
+/// The indexes (and signatures, if there are any) of `names` from one source, all requested
+/// at once (over HTTP/2 on one connection); one result per name, in order.
+pub(crate) fn fetch_indexes(src: &net::Source, names: &[&str], ns: &mut net::NetStats) -> Vec<Result<(Vec<u8>, Option<String>)>> {
+    let reqs: Vec<(String, usize)> = names.iter().flat_map(|n| [(index_rel(n), MAX_INDEX), (sig_rel(n), 4096)]).collect();
+    let mut got = src.get_all(&reqs, ns).into_iter();
+    names.iter().map(|name| {
+        let (ib, sig) = (got.next().unwrap(), got.next().unwrap());
+        let ib = ib?.with_context(|| format!("no index for {name}"))?;
+        Ok((ib, sig?.map(|b| String::from_utf8_lossy(&b).into_owned())))
+    }).collect()
 }
 
 /// Where a chunk's data sits in an installed file: (path, offset in the file, bytes of file data).

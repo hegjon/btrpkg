@@ -734,10 +734,11 @@ fn pull_ids(s: &str, parts: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], pa
     let src = net::Source::parse(s, flags.contains(&"--h2c"), parallel);
     let mut ns = net::NetStats::default();
     let mut got: Vec<(String, Vec<u8>, Option<String>, PathBuf, sign::Trust)> = Vec::new();
-    for p in pkgs {
-        let (name, id) = parse_name_id(p)?;
-        let (ib, sig) = store::fetch_index(&src, &name, &mut ns)?;
-        got.push((name.clone(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(id)));
+    let ids: Vec<(String, Hash)> = pkgs.iter().map(|p| parse_name_id(p)).collect::<Result<_>>()?;
+    let names: Vec<&str> = ids.iter().map(|(n, _)| n.as_str()).collect();
+    for ((name, id), r) in ids.iter().zip(store::fetch_indexes(&src, &names, &mut ns)) {
+        let (ib, sig) = r?;
+        got.push((name.clone(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(*id)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed, level: level.unwrap_or(3),
         verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress"), parts };

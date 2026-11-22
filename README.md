@@ -112,6 +112,13 @@ cache on btrfs, a sync target with btrpkg fields comes as `NAME.pkg.btr`:
 3. Install: pacman's own extraction over a tar stream made from the index; large files are
    reflinked from the cache file. Scripts, backups/`.pacnew`, hooks and the database work as usual.
 
+Network: every request of a btrpkg process goes through one long-lived curl multi handle, so a run
+opens one connection per server (HTTP/2; up to 8 kept-alive ones over HTTP/1.1) and keeps it for all
+its downloads: the indexes and signatures, all requested at once, then the btrparts. At 50 ms
+round-trip time, planning an upgrade of 100 packages (`fetch-ids --index-only`) takes 0.36 s over
+HTTPS (19.5 s before, one connection per object); `bench/net-latency-bench.sh`. The plan and the
+download are two runs (pacman asks in between), so a transaction opens two connections.
+
 Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no server has the index
 (a database older than what the servers keep), or the btrpkg download of a repository fails. A
 `.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors). Entries in an older layout
@@ -264,6 +271,6 @@ extents; its data is never decompressed, copied or written again.
 - **Left for later**: one multi-server source for fetch-ids, pull-ids and `pacbtr` (server fallback
   is written three ways); committing per package so one bad package doesn't send its repository to
   package files; splitting `store::pull_many` and `upgrade()`; one fork/exec helper in libalpm;
-  fetching indexes over one connection; libalpm's cache-file length check (exact, and before the
+  libalpm's cache-file length check (exact, and before the
   "already in the cache" shortcut).
 - Code identifiers still say "chunk" for btrpart.
