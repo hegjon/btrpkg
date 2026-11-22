@@ -89,6 +89,48 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## aarch64 beside x86_64 (2026-11-22)
+
+The mirror now has `omarchy-mirror/aarch64` (Omarchy's edge aarch64 repo) and
+`arch-mirror/{core,extra}/os/aarch64` (Arch Linux ARM's repos, which Omarchy's aarch64 machines
+use). They share `omarchy-mirror/btrparts` and `arch-mirror/btrparts` with x86_64. The wanted
+lists are the same as for x86_64, plus what 404s teach.
+
+| | aarch64 indexes | aarch64 btrparts alone | already there from x86_64 | added |
+|---|---|---|---|---|
+| omarchy | 58 | 1.11 GB | 0.45 GB (40.5%) | 0.66 GB (1.50 → 2.16 GB) |
+| core + extra | 200 + 618 | 2.43 GB | 0.80 GB (32.8%) | 1.63 GB (2.67 → 4.30 GB) |
+| total | 876 | 3.54 GB | 1.25 GB (35.3%) | 2.29 GB |
+
+The first conversion pass took 3m29s (8 jobs; most package files were already downloaded).
+
+- **Client test on macmini-m1** (aarch64, Omarchy on Arch Linux ARM + Asahi, btrfs). btrpkg-git and
+  pacman-btrpkg were built on the machine. Its sync dbs are older than the ARM mirror, so system
+  packages couldn't be added without a full upgrade; `packaging/build-local-toolchain.sh` puts
+  rustup and meson/ninja in one directory and builds with `makepkg --nodeps`. btrpkg's tests:
+  21/21. pacman's suite: 320 ok, 6 expected failures, btrpkg's 73 subtests ok. The 19 hook,
+  scriptlet and ldconfig tests failed: they need fakechroot to chroot as a user.
+- `bench/scratch-root-compare.sh` installs the same 15 packages (hyprland, omarchy-dev, mise-bin,
+  mesa, ffmpeg, noto-fonts-cjk, util-linux, …) into two scratch roots: stock pacman from the
+  mirror's `.pkg.tar.*`, pacman-btrpkg from the shared btrparts. Result: 6,063 package-owned files
+  and the local db identical, `-Qkk` 0 altered. One round: stock 14.9 s, btrpkg 5.4 s. That
+  includes the downloads, and stock also has to decompress Arch Linux ARM's xz.
+- The first attempt failed as it should. m1 didn't have the mirror's signify key, so every index
+  was refused ("signed with unknown key"). A client needs `/etc/btrpkg/keys/<key>.pub`, as the
+  x86_64 clients have.
+- **Found along the way:**
+  - Arch Linux ARM's db has descs without `%BASE%`, with the fields in another order.
+    `repo-mirror.sh` now pairs `%NAME%` and `%FILENAME%` per desc.
+  - Omarchy publishes `obsidian-1.15.1-1-aarch64` without a `.sig`. It stays a plain package.
+    `repo-update --keep-going` logs such packages and still publishes the db, so one unsigned
+    package no longer fails the whole pass (and with it the cleanup).
+  - Arch Linux ARM packages are signed by archlinuxarm-keyring's keys, so
+    `mirror/keyrings/archlinuxarm.gpg` holds a copy of macmini-m1's.
+  - btrpkg's `check()` runs the tests in `$srcdir`, because they need btrfs and `/tmp` is often
+    tmpfs.
+- Not mirrored: Arch Linux ARM's `alarm` repo and `asahi-alarm` (kernels, firmware, Asahi
+  packages).
+
 ## Cleanup: `btrpkg gc` (2026-11-22)
 
 `btrpkg gc [--keep N] [--min-age SECS] [--dry-run] BTRPARTS` removes old package versions from

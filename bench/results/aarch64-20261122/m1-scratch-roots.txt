@@ -1,0 +1,5 @@
+stock: exit 0, 14.9 s, cache: 0 .pkg.btr, 15 .pkg.tar
+btr: exit 0, 5.4 s, cache: 15 .pkg.btr, 0 .pkg.tar
+entries: 6066 / 6066; package-owned: 6063; local db entries: 45
+package-owned differences: 0; database differences: 0; other (hook-made) differences: 0
+pacman -Qkk in the btrpkg root: 15 packages, 0 altered files

@@ -720,7 +720,7 @@ const USAGE: &str = "usage:
       (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
   btrpkg upgrade [--config FILE] [--root DIR] [--keys DIR]... [--no-snapshot] [--dry-run] [--list] [--h2c] [PKG...]
       (the same as: pacbtr [options] [PKG...])
-  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO
+  btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [-l N] [--small N] DIR REPO
 NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: IN.sig or the store's
        NAME.btridx.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
@@ -901,7 +901,7 @@ fn main() -> Result<()> {
             "--config" => conf = val("--config")?.into(),
             "--root" => root = val("--root")?.into(),
             "-h" | "--help" => { println!("{USAGE}"); return Ok(()); }
-            "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" | "--progress" | "--landlock" | "--consume" | "--index-only" | "--plan" => flags.push(a.as_str()),
+            "--keep-going" | "--no-encoded" | "--copy" | "--h2c" | "--drop-missing" | "--no-snapshot" | "--dry-run" | "--list" | "--verify-data" | "--no-fsync" | "--progress" | "--landlock" | "--consume" | "--index-only" | "--plan" => flags.push(a.as_str()),
             s if s.starts_with('-') && s.len() > 1 => bail!("unknown option {s}\n{USAGE}"),
             s => pos.push(s),
         }
@@ -998,7 +998,7 @@ fn main() -> Result<()> {
                 level: level.unwrap_or(19), small: small_max, jobs, db_in: db_in.clone(), parts: parts.clone().unwrap_or_else(|| repo::DEFAULT_REPO_PARTS.to_string()) };
             let st = repo::repo_update(Path::new(d), r, &o)?;
             eprintln!("repo-update: {st:?}");
-            ensure!(st.failed == 0, "{} packages failed (left to pacman)", st.failed);
+            ensure!(st.failed == 0 || flags.contains(&"--keep-going"), "{} packages failed (left to pacman)", st.failed);
             Ok(())
         }
         ["upgrade", pkgs @ ..] => {

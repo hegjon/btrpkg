@@ -1,0 +1,15 @@
+2026-11-22 07:32:12 omarchy: upstream unchanged, nothing new to convert
+2026-11-22 07:32:13 core: upstream unchanged, nothing new to convert
+2026-11-22 07:32:13 extra: upstream unchanged, nothing new to convert
+2026-11-22 07:32:14 downloaded 0 files (0 failed)
+btrpkg: obsidian-1.15.1-1-aarch64: /home/jonny/Work/btrpkg-repo/omarchy-mirror/aarch64/obsidian-1.15.1-1-aarch64.pkg.tar.zst: no .sig (left to pacman)
+repo-update: RepoStats { packages: 369, converted: 0, unchanged: 58, failed: 1, missing: 310, dropped: 0, new_chunk_bytes: 0 }
+2026-11-22 07:32:14 omarchy published: 58 of 369 packages with btrpkg data
+2026-11-22 07:32:48 downloaded 218 files (0 failed)
+repo-update: RepoStats { packages: 314, converted: 200, unchanged: 0, failed: 0, missing: 114, dropped: 0, new_chunk_bytes: 687044215 }
+2026-11-22 07:33:08 core published: 200 of 314 packages with btrpkg data
+2026-11-22 07:34:44 downloaded 627 files (0 failed)
+repo-update: RepoStats { packages: 13216, converted: 618, unchanged: 0, failed: 0, missing: 12598, dropped: 0, new_chunk_bytes: 943235701 }
+2026-11-22 07:35:40 extra published: 618 of 13216 packages with btrpkg data
+2026-11-22 07:35:41 arch-mirror/btrparts: gc: 4 repositories; indexes 1647 kept, 0 removed (0 package files); btrparts 133564 kept, 0 removed, 0 too young to remove; 0 raw map entries removed; 0.0 MiB
+2026-11-22 07:35:41 omarchy-mirror/btrparts: gc: 2 repositories; indexes 123 kept, 0 removed (0 package files); btrparts 56218 kept, 0 removed, 0 too young to remove; 0 raw map entries removed; 0.0 MiB

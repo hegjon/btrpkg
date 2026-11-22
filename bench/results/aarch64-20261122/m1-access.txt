@@ -1,0 +1,11 @@
+4214 290 MB 192.168.2.94 /arch-mirror/btrparts 200
+10 10 MB 192.168.2.94 /arch-mirror/core/os/aarch64/<file> 200
+2 0 MB 192.168.2.94 /arch-mirror/core/os/aarch64/<file> 404
+16 4 MB 192.168.2.94 /arch-mirror/core/os/aarch64/index 200
+14 240 MB 192.168.2.94 /arch-mirror/extra/os/aarch64/<file> 200
+2 0 MB 192.168.2.94 /arch-mirror/extra/os/aarch64/<file> 404
+24 1 MB 192.168.2.94 /arch-mirror/extra/os/aarch64/index 200
+12 201 MB 192.168.2.94 /omarchy-mirror/aarch64/<file> 200
+2 0 MB 192.168.2.94 /omarchy-mirror/aarch64/<file> 404
+20 2 MB 192.168.2.94 /omarchy-mirror/aarch64/index 200
+2861 197 MB 192.168.2.94 /omarchy-mirror/btrparts 200

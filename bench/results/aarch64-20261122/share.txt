@@ -1,0 +1,2 @@
+omarchy-mirror: aarch64 58 indexes; its btrparts alone 1.11 GB (27223), already there from x86_64 0.45 GB (40.5%), added 0.66 GB; directory 1.50 -> 2.16 GB (+0.66), 37897 -> 56218 files
+arch-mirror: aarch64 818 indexes; its btrparts alone 2.43 GB (91297), already there from x86_64 0.80 GB (32.8%), added 1.63 GB; directory 2.67 -> 4.30 GB (+1.63), 89689 -> 133564 files

@@ -8,7 +8,7 @@ _name=btrpkg
 pkgver=0.0.1.r0.g0000000
 pkgrel=1
 pkgdesc="btrfs-native packages: format and repository tool, client, and pacman helper"
-arch=(x86_64)
+arch=(x86_64 aarch64)
 url="https://github.com/hegjon/btrpkg"
 license=(MIT)
 depends=(curl libcurl.so gcc-libs glibc xz liblzma.so zstd libzstd.so)
@@ -49,7 +49,9 @@ check() {
   cd "$_name"
   export RUSTUP_TOOLCHAIN=stable
   export ZSTD_SYS_USE_PKG_CONFIG=1
-  cargo test --frozen
+  # the tests use encoded writes and reflinks: btrfs, not the /tmp tmpfs many machines have
+  mkdir -p "$srcdir/test-tmp"
+  TMPDIR="$srcdir/test-tmp" cargo test --frozen
 }
 
 package() {

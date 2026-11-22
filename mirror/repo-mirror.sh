@@ -53,8 +53,9 @@ esac
 
 # 2. package files: NAME FILENAME of every package in upstream's database
 list=$(mktemp); trap 'rm -f "$list"' EXIT
-bsdtar -xOf "$cur" '*/desc' | awk '/^%FILENAME%/{getline; f=$0} /^%NAME%/{getline; n=$0} /^%BASE%/{print n, f}' > "$list"
-# (every desc has %BASE% after %NAME% and %FILENAME%; check the count)
+# (any field order, and Arch Linux ARM has descs without %BASE%: pair NAME and FILENAME per desc)
+bsdtar -xOf "$cur" '*/desc' | awk '/^%FILENAME%$/{getline; f=$0} /^%NAME%$/{getline; n=$0} f!="" && n!=""{print n, f; f=""; n=""}' > "$list"
+# (one pair per desc: check the count)
 [[ $(wc -l < "$list") -eq $(bsdtar -tf "$cur" | grep -c '/desc$') ]] || { log "could not read the database"; exit 1; }
 # learn: packages a client asked the mirror for and didn't get (404) are converted from now on
 learned=$M/.wanted-learned; [[ -e $learned ]] || : > "$learned"
@@ -88,6 +89,8 @@ done < "$list"
 log "downloaded $got files ($failed failed)"
 
 # 3. convert and publish; the served database is replaced last
-"$B" repo-update --key "$KEY" --gpg-keyring "$KR" --db-in "$cur" --jobs "$JOBS" --parts "$PARTS" "$M" "$REPO"
+# --keep-going: a package that can't be converted (no .sig upstream, bad signature) is logged and
+# left to pacman (no btrpkg fields); the database is still published and the run counts as done
+"$B" repo-update --keep-going --key "$KEY" --gpg-keyring "$KR" --db-in "$cur" --jobs "$JOBS" --parts "$PARTS" "$M" "$REPO"
 touch "$M/.done"
 log "$REPO published: $(bsdtar -xOf "$M/$REPO.db" '*/desc' | grep -c '^btrpkg.id=') of $(wc -l < "$list") packages with btrpkg data"
