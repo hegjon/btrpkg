@@ -89,6 +89,37 @@ over HTTP/2 and 3.
 - HTTP/2 with 128 in flight beat 64 at 30 ms (5.7 vs 6.6 s): worth raising the default for
   far-away mirrors.
 
+## Range requests, fallback to package files, all clients on [btrpkg] (2026-11-22)
+
+- **Raw btrparts without their trailing zeros.** A raw btrpart at a file's end is padded with
+  zeros to 4 KiB. The index says where the file data ends (`store::data_len`), so the client asks
+  for just that (`Range: bytes=0-N`), puts the zeros back and checks the SHA-256 (the btrpart's
+  name) as before. A server that ignores Range answers 200 with everything, which is accepted.
+  No format change.
+  - linux-firmware-intel from the mirror's Caddy: 450 of its 1,378 btrparts came as 206, and
+    0.91 MB fewer bytes were sent (0.6%).
+  - From `python -m http.server`, which ignores Range: all 200, and the cache file was
+    byte-identical.
+  - Mirror-wide, the zeros in raw tails are 65 MB of 8.38 GB (0.77%).
+- **Fallback to the package file** (libalpm patch 8, pacman-btrpkg 6).
+  - A package no server has an index for (its db is older than the servers' current + previous)
+    comes as its `.pkg.tar.*`, checked by sha256sum and OpenPGP like any package. The index step
+    runs `fetch-ids --index-only --skip-missing`, which leaves the package out instead of failing.
+  - If a repository's btrpkg download fails altogether, all its packages come as package files.
+    Each attempt is all or nothing, so no cache file is ever half written.
+  - Planning already does this, so the transaction summary shows the real sizes. Only a broken
+    download directory still fails the transaction.
+  - p14s, `bench/pacman-robust.sh` 12/12 with three new cases: one package's index missing on the
+    only server (it comes as its package file, the other 9 as btrpkg); no btrparts at all (all 10
+    as package files); the first case again with DisableSandbox (pacstrap's way). The option
+    tests: 16/16.
+- **All clients on [btrpkg].** x200, t460s, t490 and macmini-m1 now have the `[btrpkg]` section
+  and upgraded with pacman to the CI builds (btrpkg-git r67, pacman-btrpkg 6), as p14s did.
+  - `packaging/use-btrpkg-repo.sh` refreshes only `btrpkg.db`. m1's other sync dbs stay at Nov
+    12/14 (checked), so nothing else changes.
+  - Downloads checked on all five. On m1, 5 packages from omarchy, core, extra and alarm in
+    scratch roots came out identical to stock; bankstown now comes as btrpkg too.
+
 ## Packages from CI: the `[btrpkg]` repository (2026-11-22)
 
 Every push to master builds and tests btrpkg-git and pacman-btrpkg for x86_64 and aarch64

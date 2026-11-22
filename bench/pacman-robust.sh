@@ -15,16 +15,21 @@ CACHE=/var/cache/pacman/pkg
 DEV=$(ip -o route get 192.168.2.2 | grep -o 'dev [^ ]*' | cut -d' ' -f2)
 rx() { awk -v d="$DEV:" '$1==d{print $2}' /proc/net/dev; }
 clean() { for f in $(pacman --config $C -Sp --print-format "%f" $T); do rm -f $CACHE/${f%.pkg.tar.*}.pkg.btr $CACHE/${f%.pkg.tar.*}.pkg.btr.sig; done; rm -rf $CACHE/download-btrpkg $CACHE/download-btrpkg.want; }
-conf() { # $1: extra lines for [options], $2: server lines for [omarchy]
-  awk -v o="$1" -v s="$2" -v b="$BTRPKG" '
+conf() { # $1: extra lines for [options], $2: server lines for [omarchy], $3: "only" drops the others
+  awk -v o="$1" -v s="$2" -v only="${3:-}" -v b="$BTRPKG" '
     /^\[options\]/ {print; print "BtrPkgHelper = " b " --h2c"; if (o!="") print o; next}
     /^\[omarchy\]/ {print; if (s!="") print s; inrepo=1; next}
     /^\[/ {inrepo=0}
-    inrepo && /^Server/ {print; next}
+    inrepo && /^Server/ {if (only=="") print; next}
     {print}' $C > $BC
 }
+# package files (not .pkg.btr) of $T in the cache, and removing them again
+plain() { local n=0; for f in $(pacman --config $C -Sp --print-format "%f" $T); do [[ -e $CACHE/$f ]] && n=$((n+1)); done; echo $n; }
+# .pkg.btr files of $T in the cache
+btrs() { local n=0; for f in $(pacman --config $C -Sp --print-format "%f" $T); do [[ -e $CACHE/${f%.pkg.tar.*}.pkg.btr ]] && n=$((n+1)); done; echo $n; }
+unplain() { for f in $(pacman --config $C -Sp --print-format "%f" $T); do rm -f "$CACHE/$f" "$CACHE/$f.sig"; done; }
 fail=0; ok() { echo "ok - $*"; }; no() { echo "NOT OK - $*"; fail=1; }
-cnt() { ls $CACHE | grep -c '\.pkg\.btr$'; }
+cnt() { find $CACHE -maxdepth 1 -name '*.pkg.btr' | wc -l; }
 # $C's [omarchy] is the test repository, but in the system's DBPath: put the system's databases
 # back on exit (-Syy: the test db's mtime is newer, so a plain -Sy would keep it)
 trap 'pacman -Syy >/dev/null 2>&1' EXIT
@@ -76,6 +81,34 @@ else echo "skip - corrupt chunk (no /var/tmp/robust-repo)"; fi
 clean; conf "DisableSandbox" ""
 $PAC --config $BC -Sw --noconfirm $T >/tmp/r5.log 2>&1; rc=$?
 [[ $rc == 0 && $(cnt) -ge $N ]] && ok "DisableSandbox: works without the download user" || { no "DisableSandbox rc=$rc"; tail -5 /tmp/r5.log; }
+
+# 7.-9. fallback to the package file. A copy of the test repository is the only server.
+if [[ -d /var/tmp/robust-repo/btrparts ]]; then
+  first=${T%% *}
+  ff=$(pacman --config $C -Sp --print-format "%f" $first); stem=${ff%.pkg.tar.*}
+  # 7. no server has the index of one package: it comes as its package file, the rest as btrpkg
+  rm -rf /var/tmp/noidx; cp -a --reflink=always /var/tmp/robust-repo /var/tmp/noidx
+  rm -f /var/tmp/noidx/x86_64/index/$stem.btridx /var/tmp/noidx/x86_64/index/$stem.btridx.sig
+  clean; unplain; conf "" "Server = file:///var/tmp/noidx/x86_64" only
+  $PAC --config $BC -Syy >/dev/null 2>&1
+  $PAC --config $BC -Sw --noconfirm $T >/tmp/r7.log 2>&1; rc=$?
+  [[ $rc == 0 && $(btrs) == $((N-1)) && $(plain) == 1 && -e $CACHE/$ff ]] && grep -q "no server has the index of $first" /tmp/r7.log \
+    && ok "no index anywhere: $first as its package file, the other $(btrs) as btrpkg" || { no "no index rc=$rc btr=$(btrs) plain=$(plain)"; tail -5 /tmp/r7.log; }
+  # 8. the btrpkg download fails (no btrparts at all): every package as its package file
+  clean; unplain; rm -rf /var/tmp/noidx/btrparts; cp -a /var/tmp/robust-repo/x86_64/index/$stem.btridx* /var/tmp/noidx/x86_64/index/
+  $PAC --config $BC -Sw --noconfirm $T >/tmp/r8.log 2>&1; rc=$?
+  [[ $rc == 0 && $(plain) == "$N" && $(btrs) == 0 ]] && grep -q "downloading the package files instead" /tmp/r8.log \
+    && ok "btrpkg download failed: all $(plain) as package files" || { no "no btrparts rc=$rc btr=$(btrs) plain=$(plain)"; tail -5 /tmp/r8.log; }
+  # 9. as 7, without the download user (DisableSandbox, pacstrap's way)
+  rm -rf /var/tmp/noidx; cp -a --reflink=always /var/tmp/robust-repo /var/tmp/noidx
+  rm -f /var/tmp/noidx/x86_64/index/$stem.btridx /var/tmp/noidx/x86_64/index/$stem.btridx.sig
+  clean; unplain; conf "DisableSandbox" "Server = file:///var/tmp/noidx/x86_64" only
+  $PAC --config $BC -Sw --noconfirm $T >/tmp/r9.log 2>&1; rc=$?
+  [[ $rc == 0 && $(btrs) == $((N-1)) && $(plain) == 1 && -e $CACHE/$ff ]] && grep -q "no server has the index of $first" /tmp/r9.log \
+    && ok "no index, DisableSandbox: $first as its package file, the other $(btrs) as btrpkg" || { no "no index (DisableSandbox) rc=$rc btr=$(btrs) plain=$(plain)"; tail -5 /tmp/r9.log; }
+  clean; unplain; rm -rf /var/tmp/noidx
+  conf "" ""; $PAC --config $BC -Syy >/dev/null 2>&1
+else echo "skip - fallback (no /var/tmp/robust-repo)"; fi
 
 # 6. -Sc removes leftovers (in a cache directory of its own: the real one keeps packages for rollbacks)
 SC=/var/tmp/robust-sc/; rm -rf $SC; mkdir -p $SC/download-btrpkg/btrparts/aa; touch $SC/download-btrpkg/btrparts/aa/x $SC/download-btrpkg.want $SC/keep.txt
