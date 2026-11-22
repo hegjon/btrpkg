@@ -424,7 +424,7 @@ const USAGE: &str = "usage:
   btrpkg dump FILE                        (the parsed index as text, to compare with other readers)
   btrpkg keygen NAME                      (writes NAME.sec and NAME.pub)
   btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
-  btrpkg pull [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--h2c] [--parallel N] [--installed ROOT] DIR|URL NAME CACHE
+  btrpkg pull [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--h2c] [--parallel N] [--installed ROOT] [--parts REL] DIR|URL NAME CACHE
   btrpkg pull-ids [--h2c] [--parallel N] [--installed ROOT] DIR|URL CACHEDIR NAME=IDHEX...
       (for package managers: every NAME's index must have the header ID IDHEX; all packages share
        one download queue; writes CACHEDIR/NAME.pkg.btr, and NAME.pkg.btr.sig when the server
@@ -1327,6 +1327,12 @@ mod tests {
         assert!(st.iter().all(|s| s.fetched_chunks == 0 && s.reused_chunks == s.chunks), "{st:?}");
     }
 
+    fn other_cache(t: &Path) -> PathBuf {
+        let d = t.join("other2");
+        fs::create_dir_all(&d).unwrap();
+        d.join("q-1-1-x86_64.pkg.btr")
+    }
+
     #[test]
     fn pull_reuses_installed_files() {
         let t = TempDir::new("installed");
@@ -1353,6 +1359,36 @@ mod tests {
         let r2 = t.0.join("root2");
         install(&cdir.join("q-2-1-x86_64.pkg.btr"), &r2, false).unwrap();
         check_tree(&r2, &s2);
+        // version 1's tool moved to another path (and its other names are gone): found through
+        // pacman's local database by size and name, checked like any installed file
+        let rm = t.0.join("root-moved");
+        pull_dir(&store, "q-1-1-x86_64", &other_cache(&t.0), &U).unwrap();
+        install(&other_cache(&t.0), &rm, false).unwrap();
+        fs::create_dir_all(rm.join("usr/libexec")).unwrap();
+        fs::rename(rm.join("usr/bin/tool"), rm.join("usr/libexec/tool")).unwrap();
+        fs::remove_file(rm.join("usr/bin/tool-copy")).unwrap();
+        fs::remove_file(rm.join("usr/bin/hard")).unwrap();
+        let om = store::PullOpts { installed: Some(&rm), ..Default::default() };
+        let cm = cdir.join("m").join("q-2-1-x86_64.pkg.btr");
+        fs::create_dir_all(cm.parent().unwrap()).unwrap();
+        let p = store::pull(&src, "q-2-1-x86_64", &cm, &U, &om).unwrap();
+        assert_eq!((p.installed_chunks, p.installed_moved, p.fetched_chunks), (0, 0, 5), "no database: {p:?}");
+        let db = rm.join("var/lib/pacman/local/q-1-1");
+        fs::create_dir_all(&db).unwrap();
+        fs::write(db.join("desc"), "%NAME%\nq\n\n%VERSION%\n1-1\n\n").unwrap();
+        fs::write(db.join("files"), "%FILES%\nusr/\nusr/bin/\nusr/bin/../../etc/passwd\nusr/lib/libx.so.1\nusr/libexec/tool\nusr/share/readme\n\n%BACKUP%\nusr/share/x\t0\n").unwrap();
+        fs::remove_file(&cm).unwrap();
+        let p = store::pull(&src, "q-2-1-x86_64", &cm, &U, &om).unwrap();
+        assert_eq!((p.installed_chunks, p.installed_moved, p.fetched_chunks), (3, 3, 2), "moved: {p:?}");
+        let r4 = t.0.join("root4");
+        install(&cm, &r4, false).unwrap();
+        check_tree(&r4, &s2);
+        // another package's entry with a name that starts the same is not used
+        fs::rename(&db, rm.join("var/lib/pacman/local/q-extra-1-1")).unwrap();
+        fs::write(rm.join("var/lib/pacman/local/q-extra-1-1/desc"), "%NAME%\nq-extra\n").unwrap();
+        fs::remove_file(&cm).unwrap();
+        let p = store::pull(&src, "q-2-1-x86_64", &cm, &U, &om).unwrap();
+        assert_eq!((p.installed_moved, p.fetched_chunks), (0, 5), "{p:?}");
         // a changed installed file is not used
         let f = OpenOptions::new().write(true).open(root.join("usr/bin/tool")).unwrap();
         f.write_all_at(b"changed", 1000).unwrap();

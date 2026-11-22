@@ -144,7 +144,8 @@ Every btrpart in the new index's table carries the SHA-256 of its uncompressed d
    in CACHEDIR with the same package name and the exact cache-file length, looked up by
    (uncompressed hash, length) in their btrpart tables.
 2. The installed file at the same path: the index's entries say which file and offset each btrpart
-   belongs to; the file must exist under the root and be long enough.
+   belongs to; the file must exist under the root and be long enough. If nothing is at that path,
+   the old version's file it most likely moved from (see "Moved files" below).
 3. Otherwise: download `btrparts/xx/HASH` (named by its stored-bytes hash).
 
 Candidates from 1 and 2 are read back and hashed; only a match counts, so a locally changed or
@@ -191,11 +192,33 @@ zstd:3 extents; the data is the same, only the on-disk compression differs, unti
 downloads that data. Reading kernel-compressed files makes btrfs decompress them, which the 0.04 s
 above (files in memory) doesn't include.
 
-Installed files are only looked for at the new path, so data that moved is downloaded again when
-the old cache file is gone (the cache-file lookup is by content and finds it).
-`bench/moved-files.py` over the 24 packages with two versions on the mirror: 244.0 MB of the
-1,107.5 MB download is at the same path in the old version, another 117.3 MB moved (almost all
-kernel modules and headers, which move to a new `/usr/lib/modules/VERSION/`).
+### Moved files
+
+When a new version's file isn't under the root at its path (renamed, or moved into a new versioned
+directory like `/usr/lib/modules/VERSION/`), `moved_files` picks a file of the installed old
+version to read instead: the old version's file list comes from pacman's local database
+(`ROOT/var/lib/pacman/local/NAME-VERSION/files`, the entry whose `%NAME%` is the package's name);
+a candidate is an existing regular file with the same size, else with the same file name, and among
+several the one sharing the longest path suffix with the new path. It is only a guess: its ranges
+are read back and checked like any installed file, so a wrong pick means a download. Files whose
+btrparts all come from an older cache file are skipped (that lookup is by content and finds moved
+data by itself). Without a local database entry (another `DBPath`, or the package installed some
+other way) nothing changes.
+
+Kernel updates, old version installed, no old cache file (`bench/moved-pull-bench.sh`; the
+installed tree checked equal to the package file's):
+
+| upgrade | before | with moved files |
+|---|---|---|
+| linux-omarchy-headers 7.2.15-3 → 4 (x86_64) | 86.5 MB | 48.5 MB (4,144 btrparts moved) |
+| linux-omarchy 7.2.15-3 → 4 (x86_64) | 196.9 MB | 192.0 MB (43) |
+| linux-omarchy-headers 7.3-76 → 77 (aarch64) | 42.6 MB | 3.3 MB (3,993) |
+| linux-omarchy 7.3-76 → 77 (aarch64) | 194.5 MB | 159.3 MB (608) |
+
+These match what `bench/moved-files.py` finds reusable by content in the old version (38.0, 4.9,
+39.3 and 35.1 MB), so the guess by size and name finds all of it here. Modules are signed with a
+per-build key, so most of a kernel package changes anyway. Plan time went up by 0.04–0.3 s
+(stat of the old version's files, reading the moved data back).
 
 ## Repository side
 

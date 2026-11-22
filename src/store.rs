@@ -191,6 +191,8 @@ pub(crate) struct PullStats {
     pub reused_chunks: u64, pub reused_bytes: u64,
     /// from installed files (read and checked; whole pieces reflinked, tails compressed here)
     pub installed_chunks: u64, pub installed_bytes: u64, pub installed_cloned: u64,
+    /// of those, from the old version's file at another path (moved_files)
+    pub installed_moved: u64,
     /// downloaded
     pub fetched_chunks: u64, pub fetched_bytes: u64,
     /// of those, fetched without their padding (HTTP Range), and the zero bytes not sent
@@ -245,6 +247,77 @@ pub(crate) fn fetch_indexes(src: &net::Source, names: &[&str], ns: &mut net::Net
 }
 
 /// Where a chunk's data sits in an installed file: (path, offset in the file, bytes of file data).
+/// Files of the new version that aren't under ROOT at their path but whose data may be in the
+/// installed old version's file at another path (renamed, or moved into a new versioned directory
+/// like `/usr/lib/modules/VERSION/`): new path → old file. The old version's file list comes from
+/// pacman's local database (`ROOT/var/lib/pacman/local/NAME-VERSION/files`, the entry whose
+/// `%NAME%` is the package's name). A candidate is an existing regular file of the old version with
+/// the same size, else with the same file name; among several, the one sharing the longest path
+/// suffix (in components) with the new path. Only a guess: every range is read back and checked
+/// against its unencoded hash like any installed file. Files whose btrparts all come from an older
+/// cache file (`have`) are skipped.
+pub(crate) fn moved_files(root: &Path, name: &str, idx: &Index, have: impl Fn(&Chunk) -> bool) -> HashMap<Vec<u8>, PathBuf> {
+    let mut out = HashMap::new();
+    // the new version's large files that are missing under ROOT and need data
+    let mut want: Vec<(&[u8], u64)> = Vec::new();
+    for e in &idx.entries {
+        if e.kind != K_FILE || e.small || e.size == 0 { continue; }
+        let first = idx.chunks.partition_point(|c| c.image_off < e.data_off);
+        let last = idx.chunks.partition_point(|c| c.image_off < e.data_off + e.size);
+        if idx.chunks[first..last].iter().all(&have) { continue; }
+        if fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(&e.path))).is_ok() { continue; }
+        want.push((&e.path, e.size));
+    }
+    if want.is_empty() { return out; }
+    let Some(old) = installed_files(root, name) else { return out };
+    let mut by_size: HashMap<u64, Vec<&[u8]>> = HashMap::new();
+    let mut by_name: HashMap<&[u8], Vec<&[u8]>> = HashMap::new();
+    for (p, size) in &old {
+        by_size.entry(*size).or_default().push(p);
+        by_name.entry(base(p)).or_default().push(p);
+    }
+    for (p, size) in want {
+        let pick = |c: Option<&Vec<&[u8]>>| -> Option<Vec<u8>> {
+            c?.iter().max_by_key(|o| (base(o) == base(p), common_suffix(o, p))).map(|o| o.to_vec())
+        };
+        if let Some(o) = pick(by_size.get(&size)).or_else(|| pick(by_name.get(base(p)))) {
+            out.insert(p.to_vec(), root.join(std::ffi::OsStr::from_bytes(&o)));
+        }
+    }
+    out
+}
+
+fn base(p: &[u8]) -> &[u8] { p.rsplit(|&b| b == b'/').next().unwrap_or(p) }
+fn common_suffix(a: &[u8], b: &[u8]) -> usize {
+    a.rsplit(|&b| b == b'/').zip(b.rsplit(|&b| b == b'/')).take_while(|(x, y)| x == y).count()
+}
+
+/// Regular files (path relative to ROOT, size) of the installed package NAME, from pacman's local
+/// database under ROOT. None if it isn't installed there.
+fn installed_files(root: &Path, name: &str) -> Option<Vec<(Vec<u8>, u64)>> {
+    let local = root.join("var/lib/pacman/local");
+    for ent in fs::read_dir(&local).ok()?.flatten() {
+        let dn = ent.file_name();
+        let Some(dn) = dn.to_str() else { continue };
+        if !dn.starts_with(name) || dn.as_bytes().get(name.len()) != Some(&b'-') { continue; }
+        let Ok(desc) = fs::read_to_string(ent.path().join("desc")) else { continue };
+        if crate::repo::Desc::parse(&desc).get("%NAME%") != Some(name) { continue; }
+        let files = fs::read(ent.path().join("files")).ok()?;
+        let mut v = Vec::new();
+        let mut in_files = false;
+        for l in files.split(|&b| b == b'\n') {
+            if l.starts_with(b"%") { in_files = l == b"%FILES%"; continue; }
+            if !in_files || l.is_empty() || l.ends_with(b"/") { continue; }
+            if l.split(|&b| b == b'/').any(|c| c == b".." || c.is_empty()) { continue; }
+            if let Ok(md) = fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(l))) {
+                if md.is_file() && md.len() > 0 { v.push((l.to_vec(), md.len())); }
+            }
+        }
+        return Some(v);
+    }
+    None
+}
+
 pub(crate) fn chunk_files(idx: &Index) -> HashMap<u64, (Vec<u8>, u64, u64)> {
     let mut m = HashMap::new();
     for e in &idx.entries {
@@ -332,7 +405,9 @@ pub(crate) fn pull_index(src: &net::Source, name: &str, ib: &[u8], cache: &Path,
 pub(crate) struct PullItem<'a> { pub name: &'a str, pub ib: &'a [u8], pub cache: &'a Path, pub trust: &'a sign::Trust }
 
 /// Where a chunk's data will come from.
-enum From { Local(usize, u64), Installed(PathBuf, u64, u64), Download }
+/// `Installed`: path, offset in the file, data length, and whether the file is the old version's
+/// file at another path (moved; see `moved_files`).
+enum From { Local(usize, u64), Installed(PathBuf, u64, u64, bool), Download }
 
 #[derive(Debug)]
 struct Planned;
@@ -388,10 +463,14 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 }
             }
             let files = if o.installed.is_some() { chunk_files(&j.idx) } else { HashMap::new() };
+            let moved = match o.installed { Some(root) => moved_files(root, want, &j.idx, |c| local.contains_key(&(c.raw, c.unencoded_len))), None => HashMap::new() };
             let plan = j.idx.chunks.iter().map(|c| {
                 if let Some(&(s, off)) = local.get(&(c.raw, c.unencoded_len)) { return From::Local(s, off); }
                 if let (Some(root), Some((path, foff, dlen))) = (o.installed, files.get(&c.image_off)) {
-                    return From::Installed(root.join(std::ffi::OsStr::from_bytes(path)), *foff, *dlen);
+                    return match moved.get(path) {
+                        Some(old) => From::Installed(old.clone(), *foff, *dlen, true),
+                        None => From::Installed(root.join(std::ffi::OsStr::from_bytes(path)), *foff, *dlen, false),
+                    };
                 }
                 From::Download
             }).collect();
@@ -420,7 +499,7 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                     let ok = jobs[j].srcs[*s].read_exact_at(&mut buf, *off).is_ok() && sha256(&buf) == c.raw;
                     Checked { job: j, chunk: i, ok, data: None, file: None }
                 }
-                From::Installed(p, foff, dlen) => match read_installed_path(p, *foff, *dlen, c.unencoded_len) {
+                From::Installed(p, foff, dlen, _) => match read_installed_path(p, *foff, *dlen, c.unencoded_len) {
                     Some((f, buf)) if sha256(&buf) == c.raw => {
                         let whole = *dlen == c.unencoded_len as u64;
                         Checked { job: j, chunk: i, ok: true, data: (!whole).then_some(buf), file: Some(f) }
@@ -430,6 +509,9 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                 From::Download => unreachable!(),
             }
         }).collect();
+        for ck in checked.iter().filter(|ck| ck.ok) {
+            if matches!(plans[ck.job][ck.chunk], From::Installed(_, _, _, true)) { jobs[ck.job].st.installed_moved += 1; }
+        }
 
         if o.plan_only {
             let ok: std::collections::HashSet<(usize, usize)> = checked.iter().filter(|c| c.ok).map(|c| (c.job, c.chunk)).collect();
@@ -468,7 +550,7 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
                         Err(e) => { eprintln!("btrpkg: reflink unavailable ({e}); downloading instead"); can_clone = false; }
                     }
                 }
-                From::Installed(_, foff, dlen) => {
+                From::Installed(_, foff, dlen, _) => {
                     let f = ck.file.as_ref().unwrap();
                     if ck.data.is_none() && can_clone && clone_range_at(f, *foff, *dlen, jobs[j].out.as_ref().unwrap(), off).is_ok() {
                         jobs[j].st.installed_chunks += 1;
