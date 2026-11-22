@@ -1,6 +1,6 @@
 # btrpkg: status (2026-11-22)
 
-Done since the iteration 3 plan (details in README, "History"):
+Done since the iteration 3 plan (details in HISTORY.md):
 - Packages from CI for x86_64 and aarch64, published as the `[btrpkg]` repository; all five lab
   clients (p14s, x200, t460s, t490, macmini-m1) upgrade from it.
 - Mirrors for aarch64 beside x86_64 (Omarchy, ALARM core/extra/alarm, asahi-alarm); btrparts shared
@@ -50,7 +50,7 @@ Goal: make the patched pacman safe and unsurprising for someone else to run. For
    files and encoded read/write when the cache and the target are different filesystems (the
    root image is a loop-mounted btrfs).
 
-Results of 1-4: README, "Iteration 3"; of 5: README, "Packages", and `packaging/README.md`.
+Results of 1-4: HISTORY.md, "Iteration 3"; of 5: HISTORY.md, "Packages", and `packaging/README.md`.
 
 
 # btrpkg: iteration 2 plan (2026-11-21)
@@ -118,7 +118,7 @@ packages with an `.INSTALL` or backup files to pacman and records `%VALIDATION% 
 5. **Package and measure.** A pacman package built from the branch for the lab; the iteration-1
    upgrade runs again with three variants: stock pacman, patched pacman, `pacbtr`.
    **Done 2026-11-21**, with the build copied to `/opt/pacbtr` instead of a package (a package
-   would replace the lab machines' system pacman). Tables in the README ("Iteration 2"): patched
+   would replace the lab machines' system pacman). Tables in HISTORY.md ("Iteration 2"): patched
    pacman 1.6-2.5x faster than stock, as fast as `pacbtr` on p14s, 0.5-0.7 s slower on t460s and
    x200; identical installed files and database entries in all 39 runs.
 
@@ -154,7 +154,7 @@ stays correct, and the result is measured against plain pacman.
 
 State before this iteration: a spike (1,211 lines of Rust, no tests) with `convert`, `fetch`,
 `install`, `info`, `publish`, `pull` on local directories. Format version 0, no signatures, no
-HTTP, no pacman integration. See README for the measurements.
+HTTP, no pacman integration. See HISTORY.md for the measurements.
 
 ## Decisions already made (README)
 
@@ -177,7 +177,7 @@ frontend, filesystems other than btrfs, Arch's packages.
 
 ## Milestones
 
-1. **Format v1, with tests.** Done 2026-11-19 (see README, "Format (version 1)").
+1. **Format v1, with tests.** Done 2026-11-19 (see README/HISTORY.md, "Format (version 1)").
    Header with format version, hash and signature algorithm IDs, section lengths and a SHA-256
    per section. Order: header, chunk table, entries, small-file blob. Per chunk: the stored-bytes
    hash plus the uncompressed-data hash. Unit tests for round trips and for a flipped byte in
@@ -237,11 +237,11 @@ frontend, filesystems other than btrfs, Arch's packages.
    Done when: after an upgrade `pacman -Qkk` is clean, a later `pacman -Syu` sees nothing odd,
    and a failure injected mid-upgrade is undone by the snapshot.
 
-6. **Measure on the lab.** Done 2026-11-21: p14s, t460s, t490, x200; tables in the README
+6. **Measure on the lab.** Done 2026-11-21: p14s, t460s, t490, x200; tables in HISTORY.md
    ("Iteration 1"). Upgrades 1.4-2.1x faster with a fifth to half of the download and 3.5-6.5x fewer writes;
    fresh installs of the 315 set 1.1-1.5x faster with half the writes.
    The same upgrades through pacman and btrpkg on several lab machines: bytes downloaded, time,
-   bytes written, disk used, plus a fresh install of a package set. Results in the README and a
+   bytes written, disk used, plus a fresh install of a package set. Results in HISTORY.md and a
    History bullet in the infrastructure notes.
 
 ## Review findings to fix before milestone 2 (2026-11-20)
@@ -290,7 +290,7 @@ From a review of `eca5b8b`; the first three are shown by working proofs of conce
 ## Answered
 
 - Test repo: a local HTTP server on the desktop (Jonny, 11-19). The lab machines reach it over the
-  LAN. pkgs.omarchy.org's HTTP/1.1-only limit is measured separately (README).
+  LAN. pkgs.omarchy.org's HTTP/1.1-only limit is measured separately (HISTORY.md).
 - Packages: Omarchy's own only (Jonny, 11-19).
 - Client language: Rust for iteration 1 (default; not answered yet). C only for the libalpm patch.
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# NOT RUN YET: written for the README section on other filesystems; check before relying on it.
+# NOT RUN YET: written for the HISTORY.md section on other filesystems; check before relying on it.
 # btrpkg fetch/pull/install on filesystems other than btrfs: tmpfs, ext4, xfs.
 # ext4 and xfs are made on the bench partition (nvme0n1p3, wiped). Run as root:
 #   docker run --rm --privileged -v /dev:/dev -v ~/Work/btrpkg:/w -v /var/cache/pacman/pkg:/pkgs:ro \

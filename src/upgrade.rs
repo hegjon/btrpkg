@@ -1,5 +1,5 @@
 //! `btrpkg upgrade` (also run as `pacbtr`): upgrade installed packages through btrpkg, with pacman
-//! keeping the database (step 1 of the pacman integration in the README).
+//! keeping the database (step 1 of the pacman integration in HISTORY.md).
 //!
 //!  1. Read pacman.conf, the local database and the sync databases. Targets: installed packages
 //!     whose sync entry (first repo wins, as in pacman) is newer and has btrpkg fields.
