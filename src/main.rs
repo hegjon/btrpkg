@@ -1025,6 +1025,19 @@ mod tests {
         store::pull(&net::Source::Dir(store.to_path_buf()), name, cache, trust, &store::PullOpts { use_encoded: true, installed: None, level: 3, verify_data: false, fsync: true, before_fetch: None, plan_only: false, progress: false, parts: net::DEFAULT_PARTS })
     }
 
+    /// btrfs at P? Encoded writes and reflinks need it; CI runners (overlayfs on ext4) and a
+    /// tmpfs /tmp don't have it, and making one there would need mkfs.
+    fn on_btrfs(p: &Path) -> bool {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        unsafe { libc::statfs(c.as_ptr(), &mut st) == 0 && st.f_type as i64 == 0x9123683E }
+    }
+    macro_rules! needs_btrfs {
+        ($p:expr) => {
+            if !on_btrfs($p) { eprintln!("skipped: needs btrfs ({} isn't)", $p.display()); return; }
+        };
+    }
+
     pub(crate) struct TempDir(pub PathBuf);
     impl TempDir {
         pub fn new(tag: &str) -> TempDir {
@@ -1414,6 +1427,7 @@ mod tests {
     #[test]
     fn wrong_unencoded_hash_is_refused() {
         let t = TempDir::new("rawhash");
+        needs_btrfs!(&t.0);
         let src = make_pkg(&t.0, "w-1-1", &spec(10));
         let good = t.0.join("w.pkg.btr");
         convert_to(&src, &good, 19);
@@ -1644,6 +1658,7 @@ mod tests {
     #[test]
     fn publish_pull_reuses_chunks() {
         let t = TempDir::new("store");
+        needs_btrfs!(&t.0);
         let store = t.0.join("store");
         let (s1, s2) = (spec(3), spec(4)); // same big file, other library
         for (n, s) in [("q-1-1", &s1), ("q-2-1", &s2)] {
