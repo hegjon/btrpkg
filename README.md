@@ -215,7 +215,12 @@ installed tree checked equal to the package file's):
 | linux-omarchy-headers 7.3-76 → 77 (aarch64) | 42.6 MB | 3.3 MB (3,993) |
 | linux-omarchy 7.3-76 → 77 (aarch64) | 194.5 MB | 159.3 MB (608) |
 
-These match what `bench/moved-files.py` finds reusable by content in the old version (38.0, 4.9,
+Through pacman on p14s (`pacman-btrpkg -Sw` with an empty cache directory; linux-omarchy-headers
+7.2.15-2 installed by stock pacman, so its files are kernel-compressed): 7.2.15-4 shows 69.74 MiB
+to download instead of 82.46 MiB, the `-Sw` taking 2.0 s instead of 1.5 s (reading the moved files
+back from disk).
+
+The table's numbers match what `bench/moved-files.py` finds reusable by content in the old version (38.0, 4.9,
 39.3 and 35.1 MB), so the guess by size and name finds all of it here. Modules are signed with a
 per-build key, so most of a kernel package changes anyway. The whole pull from a local directory
 took between 0.1 s less and 0.3 s more (stat of the old version's files and reading the moved data
