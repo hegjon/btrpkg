@@ -27,8 +27,10 @@ against 2,673,145 B) and now comes as its package file.
 `bench/pacman-robust.sh` counted every `.pkg.btr` in the cache (`-ge N`), so leftovers from
 earlier runs could pass checks 1-5; it now counts each target as a cache file or a package file,
 expects the ones pacman's debug log names as smaller package files, and removes both forms
-between checks. 12/12 with pacman-btrpkg 11 (10 cache files) and with the dev build (9 + 1);
-`pacman-gaps-test.sh gliff` 16/16, `plan-count.sh` 2/1/1/1.
+between checks. Its "fetch-ids ran as alpm" check sampled `ps` every 50 ms and missed the now
+shorter fetch-ids runs (2 of 3 runs failed); the helper is now a wrapper that logs its user and
+arguments. 12/12 with pacman-btrpkg 11 (10 cache files), the dev build and pacman-btrpkg 12 from
+CI (9 + 1, three runs); `pacman-gaps-test.sh gliff` 16/16, `plan-count.sh` 2/1/1/1.
 
 ## The index is NAME.pkg.btr next to the package file (2026-11-22)
 

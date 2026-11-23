@@ -41,11 +41,15 @@ trap 'pacman -Syy >/dev/null 2>&1' EXIT
 pacman --config $C -Syy >/dev/null 2>&1
 N=$(echo $T | wc -w)
 
-# 1. who runs what
-clean; conf "" ""
-( while sleep 0.05; do ps -eo user:12,args | awk '/btrpkg/ && /(fetch-ids|pull-ids)/ && !/awk/{print $1, ($0 ~ /fetch-ids/ ? "fetch-ids" : "pull-ids")}'; done ) > /tmp/who.txt & W=$!
-$PAC --config $BC -Sw --noconfirm --debug $T >/tmp/r1.log 2>&1; rc=$?; kill $W
-sort -u /tmp/who.txt > /tmp/who.u
+# 1. who runs what: the helper is a wrapper that logs its user and arguments (sampling ps missed
+#    fetch-ids runs shorter than its interval)
+clean
+WRAP=/usr/local/bin/btrpkg-who; : > /tmp/who.txt; chmod 666 /tmp/who.txt
+printf '#!/bin/sh\necho "$(id -un) $*" >> /tmp/who.txt\nexec %s "$@"\n' "$BTRPKG" > $WRAP; chmod 755 $WRAP
+B0=$BTRPKG; BTRPKG=$WRAP; conf "" ""; BTRPKG=$B0
+$PAC --config $BC -Sw --noconfirm --debug $T >/tmp/r1.log 2>&1; rc=$?; rm -f $WRAP
+awk '{print $1, (/ fetch-ids / ? "fetch-ids" : (/ pull-ids / ? "pull-ids" : "other"))}' /tmp/who.txt | sort -u > /tmp/who.u
+conf "" ""
 SMALLER=$(grep -c 'as btrpkg, .*: using the package file' /tmp/r1.log)
 [[ $rc == 0 ]] && all_there && ok "download ($(btrs) cache files, $SMALLER package files where those are smaller)" || { no "download rc=$rc btr=$(btrs) plain=$(plain) smaller=$SMALLER"; grep 'using the package file' /tmp/r1.log; }
 grep -q '^alpm fetch-ids' /tmp/who.u && ! grep -q '^root fetch-ids' /tmp/who.u && ok "fetch-ids ran as alpm only" || no "fetch-ids user: $(cat /tmp/who.u | tr '\n' ' ')"
