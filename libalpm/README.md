@@ -78,6 +78,12 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
     unusable data, so such a database gets package files.
 11. `makepkg: also convert the packages to btrpkg (installed as makebtrpkg)`: not libalpm; see
     `packaging/README.md` (makebtrpkg).
+12. `libalpm: btrpkg: the package file when it is the smaller download`: after `pull-ids --plan`,
+    a target whose planned btrpkg download (missing btrparts plus the index) is larger than the
+    package file's `%CSIZE%` goes back to the package file (kernels: modules are `.ko.zst`).
+    `btr_select` skips it when `_alpm_sync_load` selects again (the mark stays on the sync
+    package for the handle's lifetime); its index and an empty download directory are removed.
+    `pacman --debug` logs each such choice with both sizes.
 
 How it was checked:
 - `test/btrpkg/btrtar` (libalpm's view of an archive): for all 315 packages of the set, the tar

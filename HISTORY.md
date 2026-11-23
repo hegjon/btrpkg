@@ -4,6 +4,32 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## The package file when it is the smaller download (2026-11-23)
+
+libalpm patch 12 (pacman `8f632f3f`, pacman-btrpkg 12): after `pull-ids --plan`, a target whose
+planned btrpkg download is larger than its package file comes as the package file. Kernels were
+the reason: their modules are already `.ko.zst`, so 128 KiB btrparts can't shrink them and lose the
+package file's whole-stream window (linux-omarchy 7.2.15-4: 196.9 MB as btrpkg from scratch,
+183.5 MB package file).
+
+On p14s, dev build against pacman-btrpkg 11, `-Sw -dd` from the mirror into an empty btrfs cache
+directory, 7.2.15-2 of both installed:
+
+| package | btrpkg download | package file | pacman-btrpkg 11 | dev build |
+|---|---:|---:|---|---|
+| linux-omarchy 7.2.15-4 | 192,832,586 B | 183,505,130 B | btrpkg | package file |
+| linux-omarchy-headers 7.2.15-4 | 73,129,120 B | 94,555,581 B | btrpkg | btrpkg |
+
+Total download shown: 253.64 MiB before, 244.75 MiB now. Of the robust test's 10 packages,
+omarchy-settings-dev (theme files, many small ones) also turns out bigger as btrpkg (3,206,701
+against 2,673,145 B) and now comes as its package file.
+
+`bench/pacman-robust.sh` counted every `.pkg.btr` in the cache (`-ge N`), so leftovers from
+earlier runs could pass checks 1-5; it now counts each target as a cache file or a package file,
+expects the ones pacman's debug log names as smaller package files, and removes both forms
+between checks. 12/12 with pacman-btrpkg 11 (10 cache files) and with the dev build (9 + 1);
+`pacman-gaps-test.sh gliff` 16/16, `plan-count.sh` 2/1/1/1.
+
 ## The index is NAME.pkg.btr next to the package file (2026-11-22)
 
 Repositories keep each package's index beside its package file instead of in `index/`:

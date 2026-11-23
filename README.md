@@ -11,7 +11,7 @@ installed version or an older cache file.
 
 Repositories keep the plain `.pkg.tar.zst` beside the btrpkg data: stock pacman reads the same
 database and ignores the btrpkg fields, and pacman-btrpkg falls back to the package file whenever
-the btrpkg path can't be used.
+the btrpkg path can't be used or would download more.
 
 **Status (2026-11-22): lab trial.** A mirror on the desktop serves Omarchy's edge repository and
 Arch's core/extra for x86_64, and Omarchy, ALARM and asahi-alarm for aarch64, at
@@ -100,7 +100,7 @@ and `src/format.rs`.
 
 ## Client: pacman-btrpkg
 
-`pacman-btrpkg` is Arch's pacman 7.1.0 (`54d94116`) plus 10 libalpm patches (`libalpm/README.md`),
+`pacman-btrpkg` is Arch's pacman 7.1.0 (`54d94116`) plus 11 libalpm patches and one makepkg patch (`libalpm/README.md`),
 installed beside the system pacman (`/usr/bin/pacman-btrpkg`, `/etc/pacman-btrpkg.conf`, which
 includes `/etc/pacman.conf` and sets `BtrPkgHelper = /usr/bin/btrpkg`). With a helper set and the
 cache on btrfs, a sync target with btrpkg fields comes as `NAME.pkg.btr`:
@@ -124,8 +124,24 @@ takes 0.36 s over HTTP/2 and 0.28 s over HTTP/3 (`bench/net-latency-bench.sh`). 
 download are two runs (pacman asks in between), so a transaction opens two connections.
 
 Fallbacks to the package file (checked by sha256sum and OpenPGP as usual): no server has the index
-(a database older than what the servers keep), or the btrpkg download of a repository fails. A
+(a database older than what the servers keep), the btrpkg download of a repository fails, or the
+planned btrpkg download (missing btrparts plus the index) is larger than the package file. A
 `.pkg.tar.*` already in the cache wins over btrpkg (offline mirrors).
+
+The size rule catches packages whose files are already compressed (kernel modules as `.ko.zst`)
+or are many small files: btrparts are compressed per 128 KiB of one file, without the package
+file's whole-stream window. On p14s, from the mirror with 7.2.15-2 installed, `-Sw` of 7.2.15-4:
+
+| package | btrpkg download | package file | comes as |
+|---|---:|---:|---|
+| linux-omarchy | 192,832,586 B | 183,505,130 B | package file |
+| linux-omarchy-headers | 73,129,120 B | 94,555,581 B | btrpkg |
+
+The summary showed 244.75 MiB instead of 253.64 MiB. In the robust test's 10 packages,
+omarchy-settings-dev (themes: many small files) comes as its package file, 2.67 MB instead of
+3.21 MB. Local data counts: a package that is bigger as btrpkg on a fresh machine can still come as
+btrpkg in an upgrade that reuses most of it. Such a package then installs the stock way (no
+reflinks from the cache).
 
 Also: `pacman -U NAME.pkg.btr` (a cache file, signify `.sig`), `pacstrap-btrpkg` (new systems), `makebtrpkg`
 (makepkg that also converts the packages), `btrpkg cache-clean` (paccache for `.pkg.btr`), and `pacbtr` / `btrpkg upgrade`, a standalone upgrader
@@ -222,7 +238,8 @@ back from disk).
 
 The table's numbers match what `bench/moved-files.py` finds reusable by content in the old version (38.0, 4.9,
 39.3 and 35.1 MB), so the guess by size and name finds all of it here. Modules are signed with a
-per-build key, so most of a kernel package changes anyway. The whole pull from a local directory
+per-build key, so most of a kernel package changes anyway, and linux-omarchy itself is a smaller
+download as its package file (see the size rule under "Client"). The whole pull from a local directory
 took between 0.1 s less and 0.3 s more (stat of the old version's files and reading the moved data
 back, against less to write).
 
@@ -357,7 +374,8 @@ extents; its data is never decompressed, copied or written again.
 - libalpm: `meson test -C build pacman:btrpkg` (73 subtests on real and crafted indexes), pacman's
   own suite.
 - On p14s: `bench/pacman-robust.sh` (sandbox roles, resume, dead and corrupt servers,
-  DisableSandbox, fallbacks, `-Sc`; 12 checks), `bench/pacman-gaps-test.sh NAME` (`-U`, signatures,
+  DisableSandbox, fallbacks including the size rule, `-Sc`; 12 checks; each target is counted as
+  a cache file or a package file), `bench/pacman-gaps-test.sh NAME` (`-U`, signatures,
   validation records; 16), `bench/plan-count.sh` (each btrpkg step runs once).
 - Clients: `bench/btrparts-client-check.sh` (throwaway dbpath download), `bench/scratch-root-compare.sh`
   (stock vs btrpkg into scratch roots, compared file by file).

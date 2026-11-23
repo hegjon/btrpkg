@@ -1,0 +1,77 @@
+From 8f632f3f213f9d8d5dfddc703652901aa4495bf8 Mon Sep 17 00:00:00 2001
+From: Jonny Heggheim <hegjon@gmail.com>
+Date: Mon, 23 Nov 2026 13:32:54 +0200
+Subject: [PATCH 12/12] libalpm: btrpkg: the package file when it is the smaller
+ download
+
+Packages of already-compressed files (kernel modules as .ko.zst) and of
+many small files can download more as btrpkg than as their package file:
+btrparts are compressed per 128 KiB of one file and lose the package
+file's whole-stream window. After pull-ids --plan, a target whose planned
+btrpkg download (missing btrparts plus the index) is larger than the
+package file's %CSIZE% goes back to the package file, checked as usual,
+and btr_select leaves it alone when _alpm_sync_load selects again. Its
+index is removed from the download directory, and the directory itself
+when no btrpkg target is left.
+---
+ lib/libalpm/package.h |  1 +
+ lib/libalpm/sync.c    | 22 +++++++++++++++++++++-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/lib/libalpm/package.h b/lib/libalpm/package.h
+index f2593512..993059d5 100644
+--- a/lib/libalpm/package.h
++++ b/lib/libalpm/package.h
+@@ -152,6 +152,7 @@ struct _alpm_pkg_t {
+ 	off_t btr_need;           /* bytes to download: missing chunks plus the index */
+ 	char *btr_signer;         /* the key that signed it (signify), when checked */
+ 	char *btr_plain;          /* the database's file name, to fall back to it (btr_unselect) */
++	int btr_declined;         /* the package file is the smaller download: btr_select skips it */
+ };
+ 
+ alpm_file_t *_alpm_file_copy(alpm_file_t *dest, const alpm_file_t *src);
+diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
+index d3dae25f..d5aa0da4 100644
+--- a/lib/libalpm/sync.c
++++ b/lib/libalpm/sync.c
+@@ -136,7 +136,7 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)
+ 	for(alpm_list_t *i = handle->trans->add; i; i = i->next) {
+ 		alpm_pkg_t *spkg = i->data;
+ 		const char *index, *id;
+-		if(spkg->origin == ALPM_PKG_FROM_FILE || spkg->btr) {
++		if(spkg->origin == ALPM_PKG_FROM_FILE || spkg->btr || spkg->btr_declined) {
+ 			continue;
+ 		}
+ 		index = btr_xdata(spkg, "btrpkg.index");
+@@ -635,8 +635,28 @@ static void btr_plan(alpm_handle_t *handle, const char *cachedir, alpm_list_t *t
+ 			}
+ 			btr_argv_free(argv);
+ 		}
++		/* already-compressed contents (kernel modules as .ko.zst) can make the btrparts bigger
++		 * than the package file: then the package file, unless local data makes up the difference */
++		for(alpm_list_t *i = mine; i; i = i->next) {
++			alpm_pkg_t *p = i->data;
++			char path[PATH_MAX];
++			if(!p->btr_planned || p->btr_need <= p->size) {
++				continue;
++			}
++			_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s would download %jd bytes as btrpkg, %jd as %s: using the package file\n",
++					p->name, (intmax_t)p->btr_need, (intmax_t)p->size, p->btr_plain);
++			/* its index isn't needed any more: no leftover in the download directory */
++			if(snprintf(path, sizeof(path), "%s/%s", dir, p->filename) < (int)sizeof(path) - 4) {
++				unlink(path);
++				strcat(path, ".sig");
++				unlink(path);
++			}
++			p->btr_declined = 1;
++			btr_unselect(p);
++		}
+ 		alpm_list_free(mine);
+ 	}
++	rmdir(dir); /* only if every target went back to its package file */
+ }
+ 
+ /* Remove a download directory that only root used (no download user): nftw without following
+-- 
+2.56.1
+

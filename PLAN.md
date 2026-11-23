@@ -12,6 +12,8 @@ Done since the iteration 3 plan (details in HISTORY.md):
 - The index is `NAME.pkg.btr` next to the package file (was `index/NAME.btridx`).
 - A cleanup pass: five bugs fixed (double planning, hidden curl errors, gc on unreadable entries,
   mirror retries, the release db), duplicated code merged.
+- (2026-11-23) `pull` reuses files that moved since the installed version; libalpm patch 12 takes
+  the package file when it is the smaller download (kernels), pacman-btrpkg 12.
 
 Open, waiting for a decision from Jonny:
 - Step 6, the unattended daily update on p14s.
