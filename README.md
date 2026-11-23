@@ -26,8 +26,8 @@ Contents: [Repository layout](#repository-layout) · [File forms](#file-forms) �
 [Format](#format-version-1) · [Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps)
 
 Other documents: `HISTORY.md` (lab notebook and measurements), `libalpm/README.md` (the pacman patches), `mirror/README.md` (the mirror),
-`packaging/README.md` (the packages), `PLAN.md` (plans and status), `src/format.rs` (the format,
-in full).
+`packaging/README.md` (the packages), `zdb/README.md` (prototype: sync databases as zchunk
+files), `PLAN.md` (plans and status), `src/format.rs` (the format, in full).
 
 ## Repository layout
 
