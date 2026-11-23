@@ -26,4 +26,9 @@ if [[ $rc == 0 && -z ${NO_GC:-} ]]; then
     done <<<"$out"
   done
 fi
+# Arch's core and extra databases as zchunk files (zdb/, prototype); not counted in rc
+if [[ -z ${NO_ZDB:-} && -x $HOME/.local/opt/zchunk/bin/zck ]]; then
+  while IFS= read -r l; do printf '%s zdb: %s\n' "$(date '+%F %T')" "$l"; done \
+    < <("$here/../zdb/zdb-publish.sh" "$HOME/Work/btrpkg-repo/zdb" http://127.0.0.1:9129/repo/archlinux core extra 2>&1 || echo "failed")
+fi
 exit $rc

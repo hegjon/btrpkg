@@ -23,8 +23,14 @@ zchunk tools: built from 1.5.5 into `~/.local/opt/zchunk` (meson from `$TMPDIR/m
 client gets `zckdl`, `unzck` and `libzck.so.1` in `/opt/zdb` (`ZCK_BIN=/opt/zdb/bin`).
 
 Served by the desktop's caddy: `http://192.168.2.2:1764/zdb/{core,extra}/os/x86_64/REPO.db.zck`
-(`.dict/` and `.upstream/` are hidden). Not on the mirror timer yet: run `zdb-publish.sh
-~/Work/btrpkg-repo/zdb http://127.0.0.1:9129/repo/archlinux core extra` by hand.
+(`.dict/` and `.upstream/` are hidden). `mirror/mirror-all.sh` (the 10-minute mirror timer) runs
+`zdb-publish.sh ~/Work/btrpkg-repo/zdb http://127.0.0.1:9129/repo/archlinux core extra` after the
+btrpkg repositories (`NO_ZDB=1` skips it; its log lines start with `zdb:`).
+
+Trial: `zdb-trial.sh` + `systemd/zdb-trial.{service,timer}` on p14s (2026-11-23 to 11-26 12:00,
+then it disables itself): an hourly and a daily scratch copy of core.db/extra.db, logging per sync
+the zck bytes, what `pacman -Sy` would have downloaded at that moment, and a content check against
+pacoloco's db (`/var/log/zdb-trial.tsv`).
 
 Not built: pacman support (libalpm reads databases through libarchive, which has no zchunk
 reader; the client script writes a plain tar instead), signing (Arch's databases are unsigned

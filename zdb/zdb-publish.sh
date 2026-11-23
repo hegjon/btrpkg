@@ -10,7 +10,8 @@
 # dictionary is trained once, from the first version; a new dictionary changes every chunk, so
 # every client would download the whole file again. The .zck gets the upstream db's mtime
 # (Last-Modified), so a client can stamp its rebuilt REPO.db with it and a later pacman -Sy
-# against the upstream mirror answers 304. Old versions are kept as REPO.db.zck.<mtime> (tests).
+# against the upstream mirror answers 304. The last KEEP (3) old versions stay as
+# REPO.db.zck.<mtime> (tests). mirror/mirror-all.sh runs it after the btrpkg repositories.
 #
 # ZCK_BIN: directory with zck (default ~/.local/opt/zchunk/bin, LD_LIBRARY_PATH set from it).
 set -euo pipefail
@@ -40,6 +41,9 @@ for r in "$@"; do
   touch -r "$up" "$tmp/$r.db.zck"
   [[ -e $zck ]] && cp -p "$zck" "$zck.$(stat -c %Y "$zck")"
   mv "$tmp/$r.db.zck" "$zck"
+  # keep the newest KEEP old versions (tests seed clients with them)
+  find "$dir" -maxdepth 1 -name "$r.db.zck.*" -printf '%f\n' | sort -t. -k4 -n | head -n -"${KEEP:-3}" \
+    | while read -r f; do rm -f "$dir/$f"; done
   rm -rf "$tmp"; trap - EXIT
   echo "$r: $(stat -c %s "$up") bytes upstream -> $(stat -c %s "$zck") bytes zck ($(date -u -r "$zck" '+%F %T'))"
 done
