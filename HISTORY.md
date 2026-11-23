@@ -4,6 +4,31 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## zchunk compared (2026-11-23)
+
+Question: could zchunk (github.com/zchunk/zchunk, Fedora's delta format for repository metadata)
+be used? `bench/zchunk-compare.sh` (zchunk 1.5.5 in an archlinux container, defaults:
+content-defined chunks, zstd, no dictionary): each package file's tar as `.tar.zck`, then
+`zck_delta_size old new`; btrpkg from `convert` of old then new into an empty repository
+(`bench/results/zchunk-vs-btrpkg-20261123.tsv`):
+
+| | `.pkg.tar.zst` | zck full | zck upgrade | btrpkg full | btrpkg upgrade |
+|---|---:|---:|---:|---:|---:|
+| Hyprland set, 9 upgrades | 55.93 MB | 57.30 MB | 9.13 MB | 57.01 MB | 8.41 MB |
+| linux-omarchy-headers 7.2.15-3 → 4 | 94.56 MB | 96.94 MB | 60.47 MB | 95.42 MB | 54.51 MB |
+
+- Downloads: no gain over btrpkg here. zck finds slightly less to reuse (hyprland 6.82 against
+  6.10 MB; only hyprtoolkit is smaller, 59 against 82 KB) and needs the old `.zck` (or, with
+  `-u`, the old uncompressed tar) in the cache; btrpkg also reuses installed files.
+- Install: zck chunks are slices of the tar stream cut by content, not 4 KiB-aligned pieces of
+  one file of at most 128 KiB, and may use a zstd dictionary, so btrfs can't take them as encoded
+  extents. The client would rebuild the tar, decompress and extract it as pacman does today,
+  giving up the encoded writes, reflinks and shared extents that make btrpkg installs faster.
+  Its header design is close to btrpkg's (one signed header holding every chunk's hash).
+- Not tested: zchunk for the sync databases (`pacman -Sy` downloads every db whole), which is
+  what Fedora uses it for. Omarchy's db is 64 KB; Arch's `extra.db`/`.files` are where it would
+  matter, and pacman would need code for it.
+
 ## The package file when it is the smaller download (2026-11-23)
 
 libalpm patch 12 (pacman `8f632f3f`, pacman-btrpkg 12): after `pull-ids --plan`, a target whose
