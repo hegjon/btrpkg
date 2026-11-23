@@ -1,0 +1,73 @@
+tar_headers	repo	from	variant	gz_today	zck_full	header	download
+as published	core.db	2026-11-21	default	131252	130232	351	130232
+as published	core.db	2026-11-15	default	131252	130232	351	130232
+as published	core.db	2026-10-23	default	131252	130232	351	130232
+as published	core.db	2026-11-21	split	131252	249908	6117	249145
+as published	core.db	2026-11-15	split	131252	249908	6117	249908
+as published	core.db	2026-10-23	split	131252	249908	6117	249908
+as published	core.db	2026-11-21	dict	131252	165921	6118	110122
+as published	core.db	2026-11-15	dict	131252	165921	6118	110335
+as published	core.db	2026-10-23	dict	131252	165921	6118	110335
+as published	core.db	2026-11-21	patch-from	131252	111609		4717
+as published	core.db	2026-11-15	patch-from	131252	111609		9949
+as published	core.db	2026-10-23	patch-from	131252	111609		30768
+as published	extra.db	2026-11-21	default	9049487	8975064	13411	8975064
+as published	extra.db	2026-11-15	default	9049487	8975064	13411	8975064
+as published	extra.db	2026-10-23	default	9049487	8975064	13411	8975064
+as published	extra.db	2026-11-21	split	9049487	15171697	306020	15165095
+as published	extra.db	2026-11-15	split	9049487	15171697	306020	15165095
+as published	extra.db	2026-10-23	split	9049487	15171697	306020	15165095
+as published	extra.db	2026-11-21	dict	9049487	10512291	306024	10455836
+as published	extra.db	2026-11-15	dict	9049487	10512291	306024	10455836
+as published	extra.db	2026-10-23	dict	9049487	10512291	306024	10455836
+as published	extra.db	2026-11-21	patch-from	9049487	7666703		391585
+as published	extra.db	2026-11-15	patch-from	9049487	7666703		1134484
+as published	extra.db	2026-10-23	patch-from	9049487	7666703		2748670
+as published	extra.files	2026-11-21	default	52214799	52191262	229064	24767856
+as published	extra.files	2026-11-15	default	52214799	52191262	229064	26265948
+as published	extra.files	2026-10-23	default	52214799	52191262	229064	30247857
+as published	extra.files	2026-11-21	split	52214799	58091871	502482	25887699
+as published	extra.files	2026-11-15	split	52214799	58091871	502482	28602675
+as published	extra.files	2026-10-23	split	52214799	58091871	502482	33146227
+as published	extra.files	2026-11-21	dict	52214799	52577563	502482	20793982
+as published	extra.files	2026-11-15	dict	52214799	52577563	502482	23467908
+as published	extra.files	2026-10-23	dict	52214799	52577563	502482	27949383
+as published	extra.files	2026-11-21	patch-from	52214799	34581054		1365508
+as published	extra.files	2026-11-15	patch-from	52214799	34581054		3100357
+as published	extra.files	2026-10-23	patch-from	52214799	34581054		6165828
+owner normalized	core.db	2026-11-21	default	131252	130469	352	17566
+owner normalized	core.db	2026-11-15	default	131252	130469	352	113473
+owner normalized	core.db	2026-10-23	default	131252	130469	352	130469
+owner normalized	core.db	2026-11-21	split	131252	244864	6117	7909
+owner normalized	core.db	2026-11-15	split	131252	244864	6117	35293
+owner normalized	core.db	2026-10-23	split	131252	244864	6117	131097
+owner normalized	core.db	2026-11-21	dict	131252	162266	6111	7159
+owner normalized	core.db	2026-11-15	dict	131252	162266	6111	20291
+owner normalized	core.db	2026-10-23	dict	131252	162266	6111	67759
+owner normalized	core.db	2026-11-21	patch-from	131252	111636		524
+owner normalized	core.db	2026-11-15	patch-from	131252	111636		6021
+owner normalized	core.db	2026-10-23	patch-from	131252	111636		27214
+owner normalized	extra.db	2026-11-21	default	9049487	8968067	13466	3177358
+owner normalized	extra.db	2026-11-15	default	9049487	8968067	13466	7445150
+owner normalized	extra.db	2026-10-23	default	9049487	8968067	13466	8496258
+owner normalized	extra.db	2026-11-21	split	9049487	14947189	306020	886731
+owner normalized	extra.db	2026-11-15	split	9049487	14947189	306020	3381325
+owner normalized	extra.db	2026-10-23	split	9049487	14947189	306020	7843526
+owner normalized	extra.db	2026-11-21	dict	9049487	10272696	306024	682245
+owner normalized	extra.db	2026-11-15	dict	9049487	10272696	306024	2376129
+owner normalized	extra.db	2026-10-23	dict	9049487	10272696	306024	5479129
+owner normalized	extra.db	2026-11-21	patch-from	9049487	7666918		171150
+owner normalized	extra.db	2026-11-15	patch-from	9049487	7666918		925952
+owner normalized	extra.db	2026-10-23	patch-from	9049487	7666918		2576813
+owner normalized	extra.files	2026-11-21	default	52214799	52138873	228994	2926481
+owner normalized	extra.files	2026-11-15	default	52214799	52138873	228994	13564066
+owner normalized	extra.files	2026-10-23	default	52214799	52138873	228994	25302811
+owner normalized	extra.files	2026-11-21	split	52214799	57830383	502504	1614863
+owner normalized	extra.files	2026-11-15	split	52214799	57830383	502504	8246490
+owner normalized	extra.files	2026-10-23	split	52214799	57830383	502504	19728700
+owner normalized	extra.files	2026-11-21	dict	52214799	52342926	502502	1452321
+owner normalized	extra.files	2026-11-15	dict	52214799	52342926	502502	7280677
+owner normalized	extra.files	2026-10-23	dict	52214799	52342926	502502	17398612
+owner normalized	extra.files	2026-11-21	patch-from	52214799	34574634		597487
+owner normalized	extra.files	2026-11-15	patch-from	52214799	34574634		2423422
+owner normalized	extra.files	2026-10-23	patch-from	52214799	34574634		5654556

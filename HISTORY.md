@@ -4,6 +4,48 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## zchunk for the sync databases (2026-11-23)
+
+`pacman -Sy` downloads a changed database whole: Arch's `extra.db` is 9.05 MB (gzip), changes
+many times a day, and is what every Omarchy update fetches (`extra.files`, 52.2 MB, only for
+`pacman -F`). `bench/zchunk-db.sh`: Arch's daily snapshots from archive.archlinux.org (2026-10-23,
+11-15, 11-21, 11-22) as zchunk 1.5.5 files, download for updating to 11-22
+(`zck_delta_size`, header included; `bench/results/zchunk-db-20261123.tsv`).
+
+**As published, zchunk saves nothing on `extra.db`**: 100% of the file for a one-day-old copy.
+Between 11-21 and 11-22 no common entry's content changed (708 entries added, 702 removed, of
+30,582), but all 29,880 common entries' tar headers did: owner `deepchirp` (uid 1112) became
+`gromit` (1008). repo-add extracts the database and re-creates the whole tar
+(`bsdtar -cf - "${files[@]}"`), so every header takes the owner of whoever ran the last update.
+With the headers' owner set to root (`bsdtar -c --uid 0 --gid 0 --uname root --gname root`, checked
+to work), in MB:
+
+| from | gzip today | zck default | zck, chunk per package | + dictionary | zstd --patch-from |
+|---|---:|---:|---:|---:|---:|
+| `extra.db` 1 day old | 9.05 | 3.18 | 0.89 | **0.68** | 0.17 |
+| 7 days | 9.05 | 7.45 | 3.38 | **2.38** | 0.93 |
+| 30 days | 9.05 | 8.50 | 7.84 | **5.48** | 2.58 |
+| `extra.files` 1 day | 52.2 | 2.93 | 1.61 | **1.45** | 0.60 |
+| 7 days | 52.2 | 13.56 | 8.25 | **7.28** | 2.42 |
+| 30 days | 52.2 | 25.30 | 19.73 | **17.40** | 5.65 |
+| `core.db` 1 day | 0.13 | 0.02 | 0.008 | **0.007** | 0.0005 |
+
+- Chunk per package: `zck -s %FILENAME%` (`%FILES%` for `.files`); dictionary: a 112 KiB zstd
+  dictionary trained on the 10-23 entries and kept for every version (a new dictionary changes
+  every chunk). The full `.zck` is 10.27 MB against 9.05 MB of gzip, so a first download costs 13%
+  more; the header (one hash per chunk, 15,294 packages) is 306 KB of every download, almost half
+  of the one-day case.
+- zstd `--patch-from` is the floor for a binary delta, but needs a delta file per old version on
+  the server; zchunk needs nothing per client version, only HTTP ranges.
+- Multi-range requests work on Omarchy's mirror (mirror.omarchy.org, Cloudflare, `206
+  multipart/byteranges`, cache HIT), pkgs.omarchy.org and Arch's geo mirror (nginx).
+- Arch's databases aren't signed, so a mirror (Omarchy's, or the btrpkg mirror, which already
+  rewrites them) could republish them as `.zck` with root-owned headers without Arch changing
+  anything; the repo-add change makes even plain `zstd --patch-from`/rsync-style tools work.
+- Client side, not built: libalpm reads the database with libarchive, which doesn't read zchunk.
+  A sync would fetch the `.zck` header, reuse chunks from the local `.zck` (kept beside the db),
+  fetch the rest by range, check the header checksum, and write the tar libalpm reads.
+
 ## zchunk compared (2026-11-23)
 
 Question: could zchunk (github.com/zchunk/zchunk, Fedora's delta format for repository metadata)
