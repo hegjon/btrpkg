@@ -4,6 +4,36 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## zchunk database prototype on t490 (2026-11-23)
+
+`zdb/` (README there): `zdb-publish.sh` republishes Arch's `core.db`/`extra.db` (from the
+desktop's pacoloco) as `.zck` with root-owned tar headers, a chunk per package and a fixed
+dictionary; `zdb-sync.sh` updates a client's copy with `zckdl`/`unzck`. Seeded with the
+2026-11-22 12:39 snapshot (archive.archlinux.org, published with the same dictionary), updated to
+pacoloco's 2026-11-23 12:19 database on t490 (i5-8265U, Wi-Fi to the desktop that day), in a
+scratch DBPath:
+
+| | bytes | t490 time |
+|---|---:|---:|
+| `extra.db` as pacman downloads it today (gzip, from pacoloco) | 9,054,298 | 0.21 s |
+| `extra.db` delta, 401 changed chunks (`zckdl` reported, caddy agreed) | 625,581 | 0.46 s |
+| `core.db` delta | 8,566 | 0.03 s |
+| no change since the last sync (HEAD only) | 0 | - |
+| first sync, no old copy: whole `extra.db.zck` | 10,223,964 | 0.60 s |
+
+- Correct: the rebuilt `extra.db` and `core.db` have the same entry names and the same contents
+  (all `desc` files, sha256) as Arch's at that time; a delta and a fresh full download give the
+  same tar; `pacman --dbpath SCRATCH -Sy` against pacoloco got 304 for both (mtime stamped from
+  Last-Modified), `-Sl extra` lists 15,298 packages, `-Si linux` shows the same version as the
+  system's db.
+- Time on the LAN: the delta is slower than the 9 MB over a 43 MB/s link: `zckdl` 0.19 s (four
+  dependent requests: lead, header, chunks), `unzck` of the 10 MB file to a 37 MB tar 0.17 s. It
+  saves 8.4 MB for about 0.25 s more, so it wins below roughly 34 MB/s (270 Mbit/s), i.e. on
+  most internet links. pacman then reads a plain tar: `gzip -dc` of `extra.db`, which pacman
+  pays on every database load, takes 0.09 s on t490; the plain tar costs 37 MB of disk instead of 9.
+- p14s was busy; t490 was claimed and released, files under `/opt/zdb` and `/var/tmp/zdbtest`
+  removed.
+
 ## zchunk for the sync databases (2026-11-23)
 
 `pacman -Sy` downloads a changed database whole: Arch's `extra.db` is 9.05 MB (gzip), changes
