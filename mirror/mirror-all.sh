@@ -31,4 +31,14 @@ if [[ -z ${NO_ZDB:-} && -x $HOME/.local/opt/zchunk/bin/zck ]]; then
   while IFS= read -r l; do printf '%s zdb: %s\n' "$(date '+%F %T')" "$l"; done \
     < <("$here/../zdb/zdb-publish.sh" "$HOME/Work/btrpkg-repo/zdb" http://127.0.0.1:9129/repo/archlinux core extra 2>&1 || echo "failed")
 fi
+# the same upstream databases as thin .btrdb indexes (btrdb/, prototype, compared with zdb in
+# the p14s trial); not counted in rc
+if [[ -z ${NO_BTRDB:-} && -z ${NO_ZDB:-} ]]; then
+  for r in core extra; do
+    while IFS= read -r l; do printf '%s btrdb: %s\n' "$(date '+%F %T')" "$l"; done \
+      < <(/usr/bin/python3 "$here/../btrdb/btrdb.py" publish --key "$HOME/Work/btrpkg-repo/keys/btrpkg-test.sec" \
+            --btrpkg "${B:-$here/../target/release/btrpkg}" "$HOME/Work/btrpkg-repo/btrdb" x86_64 "$r" \
+            "$HOME/Work/btrpkg-repo/zdb/.upstream/$r.db" 2>&1 || echo "$r: failed")
+  done
+fi
 exit $rc
