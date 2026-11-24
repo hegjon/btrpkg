@@ -416,15 +416,20 @@ fn info(p: &Path) -> Result<()> {
 }
 
 /// What a signature covers: the 256-byte header of an index or cache file (its magic and
-/// version keep it from being valid for anything else), or a whole `.btrdb` database index
-/// (stored zstd bytes that decompress to the `BTRDB` magic; a zstd frame can't start like an index).
+/// version keep it from being valid for anything else), or a whole `.btrdb` database index,
+/// decompressed (it starts with the `BTRDB` magic). The file may hold the index as published
+/// (zstd) or decompressed, as a client has it after applying a patch.
 fn signed_message(p: &Path) -> Result<Vec<u8>> {
     let b = fs::read(p).with_context(|| p.display().to_string())?;
     if p.extension().is_some_and(|e| e == "btrdb") {
-        let mut head = [0u8; 8];
-        zstd::stream::read::Decoder::new(&b[..])?.read_exact(&mut head).context("not a zstd-compressed .btrdb")?;
-        ensure!(&head == b"BTRDB\0\0\0", "{}: not a .btrdb", p.display());
-        return Ok(b);
+        const MAX: u64 = 64 << 20;
+        let raw = if b.starts_with(b"BTRDB\0\0\0") { b } else {
+            let mut raw = Vec::new();
+            zstd::stream::read::Decoder::new(&b[..])?.take(MAX + 1).read_to_end(&mut raw).context("not a zstd-compressed .btrdb")?;
+            raw
+        };
+        ensure!(raw.starts_with(b"BTRDB\0\0\0") && raw.len() as u64 <= MAX, "{}: not a .btrdb", p.display());
+        return Ok(raw);
     }
     ensure!(b.len() >= HDR, "{}: not a btrpkg file", p.display());
     Header::decode(&b[..HDR])?;
@@ -1213,7 +1218,7 @@ mod tests {
 
     #[test]
     fn sign_btrdb() {
-        // a .btrdb is signed whole (its stored zstd bytes); anything else named .btrdb is refused
+        // a .btrdb is signed whole (decompressed); anything else named .btrdb is refused
         let t = TempDir::new("signdb");
         sign::keygen(&t.0.join("repo")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("repo.sec")).unwrap();
@@ -1223,7 +1228,11 @@ mod tests {
         let db = t.0.join("x.btrdb");
         fs::write(&db, zstd::encode_all(&b"BTRDB\0\0\0\0\0\0\0\0\0\0\0"[..], 3).unwrap()).unwrap();
         let msg = signed_message(&db).unwrap();
-        assert_eq!(msg, fs::read(&db).unwrap());
+        assert_eq!(msg, b"BTRDB\0\0\0\0\0\0\0\0\0\0\0");
+        // the same index decompressed has the same signed message
+        let rawp = t.0.join("raw.btrdb");
+        fs::write(&rawp, &msg).unwrap();
+        assert_eq!(signed_message(&rawp).unwrap(), msg);
         let sig = k.sign(&msg, "repo");
         let ring = sign::Keyring::load(&[keys]).unwrap();
         assert!(ring.verify(&signed_message(&db).unwrap(), &sig).is_ok());

@@ -12,7 +12,9 @@
 # Since 2026-11-24 11:00 the same moments also sync btrdb copies (btrdb/btrdb.py, thin .btrdb
 # index + desc blobs, from /opt/btrdb) into STATE/hourly-btrdb and STATE/daily-btrdb, logged to
 # /var/log/btrdb-trial.tsv: time, copy, repo, btrdb bytes received, requests, pacman bytes (the
-# same figure as the zdb row), seconds, check (as above).
+# same figure as the zdb row), seconds, check (as above), how (patch: an index patch against the
+# copy's last index; full: the whole index), full_bytes (that sync with the whole index instead
+# of a patch). Since 13:40 with index patches; the rows before are in btrdb-trial.tsv.v1.
 # Stops itself (disables the timer) after STOP (date -d format), default 2026-11-26 12:00.
 set -uo pipefail
 ZDB=${ZDB:-http://192.168.2.2:1764/zdb}
@@ -26,7 +28,7 @@ if (( $(date +%s) > $(date -d "$STOP" +%s) )); then
   systemctl disable --now zdb-trial.timer; echo "trial over ($STOP)"; exit 0
 fi
 [[ -e $LOG ]] || printf 'time\tcopy\trepo\tzck_bytes\tpacman_bytes\tseconds\tcheck\n' > "$LOG"
-[[ -e $BLOG ]] || printf 'time\tcopy\trepo\tbtrdb_bytes\trequests\tpacman_bytes\tseconds\tcheck\n' > "$BLOG"
+[[ -e $BLOG ]] || printf 'time\tcopy\trepo\tbtrdb_bytes\trequests\tpacman_bytes\tseconds\tcheck\thow\tfull_bytes\n' > "$BLOG"
 head_of() { curl -sfI "$1" | tr -d '\r'; }
 copies=(hourly)
 stamp=$STATE/daily/.last-sync
@@ -57,8 +59,8 @@ for c in "${copies[@]}"; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$c" "$r" "$got" "$plen" "$secs" "$check" >> "$LOG"
     # btrdb at the same moment, same pacman figure
     bd=$STATE/$c-btrdb
-    if bout=$(/usr/bin/python3 /opt/btrdb/btrdb.py sync --keys /etc/btrpkg/keys --btrpkg /usr/bin/btrpkg "$BTRDB" "$bd" "$r" 2>&1); then
-      IFS=$'\t' read -r _ bgot breq bsecs bstate <<<"$bout"
+    if bout=$(/usr/bin/python3 /opt/btrdb/btrdb.py sync --measure-full --keys /etc/btrpkg/keys --btrpkg /usr/bin/btrpkg "$BTRDB" "$bd" "$r" 2>&1); then
+      IFS=$'\t' read -r _ bgot breq bsecs bstate bfull <<<"$bout"
       bcheck=unchanged
       if [[ $bstate != unchanged ]]; then
         if [[ -n $upl && $(date -d "$upl" +%s) == $(stat -c %Y "$bd/$r.db") ]]; then
@@ -69,7 +71,7 @@ for c in "${copies[@]}"; do
           bcheck=skew
         fi
       fi
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$c" "$r" "$bgot" "$breq" "$plen" "$bsecs" "$bcheck" >> "$BLOG"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$c" "$r" "$bgot" "$breq" "$plen" "$bsecs" "$bcheck" "$bstate" "$bfull" >> "$BLOG"
     else
       printf '%s\t%s\t%s\t\t\t%s\t\tFAILED %s\n' "$(date '+%F %T')" "$c" "$r" "$plen" "${bout//$'\n'/ }" >> "$BLOG"
     fi

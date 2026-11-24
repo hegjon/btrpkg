@@ -3,7 +3,7 @@
 through a local HTTP server, including a tampered blob and a tampered index (signature).
   python3 btrdb/test_btrdb.py      (BTRPKG=path/to/btrpkg; default target/release/btrpkg)
 """
-import functools, http.server, io, os, shutil, subprocess, sys, tarfile, tempfile, threading, unittest
+import contextlib, functools, http.server, io, os, shutil, subprocess, sys, tarfile, tempfile, threading, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import btrdb
@@ -116,12 +116,48 @@ class PublishSync(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.cache, "r.db")))
         open(p, "wb").write(good)
         ip = os.path.join(self.srv, "x86_64", "r.btrdb")
-        idx = open(ip, "rb").read()
-        # a re-encoded index has other bytes: the signature over the stored file fails
-        open(ip, "wb").write(zstd.compress(zstd.decompress(idx), level=1))
-        with self.assertRaises(subprocess.CalledProcessError):
+        raw = bytearray(zstd.decompress(open(ip, "rb").read()))
+        # re-encoded, the same index still verifies (the signature covers the decompressed bytes)
+        open(ip, "wb").write(zstd.compress(bytes(raw), level=1))
+        self.sync()
+        os.remove(os.path.join(self.cache, "r.db"))
+        # a changed entry doesn't
+        raw[-1] ^= 1
+        open(ip, "wb").write(zstd.compress(bytes(raw), level=1))
+        with self.assertRaises(SystemExit):
             self.sync()
         self.assertFalse(os.path.exists(os.path.join(self.cache, "r.db")))
+
+    def out(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.sync()
+        return buf.getvalue().split("\t")
+
+    def test_patch(self):
+        self.publish([("a", "1-1", ""), ("b", "1-1", "")], 1000)
+        self.assertEqual(self.out()[4], "full")
+        db2 = self.publish([("a", "1-1", ""), ("b", "2-1", ""), ("c", "1-1", "")], 2000)
+        self.assertEqual(self.out()[4], "patch")
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db2))
+        self.assertEqual(self.out()[4], "unchanged")
+        # a client two versions behind gets a direct patch too
+        old_cache = self.cache + "-old"
+        shutil.copytree(self.cache, old_cache)
+        db3 = self.publish([("a", "1-1", ""), ("b", "3-1", ""), ("c", "1-1", "")], 3000)
+        db4 = self.publish([("a", "1-1", ""), ("b", "3-1", ""), ("c", "2-1", "")], 4000)
+        self.cache, cur = old_cache, self.cache
+        self.assertEqual(self.out()[4], "patch")
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db4))
+        # a damaged patch: falls back to the whole index
+        self.cache = cur
+        h = btrdb.sha(btrdb.index_raw(open(os.path.join(cur, ".r.btrdb"), "rb").read())).hex()
+        db5 = self.publish([("a", "2-1", ""), ("b", "3-1", ""), ("c", "2-1", "")], 5000)
+        pp = os.path.join(self.srv, "x86_64", "r.btrdb.patch", h)
+        pb = bytearray(open(pp, "rb").read()); pb[-2] ^= 1
+        open(pp, "wb").write(pb)
+        self.assertEqual(self.out()[4], "full")
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db5))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,21 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## btrdb index patches (2026-11-24)
+
+Every btrdb sync downloaded the whole index (666 KB for extra), twice what zchunk's delta took
+(315 KB, its 306 KB header included). Now publish also writes the new index as a zstd patch
+against every index of the last 48 hours (`REPO.btrdb.patch/<SHA-256 of the old decompressed
+index>`), and a client with an index asks for its patch first. The signature moved from the
+stored file to the decompressed index (`btrpkg sign`/`verify` of a `.btrdb` take either form),
+since a patched client never has the server's compressed bytes. Extra, 10:12 -> 13:07 (6
+updates): patch 370 B (from 12:05: 215 B); on p14s the daily copy synced in 4,886 B and 8 requests
+(signature, patch, 6 desc blobs) where the whole index would have taken 670,271 B and zchunk
+takes 315,010 B for the same span. Patch at zstd 19: about 80 ms to make, under 1 ms to apply;
+level 3 can't reach the old index (window) and gives 187 KB. The trial log gained `how` and
+`full_bytes` (`/var/log/btrdb-trial.tsv`; earlier rows in `.v1`). btrpkg's change passed
+pacman-robust 12/12, gaps 16/16 and plan-count 2/1/1/1 on p14s before the push.
+
 ## libzstd 1.6.0 against 1.5.7 (2026-11-24)
 
 1.6.0 (released 2026-11-23: security fixes incl. CVE-2026-124851, AArch64 decode work) and 1.5.7,
