@@ -12,7 +12,7 @@ Layout (beside the btrpkg layout: architecture directories, shared content-addre
   ROOT/ARCH/REPO.btrdb.sig      signify signature over the decompressed index (btrpkg sign)
   ROOT/ARCH/REPO.btrdb.patch/H  the current index as a zstd patch (--patch-from) against an
                                 older one, H = SHA-256 of that older decompressed index; for
-                                every index of the last 48 hours (at least 3)
+                                every index of the last 7 days (at least 3), zstd level 12
   ROOT/db/xx/HASH               a desc or files blob: zstd with the version's dictionary;
                                 HASH = SHA-256 of the stored (compressed) bytes. NOCOMPRESS.
 
@@ -150,10 +150,13 @@ def index_raw(stored):
     return raw
 
 
-def make_patch(old_raw, new_raw):
+PATCH_LEVEL = 12   # 1-2% bigger patches than 19 at a ninth of the time (~9 ms each for extra)
+
+
+def make_patch(old_raw, new_raw, level=PATCH_LEVEL):
     """new_raw as one zstd frame with old_raw as its prefix (zstd --patch-from)."""
     wl = max(21, (len(old_raw) + len(new_raw)).bit_length())
-    z = zstd.ZstdCompressor(options={zstd.CompressionParameter.compression_level: 19,
+    z = zstd.ZstdCompressor(options={zstd.CompressionParameter.compression_level: level,
                                      zstd.CompressionParameter.window_log: wl},
                             zstd_dict=zstd.ZstdDict(old_raw, is_raw=True).as_prefix)
     return z.compress(new_raw, mode=zstd.ZstdCompressor.FLUSH_FRAME)
@@ -200,7 +203,10 @@ def train(dictdir, dbs, files):
         print(f"{kind}: {len(samples)} samples -> {len(zd.dict_content)} B dictionary")
 
 
-def publish(root, arch, repo, dbpath, filespath=None, key=None, btrpkg="btrpkg", keep=3, keep_hours=48):
+KEEP_HOURS = 168   # patches from every index of the last 7 days
+
+
+def publish(root, arch, repo, dbpath, filespath=None, key=None, btrpkg="btrpkg", keep=3, keep_hours=KEEP_HOURS):
     st = os.stat(dbpath)
     ts = int(st.st_mtime)
     idxp = os.path.join(root, arch, f"{repo}.btrdb")
@@ -517,7 +523,7 @@ def main(argv):
             train(d, dbs, opts.get("--files", []))
         case ["publish", root, arch, repo, db]:
             publish(root, arch, repo, db, opts.get("--files"), opts.get("--key"), bt, int(opts.get("--keep", 3)),
-                    float(opts.get("--keep-hours", 48)))
+                    float(opts.get("--keep-hours", KEEP_HOURS)))
         case ["sync", url, sd, repo]:
             sync(url, sd, repo, opts.get("--keys"), bt, bool(opts.get("--files")), opts.get("--db", "../db"),
                  bool(opts.get("--measure-full")))

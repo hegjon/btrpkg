@@ -16,7 +16,7 @@ btrdb/                          (~/Work/btrpkg-repo/btrdb, served at :1764/btrdb
 │   ├── *.btrdb.sig             signify signature over the decompressed index (btrpkg sign / verify);
 │   │                           Last-Modified = upstream's db: the client's change marker
 │   ├── extra.btrdb.patch/H     the current index as a patch against an older one, H = SHA-256 of
-│   │                           that older decompressed index; one per index of the last 48 hours
+│   │                           that older decompressed index; one per index of the last 7 days
 │   └── extra.btrdb.<ts>        those older indexes (at least 3), for making the patches
 └── db/                         desc/files blobs, NOCOMPRESS
     └── 12/1234abcd…            zstd with the format's dictionary; named by the SHA-256 of
@@ -36,7 +36,8 @@ trained on Arch's core + extra of 2026-11-24) belong to the format version and s
 client: a new dictionary changes every blob, so it needs a new version.
 
 - `btrdb.py publish ROOT ARCH REPO REPO.db [--files REPO.files] [--key SEC] [--keep-hours H]`:
-  blobs first, then a patch from every kept older index (zstd 19, about 80 ms each for extra),
+  blobs first, then a patch from every kept older index (7 days by default; zstd 12, about 9 ms
+  each for extra),
   signature, index, and the new patch directory in place of the old; blobs no kept index names go
   after an hour. `mirror/mirror-all.sh` runs it every 10 minutes for core
   and extra from zdb's `.upstream/` copies.
@@ -62,9 +63,24 @@ total, a first sync 9.04 MB (extra.db is 9.06 MB). From 10:12 to 13:07 (6 update
 | zchunk (306,204 of it the header) | 315,010 |
 | btrdb with an index patch (p14s: sig 148 + patch 370 + 6 desc blobs; 8 requests) | 4,886 |
 
-The patch from 12:05 is 215 B; making one costs about 80 ms at zstd 19 (level 12: about 9 ms
-and a few bytes more; level 3's window is too small to reach the old index and gives 187 KB),
-applying it under 1 ms. zchunk can't patch its header: the client doesn't have the new one. The trial on p14s
+The patch from 12:05 is 215 B; making one costs about 80 ms at zstd 19, about 9 ms at 12 for
+1-2% more (level 12 is used); level 3's window is too small to reach the old index and gives
+187 KB; applying one takes under 1 ms. zchunk can't patch its header: the client doesn't have
+the new one.
+
+Clients further behind (Arch's archived extra.db snapshots against the 13:07 index; bytes):
+
+| behind | changed packages | btrdb: patch + blobs | btrdb: whole index + blobs | zchunk |
+|---|---:|---:|---:|---:|
+| 1 day | 283 | 150,422 | 805,540 | 570,458 |
+| 2 days | 509 | 312,145 | 958,900 | 841,297 |
+| 4 days | 822 | 521,412 | 1,156,602 | 1,154,489 |
+| 7 days | 1,674 | 1,000,013 | 1,603,823 | 1,912,118 |
+| 14 days | 3,471 | 2,127,225 | 2,664,830 | 3,566,515 |
+| 31 days | 5,738 | 3,461,066 | 3,914,025 | 5,468,507 |
+
+The desc blobs of the changed packages dominate after a day or two; past a week a patch saves
+13-20% more, so publish keeps 7 days (about 170 indexes at one change an hour). The trial on p14s
 (`zdb/zdb-trial.sh`, `/var/log/btrdb-trial.tsv` beside `/var/log/zdb-trial.tsv`, until 2026-11-26
 12:00) compares both on hourly and daily syncs.
 

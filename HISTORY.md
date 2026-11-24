@@ -19,6 +19,12 @@ level 3 can't reach the old index (window) and gives 187 KB. The trial log gaine
 `full_bytes` (`/var/log/btrdb-trial.tsv`; earlier rows in `.v1`). btrpkg's change passed
 pacman-robust 12/12, gaps 16/16 and plan-count 2/1/1/1 on p14s before the push.
 
+Then 7 days of history instead of 48 hours, at zstd 12 for the patches (8.8 ms each, about
+1.5 s per publish for ~170 old indexes). Measured with Arch's archived extra.db snapshots against
+the 13:07 index (bytes, patch + changed desc blobs / whole index + blobs / zchunk): 1 day
+150,422 / 805,540 / 570,458; 7 days 1,000,013 / 1,603,823 / 1,912,118; 31 days 3,461,066 /
+3,914,025 / 5,468,507. Past a day or two the blobs dominate, so longer history buys little.
+
 ## libzstd 1.6.0 against 1.5.7 (2026-11-24)
 
 1.6.0 (released 2026-11-23: security fixes incl. CVE-2026-124851, AArch64 decode work) and 1.5.7,
