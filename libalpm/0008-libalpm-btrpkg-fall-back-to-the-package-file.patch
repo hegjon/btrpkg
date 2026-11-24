@@ -1,4 +1,4 @@
-From 4cbf371eb5ceac0dbca659fa64833fb62e75a5c5 Mon Sep 17 00:00:00 2001
+From b86b0fc47ce631bc78865d0035d5e9868d11a453 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 11:51:35 +0200
 Subject: [PATCH 08/12] libalpm: btrpkg: fall back to the package file

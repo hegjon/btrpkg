@@ -1,4 +1,4 @@
-From a38eff763e204aab23287cdb85c00243a2f8d1b0 Mon Sep 17 00:00:00 2001
+From 88724cab0cf3fae36ea47e8c9b547c5655319e78 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 16:16:18 +0200
 Subject: [PATCH 03/12] libalpm: btrpkg downloads in pacman's sandbox, with

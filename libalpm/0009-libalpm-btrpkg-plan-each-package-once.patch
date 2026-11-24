@@ -1,4 +1,4 @@
-From 70fb8169dc607ae9da078d0c8a626788c8d25c16 Mon Sep 17 00:00:00 2001
+From 0525d8402b78804ea6d1cbca3fca0741174e2390 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 12:30:38 +0200
 Subject: [PATCH 09/12] libalpm: btrpkg: plan each package once

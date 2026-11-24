@@ -1,4 +1,4 @@
-From 0771782961ac0f5f12cbe3d15250333cb3b73f16 Mon Sep 17 00:00:00 2001
+From cc0e4f661984bb7f00a929703a89e32cc4fc7087 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 13:14:17 +0200
 Subject: [PATCH 10/12] libalpm: btrpkg: the index is NAME.btrpkg next to the

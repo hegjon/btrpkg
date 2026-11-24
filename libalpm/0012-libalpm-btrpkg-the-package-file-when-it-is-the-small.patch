@@ -1,4 +1,4 @@
-From 0a465d40615a9e797bc244f4ab0c77d40b2dd91a Mon Sep 17 00:00:00 2001
+From 3a95d69b961374cb94378a7c0d4203c5d0ca9f28 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Mon, 23 Nov 2026 13:32:54 +0200
 Subject: [PATCH 12/12] libalpm: btrpkg: the package file when it is the

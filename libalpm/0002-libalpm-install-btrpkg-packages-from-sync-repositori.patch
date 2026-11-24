@@ -1,4 +1,4 @@
-From c55c7cb9d0040c0a3b1d425a76bca484ef41e3c5 Mon Sep 17 00:00:00 2001
+From 021a6c2dfdea71ad60097ba465847044cb178451 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 07:36:48 +0200
 Subject: [PATCH 02/12] libalpm: install btrpkg packages from sync repositories

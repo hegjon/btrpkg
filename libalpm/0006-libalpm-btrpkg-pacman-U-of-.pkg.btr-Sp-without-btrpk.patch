@@ -1,4 +1,4 @@
-From e7239bf07da959f33d5ac2303b8da76eb7112e58 Mon Sep 17 00:00:00 2001
+From 23972ff30e5eabca92a9850c6317b5f856953c64 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 20:13:32 +0200
 Subject: [PATCH 06/12] libalpm: btrpkg: pacman -U of .pkg.btr, -Sp without

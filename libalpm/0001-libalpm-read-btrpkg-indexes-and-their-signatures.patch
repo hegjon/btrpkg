@@ -1,4 +1,4 @@
-From ef82d81c600115315cc4852100f0150c1db6d228 Mon Sep 17 00:00:00 2001
+From 81bc450792011c9bf8cbba40d9172c7bbfbaa222 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 07:20:02 +0200
 Subject: [PATCH 01/12] libalpm: read btrpkg indexes and their signatures
@@ -1070,14 +1070,14 @@ index 00000000..50beb73c
 +}
 diff --git a/lib/libalpm/btrpkg.h b/lib/libalpm/btrpkg.h
 new file mode 100644
-index 00000000..c051524f
+index 00000000..26bf87a5
 --- /dev/null
 +++ b/lib/libalpm/btrpkg.h
 @@ -0,0 +1,119 @@
 +/*
 + *  btrpkg.h
 + *
-+ *  Reader for btrpkg format version 1 indexes (https://github.com/hegjon/btrpkg) and their
++ *  Reader for btrpkg format version 0 indexes (https://github.com/hegjon/btrpkg) and their
 + *  signify-format Ed25519 signatures.
 + *
 + *  This program is free software; you can redistribute it and/or modify

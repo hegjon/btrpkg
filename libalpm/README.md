@@ -4,7 +4,7 @@ pacman branch `btrpkg`, based on `54d94116` (Arch's pacman 7.1.0.r9 build), as `
 files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman/pacman.
 
 1. `libalpm: read btrpkg indexes and their signatures`: `lib/libalpm/btrpkg.c` parses and checks
-   a version 1 index with the same checks and verdicts as `src/format.rs`, and verifies the
+   a version 0 index with the same checks and verdicts as `src/format.rs`, and verifies the
    signify signature (Ed25519 through OpenSSL). `test/btrpkg` (`meson test -C build btrpkg`):
    73 subtests on committed fixtures (a real index and signature, every bit flip and cut, crafted
    indexes from `bench/craft_indexes.py`).

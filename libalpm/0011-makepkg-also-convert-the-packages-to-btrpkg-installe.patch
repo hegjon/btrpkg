@@ -1,4 +1,4 @@
-From d6f0cd972a9c82c4f509f99ed549634bd905deda Mon Sep 17 00:00:00 2001
+From 5579f62d03052d5cb57071041b4c30b5160c8894 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 23:45:21 +0200
 Subject: [PATCH 11/12] makepkg: also convert the packages to btrpkg (installed

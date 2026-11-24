@@ -1,4 +1,4 @@
-From 18a4835b820d0a9aef8dee980d2ece8ba9d8d3c4 Mon Sep 17 00:00:00 2001
+From ab71e7a7ed4e374b67c870c9195e1cbf491c6cec Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 17:50:29 +0200
 Subject: [PATCH 05/12] libalpm: btrpkg: one root process when downloads aren't
