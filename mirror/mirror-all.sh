@@ -6,7 +6,7 @@ rc=0
 while read -r repo up dir keyring want parts; do
   [[ -z $repo || $repo == \#* ]] && continue
   [[ $keyring == /* ]] || keyring=$here/$keyring
-  REPO=$repo UP=$up M=$HOME/Work/btrpkg-repo/$dir KEYRING=$keyring WANT=$here/$want PARTS=${parts:-../btrparts} "$here/repo-mirror.sh" || { echo "$repo: failed"; rc=1; }
+  REPO=$repo UP=$up M=$HOME/Work/btrpkg-repo/$dir KEYRING=$keyring WANT=$here/$want PARTS=${parts:-../pkg} "$here/repo-mirror.sh" || { echo "$repo: failed"; rc=1; }
 done < "$here/repos.conf"
 # cleanup, once per btrparts directory (shared by several repositories) and only after all of
 # them: current + previous version of each package stay (btrpkg gc, see src/gc.rs); skipped
@@ -15,7 +15,7 @@ if [[ $rc == 0 && -z ${NO_GC:-} ]]; then
   B=${B:-$here/../target/release/btrpkg}
   mapfile -t pdirs < <(while read -r repo up dir keyring want parts; do
     [[ -z $repo || $repo == \#* ]] && continue
-    realpath -m "$HOME/Work/btrpkg-repo/$dir/${parts:-../btrparts}"
+    realpath -m "$HOME/Work/btrpkg-repo/$dir/${parts:-../pkg}"
   done < "$here/repos.conf" | sort -u)
   for p in "${pdirs[@]}"; do
     [[ -d $p ]] || continue

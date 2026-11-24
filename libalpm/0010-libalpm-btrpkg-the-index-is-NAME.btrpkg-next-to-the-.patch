@@ -1,20 +1,22 @@
-From 6cbc9f176b4187370ef3da620c5412c1d98f54ac Mon Sep 17 00:00:00 2001
+From edba2faf18c64f8a7cffdf143c37495ad42023ab Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 13:14:17 +0200
-Subject: [PATCH 10/10] libalpm: btrpkg: the index is NAME.pkg.btr next to the
+Subject: [PATCH 10/12] libalpm: btrpkg: the index is NAME.btrpkg next to the
  package file
 
-btrpkg.index is now NAME.pkg.btr: repositories keep the index beside
-NAME.pkg.tar.zst as a .pkg.btr without its data (the same bytes the
+btrpkg.index is now NAME.btrpkg: repositories keep the thin index beside
+NAME.pkg.tar.zst (a cache file without its data: the same bytes the
 cache file starts with, and the same signature), instead of
-index/NAME.btridx. The cache file takes the same name. An entry in the
-old form is unusable data: the package file is downloaded instead.
+index/NAME.btridx. The cache file the helper makes from it is
+NAME.pkg.btr; the different suffix keeps a repository's thin index from
+passing for a cache file. An entry in another form is unusable data: the
+package file is downloaded instead.
 ---
- lib/libalpm/sync.c | 24 +++++++++++-------------
- 1 file changed, 11 insertions(+), 13 deletions(-)
+ lib/libalpm/sync.c | 24 ++++++++++++------------
+ 1 file changed, 12 insertions(+), 12 deletions(-)
 
 diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
-index 997f1db0..d3dae25f 100644
+index f09c1105..9d4fa046 100644
 --- a/lib/libalpm/sync.c
 +++ b/lib/libalpm/sync.c
 @@ -94,9 +94,6 @@ static int btr_unhex32(const char *s, unsigned char out[32])
@@ -25,8 +27,8 @@ index 997f1db0..d3dae25f 100644
 - * when a helper is configured and the cache directory is on btrfs (their data is shared with
 - * the installed files by reflink). Everything else is downloaded as usual. */
  /* Where a package's repository keeps its btrparts, relative to the repository's URL: the
-  * database's btrpkg.parts (e.g. ../btrparts, shared by the architecture directories), else
-  * btrparts inside it. */
+  * database's btrpkg.parts (e.g. ../pkg, shared by the architecture directories), else
+  * pkg inside it. */
 @@ -121,6 +118,11 @@ static int btr_parts_ok(const char *p)
  	return 1;
  }
@@ -34,8 +36,8 @@ index 997f1db0..d3dae25f 100644
 +/* Sync targets whose database entry carries btrpkg data come as NAME.pkg.btr cache files,
 + * when a helper is configured and the cache directory is on btrfs (their data is shared with
 + * the installed files by reflink). Everything else is downloaded as usual.
-+ * btrpkg.index is NAME.pkg.btr: the repository keeps the index next to the package file, as a
-+ * .pkg.btr without its data, and the cache file has the same name (and the same signature). */
++ * btrpkg.index is NAME.btrpkg: the repository keeps the thin index next to the package file (a
++ * cache file without its data, with the same signature); the helper makes NAME.pkg.btr from it. */
  static void btr_select(alpm_handle_t *handle, const char *cachedir)
  {
  	struct statfs sf;
@@ -52,26 +54,26 @@ index 997f1db0..d3dae25f 100644
 -		if(len <= 7 || strcmp(name + len - 7, ".btridx") != 0 || name[0] == '.'
 -				|| memchr(name, '/', len - 7) || btr_unhex32(id, spkg->btr_id) != 0
 +		size_t len = strlen(index);
-+		if(len <= 8 || strcmp(index + len - 8, ".pkg.btr") != 0 || index[0] == '.'
++		if(len <= 7 || strcmp(index + len - 7, ".btrpkg") != 0 || index[0] == '.'
 +				|| strchr(index, '/') || btr_unhex32(id, spkg->btr_id) != 0
  				|| !btr_parts_ok(btr_parts(spkg))) {
  			_alpm_log(handle, ALPM_LOG_WARNING, _("%s: unusable btrpkg data in the database\n"), spkg->name);
  			continue;
-@@ -159,12 +160,10 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)
+@@ -159,11 +160,11 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)
  			free(have);
  			continue;
  		}
 -		char *fn = malloc(len - 7 + 9);
-+		char *fn = strdup(index);
++		char *fn = malloc(len - 7 + sizeof(".pkg.btr"));
  		if(!fn) {
  			continue;
  		}
 -		memcpy(fn, name, len - 7);
--		strcpy(fn + len - 7, ".pkg.btr");
++		memcpy(fn, index, len - 7);
+ 		strcpy(fn + len - 7, ".pkg.btr");
  		FREE(spkg->btr_plain);
  		spkg->btr_plain = spkg->filename;
- 		spkg->filename = fn;
-@@ -195,8 +194,7 @@ static int btr_have_index(const char *dir, alpm_pkg_t *p)
+@@ -195,8 +196,7 @@ static int btr_have_index(const char *dir, alpm_pkg_t *p)
  {
  	char path[PATH_MAX];
  	struct stat st;

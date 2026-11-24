@@ -1,7 +1,7 @@
-From a02c75b8616479f79f449919ac5d26e6f70b427a Mon Sep 17 00:00:00 2001
+From c55c7cb9d0040c0a3b1d425a76bca484ef41e3c5 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 07:36:48 +0200
-Subject: [PATCH 02/10] libalpm: install btrpkg packages from sync repositories
+Subject: [PATCH 02/12] libalpm: install btrpkg packages from sync repositories
 
 With BtrPkgHelper set (pacman.conf) and the cache directory on btrfs, a sync
 target whose database entry has btrpkg.index and btrpkg.id in %DATA% is

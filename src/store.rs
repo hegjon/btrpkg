@@ -4,15 +4,18 @@
 //!
 //! Store layout (static files, servable by any HTTP server; `pull` reads it as a directory):
 //!   PARTS/ab/<sha256>    btrpart bytes exactly as written to disk, named by the SHA-256 of
-//!                        those bytes (the table's stored hash). PARTS is `btrparts` inside the
-//!                        store by default; a repository can put it elsewhere (`../btrparts`,
+//!                        those bytes (the table's stored hash). PARTS is `pkg` inside the
+//!                        store by default; a repository can put it elsewhere (`../pkg`,
 //!                        shared by its architecture directories) and says so in its database
-//!                        (`btrpkg.parts`).
-//!   NAME.pkg.btr         the package's index (format.rs); its chunk table names the chunks
-//!   NAME.pkg.btr.sig     signify signature over the index header (sign.rs), when published
+//!                        (`btrpkg.parts`). Publishing marks it NOCOMPRESS (the btrparts are
+//!                        compressed already) and writes the repository format version beside
+//!                        it (`version`, "0\n").
+//!   NAME.btrpkg          the package's thin index (format.rs); its chunk table names the chunks
+//!   NAME.btrpkg.sig      signify signature over the index header (sign.rs), when published
 //!                        with a key
 //! Publish writes chunks, then the signature, then the index, so a published index never refers
-//! to a missing chunk or lacks its signature.
+//! to a missing chunk or lacks its signature. Clients make cache files named NAME.pkg.btr (and
+//! NAME.pkg.btr.sig, the same signature) from it.
 use super::*;
 use std::os::unix::ffi::OsStrExt;
 
@@ -24,16 +27,39 @@ pub(crate) fn part_rel(h: &[u8]) -> String {
 
 pub(crate) fn hpath(dir: &Path, h: &[u8]) -> PathBuf { dir.join(part_rel(h)) }
 
-/// The index of package NAME (NAME-VER-REL-ARCH) in a repository, next to NAME.pkg.tar.zst, as
-/// the database's btrpkg.index names it; and back. It is a .pkg.btr without its data (the same
-/// bytes a cache file starts with, and the same signature): clients fill the data in.
-pub(crate) const INDEX_EXT: &str = ".pkg.btr";
+/// The thin index of package NAME (NAME-VER-REL-ARCH) in a repository, next to
+/// NAME.pkg.tar.zst, as the database's btrpkg.index names it; and back. It is a cache file
+/// without its data (the same bytes a cache file starts with, and the same signature): clients
+/// fill the data in and name the result NAME.pkg.btr (`cache_rel`). The different suffix keeps a
+/// thin index from passing for a cache file, and doesn't clash with pacman's `.pkg.tar.*`.
+pub(crate) const INDEX_EXT: &str = ".btrpkg";
 pub(crate) fn index_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}") }
 pub(crate) fn index_name(rel: &str) -> Option<&str> {
     rel.strip_suffix(INDEX_EXT).filter(|n| !n.is_empty() && !n.starts_with('.') && !n.contains('/'))
 }
 /// Its signify signature.
 pub(crate) fn sig_rel(name: impl std::fmt::Display) -> String { format!("{name}{INDEX_EXT}.sig") }
+/// The cache file of package NAME in a pacman cache directory (index + data), and back.
+pub(crate) const CACHE_EXT: &str = ".pkg.btr";
+pub(crate) fn cache_rel(name: impl std::fmt::Display) -> String { format!("{name}{CACHE_EXT}") }
+pub(crate) fn cache_name(rel: &str) -> Option<&str> {
+    rel.strip_suffix(CACHE_EXT).filter(|n| !n.is_empty() && !n.starts_with('.') && !n.contains('/'))
+}
+/// The repository format version, in `version` beside the btrparts directory.
+pub(crate) const REPO_VERSION: &str = "0\n";
+
+/// Make the btrparts directory `parts` ready for publishing: create it, mark it NOCOMPRESS (new
+/// btrparts inherit the flag; they are zstd frames or data that didn't compress) and write
+/// `version` beside it when it's missing.
+pub(crate) fn prepare_parts(parts: &Path) -> Result<()> {
+    fs::create_dir_all(parts).with_context(|| format!("create {}", parts.display()))?;
+    if let Ok(d) = File::open(parts) { crate::set_nocomp(&d); }
+    if let Some(root) = parts.parent() {
+        let v = root.join("version");
+        if fs::read_to_string(&v).ok().as_deref() != Some(REPO_VERSION) { write_atomic(&v, REPO_VERSION.as_bytes())?; }
+    }
+    Ok(())
+}
 /// Repositories: the SHA-256 of a package file an index was made from, beside the package file
 /// (`PKGFILE.sha256sum`, in sha256sum's format: "HASH  PKGFILE"), so repo-update knows the file
 /// is converted already.
@@ -88,7 +114,7 @@ pub(crate) fn write_atomic_nosync(p: &Path, data: &[u8]) -> Result<()> {
 pub(crate) struct PublishStats { pub chunks: u64, pub new_chunks: u64, pub new_bytes: u64, pub reused_chunks: u64, pub reused_bytes: u64, pub remapped: u64, pub index_bytes: u64 }
 
 /// Publish a converted package (its index and its btrparts, from `build`) into STORE as
-/// NAME.pkg.btr plus btrparts, signed with `key` (secret key, key name) when given. Signing
+/// NAME.btrpkg plus btrparts, signed with `key` (secret key, key name) when given. Signing
 /// happens here, after any remapping, because remapping rewrites the table and so the header.
 /// What `publish` reuses when the same data comes framed differently (another zstd level or
 /// version): the unencoded hash of every btrpart named by an index of the repositories that
@@ -168,6 +194,7 @@ pub(crate) fn publish(index: &[u8], items: Vec<(Chunk, Vec<u8>)>, name: &str, st
         }
         out.push(*c2);
     }
+    prepare_parts(parts)?;
     chunk_writes.par_iter().try_for_each(|(h, d)| write_atomic_nosync(&hpath(parts, h), d))?;
     if !chunk_writes.is_empty() { syncfs_dir(parts)?; }
     let ib = if out == idx.chunks { idx.bytes.clone() } else { idx.with_chunks(&out) };
@@ -454,7 +481,7 @@ pub(crate) fn pull_many(src: &net::Source, items: &[PullItem], o: &PullOpts, mut
             let mut local: HashMap<(Hash, u32), (usize, u64)> = HashMap::new();
             for ent in fs::read_dir(dir)? {
                 let p = ent?.path();
-                let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
+                let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(cache_name) else { continue };
                 if p == j.item.cache || pkgname(stem) != want { continue; }
                 let Some((f, h, chunks)) = cache_head(&p) else { continue };
                 j.srcs.push(f);

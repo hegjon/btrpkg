@@ -1,11 +1,12 @@
-//! btrpkg format version 1.
+//! btrpkg format version 0 (unstable while btrpkg is in development: it changes without a
+//! version bump, and readers accept only the version they were built for).
 //!
-//! One index describes a package. In a repository it is NAME.pkg.btr on its own, its btrparts
+//! One index describes a package. In a repository it is NAME.btrpkg on its own, its btrparts
 //! (chunks) are files named by their stored hash; the cache file only appends to it, so the
 //! header (and its signature) is the same in both:
 //!
-//!   index      (repository NAME.pkg.btr)   header | chunk table | entries | small-file blob
-//!   cache file (pacman's cache)            index | zero padding up to image_base | image
+//!   index      (repository NAME.btrpkg)    header | chunk table | entries | small-file blob
+//!   cache file (pacman's NAME.pkg.btr)     index | zero padding up to image_base | image
 //!
 //! `image_base = align(index_len)`. In the cache file each chunk sits at `image_base + image_off`,
 //! as a btrfs compressed extent when it is zstd, and every large file is a 4 KiB-aligned range of
@@ -16,7 +17,7 @@
 //! | offset | field |
 //! |---|---|
 //! | 0 | magic `BTRPKG\0\0` |
-//! | 8 | format version, u32 = 1 |
+//! | 8 | format version, u32 = 0 |
 //! | 12 | hash algorithm, u8: 1 = SHA-256; bytes 13..16 zero |
 //! | 16 | number of chunks, u64 |
 //! | 24 | image length, u64 |
@@ -38,7 +39,7 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 
 pub const MAGIC: &[u8; 8] = b"BTRPKG\0\0";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 0;
 pub const HASH_SHA256: u8 = 1;
 pub const HDR: usize = 256;
 pub const ENT: usize = 88;

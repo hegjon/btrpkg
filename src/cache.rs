@@ -77,7 +77,7 @@ pub(crate) fn cache_clean(dir: &Path, keep: usize, dry_run: bool) -> Result<Clea
     let mut by_pkg: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new(); // name -> (version, stem)
     for e in fs::read_dir(dir)?.flatten() {
         let n = e.file_name();
-        let Some(stem) = n.to_str().and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
+        let Some(stem) = n.to_str().and_then(store::cache_name) else { continue };
         if !e.file_type().is_ok_and(|t| t.is_file()) { continue; }
         let Some((name, ver)) = store::split_stem(stem) else { continue };
         by_pkg.entry(name.to_string()).or_default().push((ver.to_string(), stem.to_string()));
@@ -87,7 +87,7 @@ pub(crate) fn cache_clean(dir: &Path, keep: usize, dry_run: bool) -> Result<Clea
         v.sort_by(|a, b| vercmp(&b.0, &a.0)); // newest first
         for (k, (_, stem)) in v.iter().enumerate() {
             if k < keep { st.kept += 1; continue; }
-            for p in [dir.join(format!("{stem}.pkg.btr")), dir.join(format!("{stem}.pkg.btr.sig"))] {
+            for p in [dir.join(store::cache_rel(stem)), dir.join(format!("{}.sig", store::cache_rel(stem)))] {
                 if fs::symlink_metadata(&p).is_ok() {
                     println!("{}{}", if dry_run { "would remove " } else { "removed " }, p.display());
                 }

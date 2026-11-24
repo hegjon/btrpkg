@@ -3,7 +3,7 @@
 # ROOT` fetches, per package pair, for one or two btrpkg binaries (to compare the
 # moved-file lookup with a build without it).
 #
-#   [PARTS=../btrparts] bench/moved-pull-bench.sh REPODIR OLDSTEM NEWSTEM [BTRPKG...]
+#   [PARTS=../pkg] bench/moved-pull-bench.sh REPODIR OLDSTEM NEWSTEM [BTRPKG...]
 #
 # The old version is pulled and installed into a scratch root, with a pacman local database entry
 # (desc, files) made from its package file's list, as pacman would leave it. Prints per binary:
@@ -14,7 +14,7 @@ bins=("${@:-btrpkg}")
 w=$(mktemp -d "${TMPDIR:-/tmp}/moved-pull.XXXXXX")
 trap 'rm -rf "$w"' EXIT
 b0=${bins[0]}
-parts=${PARTS:-../btrparts}
+parts=${PARTS:-../pkg}
 "$b0" pull --unverified --no-fsync --parts "$parts" "$repo" "$old" "$w/old.pkg.btr" >/dev/null 2>&1
 "$b0" install "$w/old.pkg.btr" "$w/root" >/dev/null 2>&1
 rm -f "$w/old.pkg.btr"

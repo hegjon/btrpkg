@@ -2,8 +2,8 @@
 """Random edits inside an index's decompressed entries (and blob), hashes recomputed, for
 differential/sanitizer runs of index readers.
 
-usage: uv run --with zstandard bench/fuzz_entries.py BASE.btridx OUTDIR N [SEED]
-Writes OUTDIR/fNNNNN.btridx. Each variant flips, overwrites, inserts or deletes a few bytes of the
+usage: uv run --with zstandard bench/fuzz_entries.py BASE.btrpkg OUTDIR N [SEED]
+Writes OUTDIR/fNNNNN.btrpkg. Each variant flips, overwrites, inserts or deletes a few bytes of the
 entries section (sometimes the blob), then re-compresses and rebuilds the header hashes.
 """
 import hashlib, os, random, struct, sys
@@ -48,5 +48,5 @@ for k in range(n):
     h = bytearray(b[:HDR])
     struct.pack_into("<QQQQ", h, 32, len(ez2), len(e2), len(bz2), len(b2))
     h[96:128] = sha(ez2); h[128:160] = sha(bz2); h[224:256] = sha(bytes(h[:224]))
-    open(f"{out}/f{k:05d}.btridx", "wb").write(bytes(h) + table + ez2 + bz2)
+    open(f"{out}/f{k:05d}.btrpkg", "wb").write(bytes(h) + table + ez2 + bz2)
 print(f"{n} variants in {out}")

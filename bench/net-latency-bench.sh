@@ -33,7 +33,7 @@ docker run --rm --cap-add NET_ADMIN --add-host=mirror:192.168.2.2 -v "$B:/b:ro" 
   [ $D -gt 0 ] && tc qdisc add dev eth0 root netem delay ${D}ms limit 100000; tc -s qdisc show dev eth0 > /w/qdisc0
   ping -c1 -q 192.168.2.2 | tail -1
   mkdir -p /w/d; s=\$(date +%s%N)
-  BTRPKG_NETSTATS=1 /b fetch-ids --cacert /ca.crt ${EXTRA:-} $want --parts ../../../btrparts --server https://192.168.2.2:1763/$REL /w/d $(cat "$W/args") > /w/out 2> /w/err; rc=\$?
+  BTRPKG_NETSTATS=1 /b fetch-ids --cacert /ca.crt ${EXTRA:-} $want --parts ../../../pkg --server https://192.168.2.2:1763/$REL /w/d $(cat "$W/args") > /w/out 2> /w/err; rc=\$?
   e=\$(date +%s%N); tc -s qdisc show dev eth0 | grep -o \"dropped [0-9]*\" | head -1; echo \"rc \$rc  time \$(( (e - s) / 1000000 )) ms\"
   echo \"files \$(find /w/d -type f | wc -l)  bytes \$(du -sb /w/d | cut -f1)\"; chown -R 1000:1000 /w
 "

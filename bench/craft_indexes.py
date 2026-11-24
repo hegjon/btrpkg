@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Crafted btrpkg indexes with valid hashes but bad contents, for differential tests of readers.
 
-usage: uv run --with zstandard bench/craft_indexes.py BASE.btridx OUTDIR
-Writes OUTDIR/NAME.btridx per case (header, table and section hashes recomputed, so only the
+usage: uv run --with zstandard bench/craft_indexes.py BASE.btrpkg OUTDIR
+Writes OUTDIR/NAME.btrpkg per case (header, table and section hashes recomputed, so only the
 semantic checks can reject them) and OUTDIR/cases.txt with "NAME accept|reject" per line.
 Readers (btrpkg dump, libalpm's btrdump) must accept exactly the "accept" ones.
 """
@@ -10,6 +10,7 @@ import hashlib, os, struct, sys
 import zstandard
 
 HDR, ENT = 256, 88
+VER = 0  # the format version readers accept (src/format.rs VERSION)
 
 def sha(b): return hashlib.sha256(b).digest()
 
@@ -54,7 +55,7 @@ def build(image, chunks, es, blob, er=None, hdr_patch=None, ez=None):
     er = encode_entries(es) if er is None else er
     ez = zstandard.ZstdCompressor(level=3, write_content_size=True).compress(er) if ez is None else ez
     bz = zstandard.ZstdCompressor(level=3, write_content_size=True).compress(blob)
-    f = dict(n=len(chunks), image=image, el=len(ez), erl=len(er), bl=len(bz), brl=len(blob), alg=1, ver=1, res=b"\0" * 3, tail=b"\0" * 64)
+    f = dict(n=len(chunks), image=image, el=len(ez), erl=len(er), bl=len(bz), brl=len(blob), alg=1, ver=VER, res=b"\0" * 3, tail=b"\0" * 64)
     if hdr_patch: hdr_patch(f)
     h = struct.pack("<8sIB3sQQQQQQ32s32s32s64s", b"BTRPKG\0\0", f["ver"], f["alg"], f["res"], f["n"], f["image"], f["el"], f["erl"],
                     f["bl"], f["brl"], sha(table), sha(ez), sha(bz), f["tail"])
@@ -74,7 +75,7 @@ def main():
         e = [dict(x) for x in kw.pop("es", es)]
         fn = kw.pop("f", None)
         if fn: fn(c, e)
-        open(f"{out}/{name}.btridx", "wb").write(build(kw.pop("image", image), c, e, kw.pop("blob", blob), **kw))
+        open(f"{out}/{name}.btrpkg", "wb").write(build(kw.pop("image", image), c, e, kw.pop("blob", blob), **kw))
         cases.append((name, expect))
 
     def ent(i, **v):
@@ -124,6 +125,7 @@ def main():
     case("entries_raw_len_short", "reject", hdr_patch=lambda f: f.update(erl=f["erl"] - 1))
     case("entries_raw_len_long", "reject", hdr_patch=lambda f: f.update(erl=f["erl"] + 1))
     case("blob_raw_len_long", "reject", hdr_patch=lambda f: f.update(brl=f["brl"] + 1))
+    case("hdr_version1", "reject", hdr_patch=lambda f: f.update(ver=1))
     case("hdr_version2", "reject", hdr_patch=lambda f: f.update(ver=2))
     case("hdr_alg2", "reject", hdr_patch=lambda f: f.update(alg=2))
     case("hdr_reserved", "reject", hdr_patch=lambda f: f.update(res=b"\0\1\0"))
@@ -154,7 +156,7 @@ def main():
     raw[t0] = 1
     tbl = bytes(raw[HDR:HDR + len(chunks) * ENT])
     hdr = bytearray(raw[:HDR]); hdr[64:96] = sha(tbl); hdr[224:256] = sha(bytes(hdr[:224]))
-    open(f"{out}/chunk_reserved.btridx", "wb").write(bytes(hdr) + bytes(raw[HDR:]))
+    open(f"{out}/chunk_reserved.btrpkg", "wb").write(bytes(hdr) + bytes(raw[HDR:]))
     with open(f"{out}/cases.txt", "w") as f:
         for n, e in cases: f.write(f"{n} {e}\n")
     print(f"{len(cases)} cases in {out}")

@@ -1,15 +1,15 @@
-From 4c3a143571b36ff6280bfd0a89074d044549e00c Mon Sep 17 00:00:00 2001
+From 4486d9f649c5a7a719cbc44544d56cf77ba6d8b1 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 23:45:21 +0200
-Subject: [PATCH] makepkg: also convert the packages to btrpkg (installed as
- makebtrpkg)
+Subject: [PATCH 11/12] makepkg: also convert the packages to btrpkg (installed
+ as makebtrpkg)
 
 After the packages and their signatures are made, put them into the
 btrpkg repository directory BTRDEST (default PKGDEST; the package file
 and .sig are reflinked there when BTRDEST is elsewhere):
- - BTRREPO unset: btrpkg convert writes NAME.pkg.btr (signed with the
+ - BTRREPO unset: btrpkg convert writes NAME.btrpkg (signed with the
    signify key BTRPKG_KEY when set) and its btrparts into
-   BTRDEST/BTRPARTS (default btrparts).
+   BTRDEST/BTRPARTS (default pkg).
  - BTRREPO set: repo-add the packages to BTRDEST/BTRREPO.db.tar.zst,
    then btrpkg repo-update converts them, signs them with BTRPKG_KEY
    and writes their btrpkg fields (and PKGFILE.sha256sum).
@@ -21,7 +21,7 @@ reported before building.
  1 file changed, 64 insertions(+), 1 deletion(-)
 
 diff --git a/scripts/makepkg.sh.in b/scripts/makepkg.sh.in
-index 611cc184..d0622b3e 100644
+index 611cc184..5b590bc8 100644
 --- a/scripts/makepkg.sh.in
 +++ b/scripts/makepkg.sh.in
 @@ -64,6 +64,7 @@ INSTALL=0
@@ -38,14 +38,14 @@ index 611cc184..d0622b3e 100644
  
 +# makebtrpkg: put the finished packages into the btrpkg repository directory BTRDEST (default
 +# PKGDEST), the package file and its .sig reflinked there when BTRDEST is elsewhere.
-+#  - BTRREPO unset: `btrpkg convert` writes NAME.pkg.btr (signed with the signify secret key
-+#    BTRPKG_KEY when set) and its btrparts into BTRDEST/BTRPARTS (default btrparts).
++#  - BTRREPO unset: `btrpkg convert` writes NAME.btrpkg (signed with the signify secret key
++#    BTRPKG_KEY when set) and its btrparts into BTRDEST/BTRPARTS (default pkg).
 +#  - BTRREPO set: the packages are added to BTRDEST/BTRREPO.db.tar.zst (repo-add), then
 +#    `btrpkg repo-update` converts them, signs them with BTRPKG_KEY and writes their btrpkg fields.
 +create_btrpkgs() {
 +	local pkg pkgarch pkg_file name
 +	local fullver=$(get_full_version)
-+	local dest=${BTRDEST:-$PKGDEST} parts=${BTRPARTS:-btrparts}
++	local dest=${BTRDEST:-$PKGDEST} parts=${BTRPARTS:-pkg}
 +	local files=()
 +
 +	for pkg in "${pkgname[@]}"; do

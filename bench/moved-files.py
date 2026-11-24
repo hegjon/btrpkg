@@ -44,7 +44,7 @@ def dump(p):
 
 tot = defaultdict(int); pkgs = 0; top = []
 for d in args:
-    stems = [f[:-8] for f in os.listdir(d) if f.endswith(".pkg.btr")]
+    stems = [f[:-7] for f in os.listdir(d) if f.endswith(".btrpkg")]
     by = defaultdict(list)
     for s in stems:
         m = re.match(r"(.+)-([^-]+-[^-]+)-([^-]+)$", s)
@@ -54,8 +54,8 @@ for d in args:
         import functools
         vs.sort(key=functools.cmp_to_key(lambda a, b: vercmp(a[0], b[0])))
         (_, old), (_, new) = vs[-2], vs[-1]
-        oc, ow = dump(os.path.join(d, old + ".pkg.btr"))
-        nc, nw = dump(os.path.join(d, new + ".pkg.btr"))
+        oc, ow = dump(os.path.join(d, old + ".btrpkg"))
+        nc, nw = dump(os.path.join(d, new + ".btrpkg"))
         old_raw = {raw for (_, _, _, raw) in oc}
         old_at = {}  # (path, offset) -> raw
         for (io, ul, sl, raw) in oc:

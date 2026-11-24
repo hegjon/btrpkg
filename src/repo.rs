@@ -2,10 +2,10 @@
 //!
 //! For every package of the repo database whose file is in the directory: check the file against
 //! the database's %SHA256SUM% and its OpenPGP signature (`gpgv` with pacman's keyring), convert it,
-//! publish its btrparts (into the btrparts directory, `../btrparts` by default: beside the
+//! publish its btrparts (into the btrparts directory, `../pkg` by default: beside the
 //! architecture directories, which share it), signature and index (into the directory), then
 //! rewrite the database with four `%DATA%` lines per package:
-//!   btrpkg.index=NAME.pkg.btr   btrpkg.id=<header hash>   btrpkg.size=<index + btrpart bytes>
+//!   btrpkg.index=NAME.btrpkg     btrpkg.id=<header hash>   btrpkg.size=<index + btrpart bytes>
 //!   btrpkg.parts=<the btrparts directory, relative to the repository's directory>
 //! pacman reads `%DATA%` silently, so the same database serves plain pacman unchanged. The
 //! `.pkg.tar.zst` files stay. Order: chunks, signatures and indexes first, the database last.
@@ -128,8 +128,8 @@ pub(crate) struct RepoOpts<'a> {
 }
 
 /// Beside the architecture directories (`omarchy/x86_64`, `omarchy/aarch64` share
-/// `omarchy/btrparts`).
-pub(crate) const DEFAULT_REPO_PARTS: &str = "../btrparts";
+/// `omarchy/pkg`).
+pub(crate) const DEFAULT_REPO_PARTS: &str = "../pkg";
 
 /// Update DIR/REPO.db (following the usual REPO.db -> REPO.db.tar.zst symlink).
 pub(crate) fn repo_update(dir: &Path, repo: &str, o: &RepoOpts) -> Result<RepoStats> {

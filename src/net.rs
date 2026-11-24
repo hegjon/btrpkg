@@ -117,14 +117,14 @@ fn read_local(d: &std::path::Path, rel: &str) -> std::io::Result<Vec<u8>> {
 }
 
 /// Where a store's btrparts are, relative to it, when nothing says otherwise: inside the store.
-/// A repository can put them elsewhere (`btrpkg.parts` in its database, e.g. `../btrparts`
+/// A repository can put them elsewhere (`btrpkg.parts` in its database, e.g. `../pkg`
 /// beside the architecture directories, shared by all of them). Directory stores written on
 /// the client (pacman's download directory) always use this.
-pub const DEFAULT_PARTS: &str = "btrparts";
+pub const DEFAULT_PARTS: &str = "pkg";
 
 impl Source {
     /// The btrparts of this store: REL resolved against it. REL is a relative path
-    /// (`btrparts`, `../btrparts`); `..` is resolved here and can't go above the URL's host or
+    /// (`pkg`, `../pkg`); `..` is resolved here and can't go above the URL's host or
     /// the directory's root. Btrparts are checked against the signed index that names them, so
     /// where they come from is no matter of trust.
     pub fn parts(&self, rel: &str) -> Result<Source> {

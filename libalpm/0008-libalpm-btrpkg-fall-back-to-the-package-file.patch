@@ -1,7 +1,7 @@
-From 25a8e60472ae124131d3a97927aca91968ff9120 Mon Sep 17 00:00:00 2001
+From 4cbf371eb5ceac0dbca659fa64833fb62e75a5c5 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 11:51:35 +0200
-Subject: [PATCH 08/10] libalpm: btrpkg: fall back to the package file
+Subject: [PATCH 08/12] libalpm: btrpkg: fall back to the package file
 
 A package no server has a btrpkg index for (its database is older than
 what the servers keep, or a server lost it) is downloaded as its
@@ -43,7 +43,7 @@ index 885e21d3..f2593512 100644
  
  alpm_file_t *_alpm_file_copy(alpm_file_t *dest, const alpm_file_t *src);
 diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
-index 42ce30c3..b4c4bb54 100644
+index e4587046..202d9010 100644
 --- a/lib/libalpm/sync.c
 +++ b/lib/libalpm/sync.c
 @@ -165,13 +165,68 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)

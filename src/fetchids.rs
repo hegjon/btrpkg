@@ -1,8 +1,8 @@
 //! `fetch-ids`: the network half of a btrpkg download, meant to run unprivileged (pacman's
 //! DownloadUser, seccomp, and Landlock applied here: reads anywhere, writes only to DIR, no exec).
 //!
-//! It writes a directory store into DIR: `NAME.pkg.btr` (the index, + `.sig`) and
-//! `btrparts/xx/HASH` for every btrpart that can't come from the machine (read from each
+//! It writes a directory store into DIR: `NAME.btrpkg` (the index, + `.sig`) and
+//! `pkg/xx/HASH` for every btrpart that can't come from the machine (read from each
 //! server's btrparts directory, `--parts`, which the repository's database names). Whether a chunk can come
 //! from the machine is only estimated here (an older cache file of the package lists it, or the
 //! installed file it belongs to is long enough); nothing local is hashed, because the privileged
@@ -36,7 +36,7 @@ pub(crate) struct FetchOpts<'a> {
     /// only the indexes (and signatures)
     pub index_only: bool,
     /// with index_only: a package no server has a (valid) index for is left out instead of
-    /// failing the run; pacman then downloads its package file (no DIR/NAME.pkg.btr)
+    /// failing the run; pacman then downloads its package file (no DIR/NAME.btrpkg)
     pub skip_missing: bool,
     /// the servers' btrparts directory, relative to each (net::DEFAULT_PARTS by default)
     pub parts: &'a str,
@@ -195,7 +195,7 @@ fn cached_chunks(cachedir: &Path, name: &str) -> HashSet<(Hash, u32)> {
     let Ok(rd) = fs::read_dir(cachedir) else { return s };
     for e in rd.flatten() {
         let p: PathBuf = e.path();
-        let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".pkg.btr")) else { continue };
+        let Some(stem) = p.file_name().and_then(|n| n.to_str()).and_then(store::cache_name) else { continue };
         if store::pkgname(stem) != want { continue; }
         if let Some((_, _, chunks)) = store::cache_head(&p) {
             for c in chunks { s.insert((c.raw, c.unencoded_len)); }

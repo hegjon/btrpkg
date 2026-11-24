@@ -1,7 +1,7 @@
 //! btrpkg: pacman packages whose file data is shipped as btrfs encoded extents (btrparts).
 //!
 //! Commands: see USAGE below (`btrpkg` with no arguments). The format is described in format.rs
-//! (version 1); the repository layout, the pacman integration and the trust model in README.md.
+//! (version 0); the repository layout, the pacman integration and the trust model in README.md.
 
 use anyhow::{bail, ensure, Context, Result};
 use rayon::prelude::*;
@@ -176,7 +176,7 @@ pub(crate) fn pkg_stem(input: &Path) -> Result<String> {
     Ok(s.strip_suffix(".pkg.tar").with_context(|| format!("{n}: not a .pkg.tar.* file"))?.to_string())
 }
 
-/// Convert a package file into STORE: NAME.pkg.btr (signed with `key`) and its btrparts in `parts`.
+/// Convert a package file into STORE: NAME.btrpkg (signed with `key`) and its btrparts in `parts`.
 pub(crate) fn convert(input: &Path, store: &Path, parts: &Path, key: Option<(&sign::SecretKey, &str)>, reuse: &store::RawMap, small_max: u64) -> Result<(String, store::PublishStats)> {
     let name = pkg_stem(input)?;
     let (index, items) = build(input, small_max)?;
@@ -415,15 +415,33 @@ fn info(p: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What a signature covers: the 256-byte header of an index or cache file (its magic and
+/// version keep it from being valid for anything else), or a whole `.btrdb` database index
+/// (stored zstd bytes that decompress to the `BTRDB` magic; a zstd frame can't start like an index).
+fn signed_message(p: &Path) -> Result<Vec<u8>> {
+    let b = fs::read(p).with_context(|| p.display().to_string())?;
+    if p.extension().is_some_and(|e| e == "btrdb") {
+        let mut head = [0u8; 8];
+        zstd::stream::read::Decoder::new(&b[..])?.read_exact(&mut head).context("not a zstd-compressed .btrdb")?;
+        ensure!(&head == b"BTRDB\0\0\0", "{}: not a .btrdb", p.display());
+        return Ok(b);
+    }
+    ensure!(b.len() >= HDR, "{}: not a btrpkg file", p.display());
+    Header::decode(&b[..HDR])?;
+    Ok(b[..HDR].to_vec())
+}
+
 const USAGE: &str = "usage:
   btrpkg convert [--key NAME.sec] [--parts REL] [--small N] IN.pkg.tar.* STORE
-      (writes STORE/NAME.pkg.btr, its .sig with --key, and the btrparts into REL (default
-       btrparts), relative to STORE)
+      (writes STORE/NAME.btrpkg, its .sig with --key, and the btrparts into REL (default
+       pkg), relative to STORE)
   btrpkg install [--copy] CACHE ROOT
   btrpkg info FILE
   btrpkg dump FILE                        (the parsed index as text, to compare with other readers)
   btrpkg keygen NAME                      (writes NAME.sec and NAME.pub)
-  btrpkg sign --key NAME.sec FILE         (writes FILE.sig over FILE's index header)
+  btrpkg sign --key NAME.sec FILE         (writes FILE.sig: over the index header of a .btrpkg or
+                                          .pkg.btr, over the whole file of a .btrdb)
+  btrpkg verify [--keys DIR]... FILE      (checks FILE.sig the same way)
   btrpkg pull [TRUST] [--no-encoded] [--verify-data] [--no-fsync] [--h2c] [--parallel N] [--installed ROOT] [--parts REL] DIR|URL NAME CACHE
   btrpkg pull-ids [--h2c] [--parallel N] [--installed ROOT] DIR|URL CACHEDIR NAME=IDHEX...
       (for package managers: every NAME's index must have the header ID IDHEX; all packages share
@@ -435,16 +453,18 @@ const USAGE: &str = "usage:
        to DIR, run nothing. The other half: pull-ids [--missing-to FILE] [--consume] ... DIR CACHEDIR ...,
        which exits 3 and lists the chunks DIR lacks if a local file didn't check out, and with
        --consume removes DIR after success. For package managers: fetch-ids --index-only (with
-       --skip-missing a package no server has an index for is left out: no DIR/NAME.pkg.btr,
+       --skip-missing a package no server has an index for is left out: no DIR/NAME.btrpkg,
        the caller downloads its package file instead), then
        pull-ids --fetch-via FILE, which hashes and reuses local data, lists exactly the missing
        chunks in FILE, prints fetch N BYTES and waits for go on stdin while the caller runs
        fetch-ids --want FILE. pull-ids --plan checks local data the same way, writes nothing and
        prints need NAME CHUNK_BYTES INDEX_BYTES per package: the download size)
   btrpkg cache-clean [--keep N] [--dry-run] CACHEDIR
-      (keep the newest N versions (default 3) of every package's .pkg.btr, like paccache -rk N)
-  btrpkg gc [--keep N] [--min-age SECS] [--dry-run] BTRPARTS
-       repository side: in every repository under BTRPARTS's parent (they share it), keep each
+      (keep the newest N versions (default 3) of every package's NAME.pkg.btr cache file, like
+       paccache -rk N)
+  btrpkg gc [--keep N] [--min-age SECS] [--dry-run] PARTS
+       repository side (PARTS: the btrparts directory, e.g. omarchy/pkg): in every repository
+       under PARTS's parent (they share it), keep each
        package's current version, anything newer, and N-1 older ones (default 2: current +
        previous); remove the other indexes and package files, then the btrparts no kept index
        names. Nothing younger than --min-age (default 3600) goes; busy mirror locks stop it.
@@ -453,7 +473,7 @@ const USAGE: &str = "usage:
   btrpkg repo-update [--key NAME.sec] [--gpg-keyring FILE | --no-gpg] [--drop-missing] [--keep-going] [--parts REL] [--db-in FILE] [--jobs N] [--small N] DIR REPO
 NET (pull, pull-ids, upgrade): --http h1|h2|h3 (h2 over http:// is h2c), --cacert FILE
 TRUST: --id HEX (expected header ID) | --sig FILE [--keys DIR]... (default: the store's
-       NAME.pkg.btr.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
+       NAME.btrpkg.sig, keys from /etc/btrpkg/keys and /usr/share/btrpkg/keys) | --unverified";
 
 /// `pull-ids`: what libalpm runs to download btrpkg packages. Trust comes from the caller (the
 /// header IDs in its database); signatures are saved for the caller to check.
@@ -466,7 +486,7 @@ fn pull_ids(s: &str, parts: &str, cdir: &Path, pkgs: &[&str], flags: &[&str], pa
     let names: Vec<&str> = ids.iter().map(|(n, _)| n.as_str()).collect();
     for ((name, id), r) in ids.iter().zip(store::fetch_indexes(&src, &names, &mut ns)) {
         let (ib, sig) = r?;
-        got.push((name.clone(), ib, sig, cdir.join(format!("{name}.pkg.btr")), sign::Trust::Id(*id)));
+        got.push((name.clone(), ib, sig, cdir.join(store::cache_rel(name)), sign::Trust::Id(*id)));
     }
     let o = store::PullOpts { use_encoded: !flags.contains(&"--no-encoded"), installed,
         verify_data: flags.contains(&"--verify-data"), fsync: false, before_fetch: None, plan_only: flags.contains(&"--plan"), progress: flags.contains(&"--progress"), parts };
@@ -644,12 +664,17 @@ fn main() -> Result<()> {
         ["keygen", n] => sign::keygen(Path::new(n)).map(|k| println!("key {} -> {n}.sec, {n}.pub", sign::hex8(&k))),
         ["sign", f] => {
             let (k, name) = sec_key(key.as_ref())?.context("sign needs --key NAME.sec")?;
-            let mut hb = [0u8; HDR];
-            File::open(f)?.read_exact(&mut hb).context("not a btrpkg file")?;
-            Header::decode(&hb)?;
+            let msg = signed_message(Path::new(f))?;
             let sp = format!("{f}.sig");
-            fs::write(&sp, k.sign(&hb, &name))?;
+            fs::write(&sp, k.sign(&msg, &name))?;
             println!("{sp}");
+            Ok(())
+        }
+        ["verify", f] => {
+            let dirs: Vec<PathBuf> = if trust.keys.is_empty() { sign::DEFAULT_KEY_DIRS.iter().map(PathBuf::from).collect() } else { trust.keys.clone() };
+            let sig = fs::read_to_string(format!("{f}.sig")).with_context(|| format!("{f}.sig"))?;
+            let kf = sign::Keyring::load(&dirs)?.verify(&signed_message(Path::new(f))?, &sig)?.to_path_buf();
+            println!("{f}: good signature by {}", kf.display());
             Ok(())
         }
         ["pull", s, n, c] => {
@@ -852,7 +877,7 @@ mod tests {
         let src = make_pkg(&t.0, "d-1-1", &Spec { big: data(300_000, 7), other: random });
         let store = t.0.join("store");
         conv(&src, &store);
-        let idx = parse_index(&fs::read(store.join("d-1-1.pkg.btr")).unwrap()).unwrap();
+        let idx = parse_index(&fs::read(store.join("d-1-1.btrpkg")).unwrap()).unwrap();
         let files = store::chunk_files(&idx);
         let (mut raw_tails, mut shorter) = (0, 0); // raw btrparts that end in padding
         for c in &idx.chunks {
@@ -871,7 +896,7 @@ mod tests {
 
     #[test]
     fn gc_shared_btrparts() {
-        // two repositories share ../btrparts; p has versions 1, 2, 3 in x86_64 (db names 3) and
+        // two repositories share ../pkg; p has versions 1, 2, 3 in x86_64 (db names 3) and
         // version 1 in aarch64 (db names 1): with --keep 2 only x86_64's p-1 goes, and only the
         // btrparts no kept index of either repository names
         let t = TempDir::new("gc");
@@ -879,7 +904,7 @@ mod tests {
         let (x, a) = (root.join("x86_64"), root.join("aarch64"));
         fs::create_dir_all(&x).unwrap();
         fs::create_dir_all(&a).unwrap();
-        let parts = root.join("btrparts");
+        let parts = root.join("pkg");
         fs::create_dir_all(&parts).unwrap();
         // versions differ in "other" (seed); "big" is shared by all of them
         let mut stems = vec![];
@@ -890,7 +915,7 @@ mod tests {
             stems.push((dir.to_path_buf(), stem));
         }
         let db = |dir: &Path, cur: &str| {
-            let desc = format!("%FILENAME%\n{cur}.pkg.tar.zst\n\n%NAME%\np\n\n%DATA%\nbtrpkg.index={cur}.pkg.btr\nbtrpkg.parts=../btrparts\n\n");
+            let desc = format!("%FILENAME%\n{cur}.pkg.tar.zst\n\n%NAME%\np\n\n%DATA%\nbtrpkg.index={cur}.btrpkg\nbtrpkg.parts=../pkg\n\n");
             let mut tb = tar::Builder::new(Vec::new());
             let mut h = tar::Header::new_gnu();
             h.set_path("p/desc").unwrap(); h.set_mode(0o644); h.set_size(desc.len() as u64); h.set_cksum();
@@ -952,33 +977,36 @@ mod tests {
     fn btrparts_paths() {
         let base = |s: net::Source| match s { net::Source::Http { base, .. } => base, net::Source::Dir(d) => d.display().to_string() };
         let h = net::Source::parse("http://h:1/omarchy/x86_64/", false, None);
-        assert_eq!(base(h.parts("../btrparts").unwrap()), "http://h:1/omarchy/btrparts");
-        assert_eq!(base(h.parts("btrparts").unwrap()), "http://h:1/omarchy/x86_64/btrparts");
-        assert_eq!(base(h.parts("./a/../btrparts/").unwrap()), "http://h:1/omarchy/x86_64/btrparts");
+        assert_eq!(base(h.parts("../pkg").unwrap()), "http://h:1/omarchy/pkg");
+        assert_eq!(base(h.parts("pkg").unwrap()), "http://h:1/omarchy/x86_64/pkg");
+        assert_eq!(base(h.parts("./a/../pkg/").unwrap()), "http://h:1/omarchy/x86_64/pkg");
         let a = net::Source::parse("https://m/arch/core/os/x86_64", false, None);
-        assert_eq!(base(a.parts("../../../btrparts").unwrap()), "https://m/arch/btrparts");
+        assert_eq!(base(a.parts("../../../pkg").unwrap()), "https://m/arch/pkg");
         for bad in ["../../../x", "/abs", "http://evil/x", "", "a?b", "a#b", "a%2e", "a b", "a\\b"] {
             assert!(h.parts(bad).is_err(), "{bad:?} accepted");
         }
-        assert_eq!(base(net::Source::parse("file:///srv/repo/x86_64", false, None).parts("../btrparts").unwrap()), "/srv/repo/btrparts");
+        assert_eq!(base(net::Source::parse("file:///srv/repo/x86_64", false, None).parts("../pkg").unwrap()), "/srv/repo/pkg");
     }
 
     #[test]
     fn shared_btrparts() {
         // two architecture directories, one btrparts directory beside them: the second publish
-        // of the same package adds no btrpart, and both pull through ../btrparts
+        // of the same package adds no btrpart, and both pull through ../pkg
         let t = TempDir::new("shared");
         let src = make_pkg(&t.0, "s-1-1", &spec(3));
         let (x86, arm) = (t.0.join("repo/x86_64"), t.0.join("repo/aarch64"));
         fs::create_dir_all(&x86).unwrap();
         fs::create_dir_all(&arm).unwrap();
-        let parts = parts_dir(&x86, "../btrparts").unwrap();
-        assert_eq!(parts, t.0.join("repo/btrparts"));
+        let parts = parts_dir(&x86, "../pkg").unwrap();
+        assert_eq!(parts, t.0.join("repo/pkg"));
         let (_, a) = conv_parts(&src, &x86, &parts);
-        let (_, b) = conv_parts(&src, &arm, &parts_dir(&arm, "../btrparts").unwrap());
+        let (_, b) = conv_parts(&src, &arm, &parts_dir(&arm, "../pkg").unwrap());
         assert!(a.new_chunks > 0 && b.new_chunks == 0, "{a:?} {b:?}");
-        assert!(!x86.join("btrparts").exists() && !arm.join("btrparts").exists());
-        let o = store::PullOpts { parts: "../btrparts", ..Default::default() };
+        assert!(!x86.join("pkg").exists() && !arm.join("pkg").exists());
+        // the repository format version beside the shared btrparts directory, no cache-file names
+        assert_eq!(fs::read_to_string(t.0.join("repo/version")).unwrap(), "0\n");
+        assert!(x86.join("s-1-1.btrpkg").is_file() && !x86.join("s-1-1.pkg.btr").exists());
+        let o = store::PullOpts { parts: "../pkg", ..Default::default() };
         for d in [&x86, &arm] {
             let c = t.0.join(format!("c-{}.pkg.btr", d.file_name().unwrap().to_string_lossy()));
             let st = store::pull(&net::Source::Dir(d.to_path_buf()), "s-1-1", &c, &U, &o).unwrap();
@@ -1007,7 +1035,7 @@ mod tests {
         assert_eq!((ist.files, ist.hardlinks, ist.symlinks, ist.dirs), (6, 1, 1, 4));
         check_tree(&root, &s);
         // the large file is deduplicated: one copy in the image
-        let idx = parse_index(&fs::read(store.join("p-1-1.pkg.btr")).unwrap()).unwrap();
+        let idx = parse_index(&fs::read(store.join("p-1-1.btrpkg")).unwrap()).unwrap();
         assert_eq!(idx.hdr.image_len, align(300_000) + align(200_000));
         // every btrpart is level 12 or raw: framing again at 12 gives the same bytes
         for c in idx.chunks.iter().filter(|c| c.compression == COMP_ZSTD) {
@@ -1016,9 +1044,9 @@ mod tests {
             assert_eq!(frame(plain).unwrap().1, d);
         }
         // install refuses anything that isn't a cache file
-        assert!(install(&store.join("p-1-1.pkg.btr"), &t.0.join("root-x"), false).is_err());
+        assert!(install(&store.join("p-1-1.btrpkg"), &t.0.join("root-x"), false).is_err());
         // convert wants a package file name
-        assert!(convert(&t.0.join("p.tar"), &store, &store.join("btrparts"), None, &store::RawMap::new(), 4096).is_err());
+        assert!(convert(&t.0.join("p.tar"), &store, &store.join("pkg"), None, &store::RawMap::new(), 4096).is_err());
     }
 
     #[test]
@@ -1027,7 +1055,7 @@ mod tests {
         let src = make_pkg(&t.0, "p-1-1", &spec(2));
         let store = t.0.join("store");
         conv(&src, &store);
-        let ip = store.join("p-1-1.pkg.btr");
+        let ip = store.join("p-1-1.btrpkg");
         let b = fs::read(&ip).unwrap();
         let idx = parse_index(&b).unwrap();
         let h = &idx.hdr;
@@ -1117,7 +1145,7 @@ mod tests {
             ("hardlink-to-symlink", vec![("usr", D, 0o755, b"", None), ("usr/s", S, 0o777, b"", Some(o.as_str())), ("usr/h", L, 0o644, b"", Some("usr/s"))]),
         ] {
             let src = make_tar(&t.0, n, &ents);
-            assert!(convert(&src, &t.0.join("store"), &t.0.join("store/btrparts"), None, &store::RawMap::new(), 4096).is_err(), "{n}: converted");
+            assert!(convert(&src, &t.0.join("store"), &t.0.join("store/pkg"), None, &store::RawMap::new(), 4096).is_err(), "{n}: converted");
         }
         // through symlinks already on disk: refused by install, nothing outside changed, no
         // temporary file left
@@ -1156,7 +1184,7 @@ mod tests {
         let src = make_pkg(&t.0, "w-1-1", &spec(10));
         let store = t.0.join("store");
         conv(&src, &store);
-        let ip = store.join("w-1-1.pkg.btr");
+        let ip = store.join("w-1-1.btrpkg");
         let idx = parse_index(&fs::read(&ip).unwrap()).unwrap();
         // a self-consistent index (every section hash right) whose table claims other data for a chunk
         let i = idx.chunks.iter().position(|c| c.compression == COMP_ZSTD).unwrap();
@@ -1184,6 +1212,31 @@ mod tests {
     }
 
     #[test]
+    fn sign_btrdb() {
+        // a .btrdb is signed whole (its stored zstd bytes); anything else named .btrdb is refused
+        let t = TempDir::new("signdb");
+        sign::keygen(&t.0.join("repo")).unwrap();
+        let k = sign::SecretKey::load(&t.0.join("repo.sec")).unwrap();
+        let keys = t.0.join("keys");
+        fs::create_dir_all(&keys).unwrap();
+        fs::copy(t.0.join("repo.pub"), keys.join("repo.pub")).unwrap();
+        let db = t.0.join("x.btrdb");
+        fs::write(&db, zstd::encode_all(&b"BTRDB\0\0\0\0\0\0\0\0\0\0\0"[..], 3).unwrap()).unwrap();
+        let msg = signed_message(&db).unwrap();
+        assert_eq!(msg, fs::read(&db).unwrap());
+        let sig = k.sign(&msg, "repo");
+        let ring = sign::Keyring::load(&[keys]).unwrap();
+        assert!(ring.verify(&signed_message(&db).unwrap(), &sig).is_ok());
+        let mut b = fs::read(&db).unwrap();
+        let n = b.len();
+        b[n - 1] ^= 1;
+        fs::write(&db, &b).unwrap();
+        assert!(signed_message(&db).is_err() || ring.verify(&signed_message(&db).unwrap(), &sig).is_err());
+        fs::write(&db, zstd::encode_all(&b"BTRPKG\0\0"[..], 3).unwrap()).unwrap();
+        assert!(signed_message(&db).is_err());
+    }
+
+    #[test]
     fn signed_store() {
         let t = TempDir::new("signed");
         let store = t.0.join("store");
@@ -1202,13 +1255,13 @@ mod tests {
         pull_dir(&store, "s-1-1", &cdir.join("a.pkg.btr"), &trust(sig.clone())).unwrap();
         // signed by a key the keyring doesn't have
         let other = sign::SecretKey::load(&t.0.join("other.sec")).unwrap();
-        let ib = fs::read(store.join("s-1-1.pkg.btr")).unwrap();
+        let ib = fs::read(store.join("s-1-1.btrpkg")).unwrap();
         assert!(pull_dir(&store, "s-1-1", &cdir.join("b.pkg.btr"), &trust(other.sign(&ib[..HDR], "other"))).is_err());
         // a tampered index (re-hashed, so only the signature can tell)
         let idx = parse_index(&ib).unwrap();
         let mut ch = idx.chunks.clone();
         ch[0].raw[1] ^= 1;
-        fs::write(store.join("s-1-1.pkg.btr"), idx.with_chunks(&ch)).unwrap();
+        fs::write(store.join("s-1-1.btrpkg"), idx.with_chunks(&ch)).unwrap();
         assert!(pull_dir(&store, "s-1-1", &cdir.join("c.pkg.btr"), &trust(sig)).is_err());
         // nothing but the first cache file
         assert_eq!(fs::read_dir(&cdir).unwrap().count(), 1);
@@ -1246,7 +1299,7 @@ mod tests {
         std::os::unix::fs::symlink("t.db.tar.zst", d.join("t.db")).unwrap();
         sign::keygen(&t.0.join("k")).unwrap();
         let k = sign::SecretKey::load(&t.0.join("k.sec")).unwrap();
-        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, small: 4096, jobs: 2, db_in: None, parts: "btrparts".into() };
+        let o = repo::RepoOpts { key: Some((&k, "k")), gpg_keyring: None, drop_missing: true, small: 4096, jobs: 2, db_in: None, parts: "pkg".into() };
         let st = repo::repo_update(&d, "t", &o).unwrap();
         assert_eq!((st.packages, st.converted, st.missing, st.dropped, st.failed), (3, 2, 1, 1, 0), "{st:?}");
         // the database: same layout, fields added, other %DATA% kept, the missing package gone
@@ -1261,7 +1314,7 @@ mod tests {
         }
         assert_eq!(descs.keys().cloned().collect::<Vec<_>>(), ["p-1-1/", "p-1-1/desc", "q-2-1/", "q-2-1/desc"]);
         let q = &descs["q-2-1/desc"];
-        assert!(q.contains("%DATA%\nother.key=1\nbtrpkg.index=q-2-1-x86_64.pkg.btr\nbtrpkg.id="), "{q}");
+        assert!(q.contains("%DATA%\nother.key=1\nbtrpkg.index=q-2-1-x86_64.btrpkg\nbtrpkg.id="), "{q}");
         let id = q.lines().find_map(|l| l.strip_prefix("btrpkg.id=")).unwrap();
         // the ID from the database is enough to pull, and the signature is there too
         let c = t.0.join("cache");
@@ -1304,7 +1357,7 @@ mod tests {
         let idx_b = read_index_checked(&mut &ibs[1][..], &|h| U.check(h)).unwrap();
         let only_b = idx_b.chunks.iter().find(|c| !idx_a.chunks.iter().any(|a| a.stored == c.stored)).unwrap();
         let x = hex(&only_b.stored);
-        let cp = store.join(format!("btrparts/{}/{x}", &x[..2]));
+        let cp = store.join(format!("pkg/{}/{x}", &x[..2]));
         let good = fs::read(&cp).unwrap();
         let mut bad = good.clone();
         let k = bad.len() / 2;
@@ -1441,7 +1494,7 @@ mod tests {
         check_tree(&root, &s2);
 
         // the header ID from the repo database: a wrong one is refused before anything is written
-        let ib = fs::read(store.join("q-2-1.pkg.btr")).unwrap();
+        let ib = fs::read(store.join("q-2-1.btrpkg")).unwrap();
         let c3 = cdir.join("again.pkg.btr");
         assert!(pull_dir(&store, "q-2-1", &c3, &sign::Trust::Id([0; 32])).is_err());
         assert!(!c3.exists() && !part_path(&c3).exists());
@@ -1451,7 +1504,7 @@ mod tests {
         // a damaged chunk in the store: refused, nothing left behind
         let idx = parse_index(&ib).unwrap();
         let x = hex(&idx.chunks[3].stored);
-        let cp = store.join("btrparts").join(&x[..2]).join(&x);
+        let cp = store.join("pkg").join(&x[..2]).join(&x);
         let mut d = fs::read(&cp).unwrap();
         d[5] ^= 1;
         fs::write(&cp, &d).unwrap();
@@ -1462,7 +1515,7 @@ mod tests {
         // a damaged index: refused
         let mut ib2 = ib.clone();
         ib2[HDR + 7] ^= 1;
-        fs::write(store.join("bad.pkg.btr"), &ib2).unwrap();
+        fs::write(store.join("bad.btrpkg"), &ib2).unwrap();
         assert!(pull_dir(&store, "bad", &fresh.join("bad.pkg.btr"), &U).is_err());
         assert_eq!(fs::read_dir(&fresh).unwrap().count(), 0);
     }
@@ -1490,12 +1543,12 @@ mod tests {
         };
         let src2 = make_pkg(&t.0, "r-1-2", &s);
         let (ib2, items2) = reframed(&src2);
-        assert!(items2.iter().zip(&parse_index(&fs::read(store.join("r-1-1.pkg.btr")).unwrap()).unwrap().chunks).any(|((c, _), o)| c.stored != o.stored));
+        assert!(items2.iter().zip(&parse_index(&fs::read(store.join("r-1-1.btrpkg")).unwrap()).unwrap().chunks).any(|((c, _), o)| c.stored != o.stored));
         let b = store::publish(&ib2, items2, "r-1-2", &store, &parts, None, &store::raw_map(&parts)).unwrap();
         assert!(b.remapped > 0, "{b:?}");
         assert_eq!(b.new_chunks, 0, "{b:?}");
-        let i1 = parse_index(&fs::read(store.join("r-1-1.pkg.btr")).unwrap()).unwrap();
-        let i2 = parse_index(&fs::read(store.join("r-1-2.pkg.btr")).unwrap()).unwrap();
+        let i1 = parse_index(&fs::read(store.join("r-1-1.btrpkg")).unwrap()).unwrap();
+        let i2 = parse_index(&fs::read(store.join("r-1-2.btrpkg")).unwrap()).unwrap();
         assert_eq!(i1.chunks, i2.chunks);
         let c = t.0.join("c");
         fs::create_dir_all(&c).unwrap();
@@ -1504,16 +1557,16 @@ mod tests {
         check_tree(&t.0.join("root"), &s);
 
         // nothing kept on disk for this: the map comes from the indexes
-        assert!(!store.join("btrparts/.raw").exists());
+        assert!(!store.join("pkg/.raw").exists());
         // a damaged btrpart is not reused: the next build writes its own (and the index names it)
         let c0 = i1.chunks.iter().find(|c| c.compression != 0).unwrap();
         let h = hex(&c0.stored);
-        fs::write(store.join("btrparts").join(&h[..2]).join(&h), b"junk").unwrap();
+        fs::write(store.join("pkg").join(&h[..2]).join(&h), b"junk").unwrap();
         let src3 = make_pkg(&t.0, "r-1-3", &s);
         let (ib3, items3) = reframed(&src3);
         let p3 = store::publish(&ib3, items3, "r-1-3", &store, &parts, None, &store::raw_map(&parts)).unwrap();
         assert!(p3.new_chunks >= 1, "{p3:?}");
-        let i3 = parse_index(&fs::read(store.join("r-1-3.pkg.btr")).unwrap()).unwrap();
+        let i3 = parse_index(&fs::read(store.join("r-1-3.btrpkg")).unwrap()).unwrap();
         let c3 = i3.chunks.iter().find(|x| x.raw == c0.raw).unwrap();
         assert_ne!(c3.stored, c0.stored);
         pull_dir(&store, "r-1-3", &c.join("r3.pkg.btr"), &U).unwrap();

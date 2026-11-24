@@ -1,22 +1,22 @@
-From 6d17a7daa19265d45b9e44c6f611a8fbca1e37a6 Mon Sep 17 00:00:00 2001
+From b9abbd3956633c4ca35b2c93a26b104ccd71c316 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sat, 21 Nov 2026 22:34:02 +0200
-Subject: [PATCH 07/10] libalpm: btrpkg: btrparts where the database says
+Subject: [PATCH 07/12] libalpm: btrpkg: btrparts where the database says
  (btrpkg.parts)
 
 A repository can keep its btrparts outside its directory, shared by its
-architectures (omarchy/btrparts beside omarchy/x86_64 and
-omarchy/aarch64): the database's btrpkg.parts gives the path relative
-to the repository's URL (default btrparts, inside it). Downloads are
-grouped per repository and btrparts path; fetch-ids and the direct
-pull-ids get it as --parts. A value that isn't a plain relative path
-makes the package's btrpkg data unusable (plain package then).
+architectures (omarchy/pkg beside omarchy/x86_64 and omarchy/aarch64):
+the database's btrpkg.parts gives the path relative to the repository's
+URL (default pkg, inside it). Downloads are grouped per repository and
+btrparts path; fetch-ids and the direct pull-ids get it as --parts. A
+value that isn't a plain relative path makes the package's btrpkg data
+unusable (plain package then).
 ---
  lib/libalpm/sync.c | 49 ++++++++++++++++++++++++++++++++++++----------
  1 file changed, 39 insertions(+), 10 deletions(-)
 
 diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
-index caaed9c8..42ce30c3 100644
+index caaed9c8..e4587046 100644
 --- a/lib/libalpm/sync.c
 +++ b/lib/libalpm/sync.c
 @@ -97,6 +97,30 @@ static int btr_unhex32(const char *s, unsigned char out[32])
@@ -24,12 +24,12 @@ index caaed9c8..42ce30c3 100644
   * when a helper is configured and the cache directory is on btrfs (their data is shared with
   * the installed files by reflink). Everything else is downloaded as usual. */
 +/* Where a package's repository keeps its btrparts, relative to the repository's URL: the
-+ * database's btrpkg.parts (e.g. ../btrparts, shared by the architecture directories), else
-+ * btrparts inside it. */
++ * database's btrpkg.parts (e.g. ../pkg, shared by the architecture directories), else
++ * pkg inside it. */
 +static const char *btr_parts(alpm_pkg_t *pkg)
 +{
 +	const char *p = btr_xdata(pkg, "btrpkg.parts");
-+	return p ? p : "btrparts";
++	return p ? p : "pkg";
 +}
 +
 +/* A btrpkg.parts value the helpers take: relative, no URL, no query, nothing but printable

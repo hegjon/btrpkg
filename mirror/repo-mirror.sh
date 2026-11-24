@@ -27,7 +27,7 @@ KEY=${KEY:-$HOME/Work/btrpkg-repo/keys/btrpkg-test.sec}
 B=${B:-$here/../target/release/btrpkg}
 WANT=${WANT:-$here/wanted.txt}
 LOG=${LOG:-$HOME/Work/btrpkg-repo/access.log}      # caddy's JSON access log: 404s teach the wanted list
-PARTS=${PARTS:-../btrparts}   # btrparts directory, relative to M (btrpkg.parts in the database)
+PARTS=${PARTS:-../pkg}   # btrparts directory, relative to M (btrpkg.parts in the database)
 JOBS=${JOBS:-8}   # 8 measured best on the 32-core desktop (15.4 s for core; 16: 15.9 s)
 mkdir -p "$M"
 exec 9>"$M/.lock"

@@ -1,17 +1,17 @@
 //! `btrpkg gc`: remove old package versions from the repositories that share one btrparts
 //! directory, then the btrparts no kept index names.
 //!
-//! A btrparts directory can be shared (`omarchy/btrparts` by `omarchy/x86_64` and
-//! `omarchy/aarch64`; `arch/btrparts` by core and extra), so a btrpart can only go when no index
+//! A btrparts directory can be shared (`omarchy/pkg` by `omarchy/x86_64` and
+//! `omarchy/aarch64`; `arch/pkg` by core and extra), so a btrpart can only go when no index
 //! of ANY of those repositories names it. The repositories are found under the btrparts
-//! directory's parent (a directory with `*.pkg.btr` indexes and one REPO.db), every one of them
+//! directory's parent (a directory with `*.btrpkg` indexes and one REPO.db), every one of them
 //! takes part in the mark, and a repository whose database points its btrpkg entries somewhere
 //! else is marked but not pruned.
 //!
 //! Per package name in a repository, kept are: the version the database names (current), every
 //! version newer than it (published, database not swapped yet), and the `keep - 1` newest versions
 //! older than it (clients with an older database). A package the database no longer has keeps its
-//! `keep - 1` newest versions. A pruned version loses its index (`NAME.pkg.btr`), its `.sig` and `.src` and, in a
+//! `keep - 1` newest versions. A pruned version loses its index (`NAME.btrpkg`), its `.sig` and `.src` and, in a
 //! mirror, its `.pkg.tar.*` file and `.sig`. Then every btrpart in the directory that no kept index
 //! names goes.
 //!
@@ -51,7 +51,7 @@ struct Repo {
     prune: bool,
 }
 
-/// The repositories under `root` (depth ≤ 5): directories with `*.pkg.btr` indexes (and one
+/// The repositories under `root` (depth ≤ 5): directories with `*.btrpkg` indexes (and one
 /// non-dot `*.db`, checked by read_repo).
 pub(crate) fn find_repos(root: &Path, parts: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
     if depth > 5 || root == parts { return Ok(()); }
@@ -110,7 +110,7 @@ pub(crate) fn gc(parts: &Path, o: &GcOpts) -> Result<GcStats> {
     let root = parts.parent().context("btrparts directory has no parent")?;
     let mut dirs = Vec::new();
     find_repos(root, &parts, 0, &mut dirs)?;
-    ensure!(!dirs.is_empty(), "no repository (a directory with *.pkg.btr indexes) under {}", root.display());
+    ensure!(!dirs.is_empty(), "no repository (a directory with *.btrpkg indexes) under {}", root.display());
     // hold every repository's lock (a mirror run holds it while it publishes)
     let mut locks = Vec::new();
     for d in &dirs {
