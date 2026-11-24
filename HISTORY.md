@@ -4,6 +4,29 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## libzstd 1.6.0 against 1.5.7 (2026-11-24)
+
+1.6.0 (released 2026-11-23: security fixes incl. CVE-2026-124851, AArch64 decode work) and 1.5.7,
+both from the signed release tarballs (Arch's pinned key), built the same way (default `make`,
+static), one core, versions alternated, best of 3-9 rounds. Data from the mirror: btrparts as
+stored (38,514 on the desktop, the first 8,000 on aarch64), index entries and small-file blobs
+of all 1,978 mirror indexes, the 15,607 btrdb desc blobs with `desc-dict-v0`.
+
+| decode MB/s (1.5.7 -> 1.6.0) | desktop (Zen) | macmini-m1 (Firestorm) | galaxybook (Oryon) |
+|---|---:|---:|---:|
+| btrparts (level 12/19 frames) | 1466 -> 1479 | 1071 -> 1079 | 1118 -> 1126 |
+| index entries | 3518 -> 3501 | 2583 -> 2603 | 2681 -> 2715 |
+| index small-file blob | 2955 -> 2953 | 2296 -> 2298 | 2330 -> 2329 |
+| btrdb desc blobs (dictionary) | 934 -> 931 | 547 -> 549 | 586 -> 588 |
+
+Compression output is byte-identical on all three machines (same total and FNV hash for
+btrparts at 12 with btrpkg's frame parameters, entries and blob at 19 and 12, desc blobs with
+the dictionary at 19 and 12; the level-19 runs reproduce the bytes on the mirror exactly), and
+compression speed is within 2%. So 1.6.0 renames no btrpart and changes no index or blob, and
+gains nothing measurable for btrpkg (at most +1.3% decode on aarch64). The kernel's btrfs
+decoder is its own zstd copy and isn't affected. btrpkg links the system libzstd (Arch still
+1.5.7-3), so it picks up 1.6.0's fixes with Arch's update; nothing to pin.
+
 ## Repository layout version 0, and the btrdb prototype (2026-11-24)
 
 From a planning handover (Jonny's decisions): the thin index is `NAME.btrpkg`, btrparts live in
