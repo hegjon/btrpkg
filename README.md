@@ -23,11 +23,12 @@ Contents: [Repository layout](#repository-layout) · [File forms](#file-forms) �
 [Trust](#trust) · [Client: pacman-btrpkg](#client-pacman-btrpkg) ·
 [Upgrades: what gets downloaded](#upgrades-what-gets-downloaded) ·
 [Repository side](#repository-side) · [Commands](#commands) · [Packages and CI](#packages-and-ci) ·
-[Format](#format-version-1) · [Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps)
+[Format](#format-version-0) · [Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps)
 
 Other documents: `HISTORY.md` (lab notebook and measurements), `libalpm/README.md` (the pacman patches), `mirror/README.md` (the mirror),
 `packaging/README.md` (the packages), `zdb/README.md` (prototype: sync databases as zchunk
-files), `PLAN.md` (plans and status), `src/format.rs` (the format, in full).
+files), `btrdb/README.md` (prototype: thin sync databases), `PLAN.md` (plans and status),
+`src/format.rs` (the format, in full).
 
 ## Repository layout
 
@@ -35,24 +36,28 @@ One package (gliff 0.4.3-1, x86_64) on the mirror:
 
 ```
 omarchy-mirror/
+├── version                                        repository format version: "0\n"
 ├── x86_64/
 │   ├── omarchy.db                                 pacman database, btrpkg fields in %DATA%
 │   ├── gliff-0.4.3-1-x86_64.pkg.tar.zst (+ .sig)  the package file: stock pacman, fallback
 │   ├── gliff-0.4.3-1-x86_64.pkg.tar.zst.sha256sum "HASH  FILE": the package file this index came from
-│   └── gliff-0.4.3-1-x86_64.pkg.btr     (+ .sig)  the index (thin .pkg.btr), signify signature
+│   └── gliff-0.4.3-1-x86_64.btrpkg      (+ .sig)  the thin index, signify signature
 ├── aarch64/                                       the same layout
-└── btrparts/                                      shared by x86_64 and aarch64
+└── pkg/                                           btrparts, shared by x86_64 and aarch64 (NOCOMPRESS)
     └── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
 ```
+
+Format version 0 (index header and `version`) is unstable: it changes without a version bump
+while btrpkg is in development, and readers accept only their own version.
 
 The database entry keeps every stock field and adds:
 
 ```
 %DATA%
-btrpkg.index=gliff-0.4.3-1-x86_64.pkg.btr
-btrpkg.id=ef575023…48d2        SHA-256 of the index header (the package's ID)
+btrpkg.index=gliff-0.4.3-1-x86_64.btrpkg
+btrpkg.id=f9e6e793…db7f        SHA-256 of the index header (the package's ID)
 btrpkg.size=6169373            index + all btrparts: a full download (the .pkg.tar.zst is 6,591,746)
-btrpkg.parts=../btrparts       where the btrparts are, relative to the repository URL
+btrpkg.parts=../pkg            where the btrparts are, relative to the repository URL
 ```
 
 - Btrpart names stay stable when the compressed bytes change (another zstd version, or the old
@@ -61,10 +66,14 @@ btrpkg.parts=../btrparts       where the btrparts are, relative to the repositor
   repositories sharing the btrparts directory and reuses the btrpart already stored for that data,
   after checking it.
 - `btrpkg.parts` lets architectures (and Arch's `$repo/os/$arch` repositories, with
-  `../../../btrparts`) share one btrparts directory. Without the field it is `btrparts` inside the
+  `../../../pkg`) share one btrparts directory. Without the field it is `pkg` inside the
   repository (the ISO's offline repository).
-- A btrpkg repository must not be a pacman `CacheDir`: its thin `NAME.pkg.btr` files have the
-  names of cache files.
+- Publishing marks the btrparts directory NOCOMPRESS (btrparts are zstd frames already, or data
+  that didn't compress) and writes `version` beside it.
+- The thin index is `NAME.btrpkg`, the client's cache file `NAME.pkg.btr`: a thin index can't pass
+  for a cache file, and neither suffix clashes with pacman's `.pkg.tar.*`. Thin indexes are not
+  compressed as a whole: zstd would save 5.7% (all of it in the btrpart table), a trained
+  dictionary 0.1% more.
 
 ## File forms
 
@@ -73,13 +82,13 @@ length (the header records the index length and the image length):
 
 | form | where | layout | length |
 |---|---|---|---|
-| thin (index) | repository `NAME.pkg.btr`, its btrparts in `btrparts/xx/HASH` | header, btrpart table, entries, small-file blob | index length |
+| thin (index) | repository `NAME.btrpkg`, its btrparts in `pkg/xx/HASH` | header, btrpart table, entries, small-file blob | index length |
 | cache | pacman cache `NAME.pkg.btr` | index, zeros up to 4 KiB, then the image (each large file 4 KiB-aligned, as encoded extents) | `align(index) + image length` |
 
 `btrpkg convert` writes a package file straight into a repository (index and btrparts); `pull` and
 `pull-ids` make cache files from a repository. Reading an index parses only its first bytes, so a
 cache file works as an index too. Whatever needs a cache file checks the length: `open_cache()`/`cache_head()` in Rust (exact), libalpm's `read_index` (at
-least that long: "cache file shorter than its index says"). Details: "Format (version 1)" below
+least that long: "cache file shorter than its index says"). Details: "Format (version 0)" below
 and `src/format.rs`.
 
 ## Trust
@@ -88,7 +97,8 @@ and `src/format.rs`.
   the btrpart table, entries and blob, and the table holds each btrpart's stored-bytes hash and
   unencoded hash. Each section is checked before the next is read, each btrpart before it is
   written.
-- The index header is signed with signify (Ed25519; `NAME.pkg.btr.sig`). Keys: `/etc/btrpkg/keys`,
+- The index header is signed with signify (Ed25519; `NAME.btrpkg.sig`, kept as `NAME.pkg.btr.sig`
+  beside the cache file). Keys: `/etc/btrpkg/keys`,
   `/usr/share/btrpkg/keys`. pacman-btrpkg checks it as `SigLevel` asks and records
   `btrpkg-validation=signify:KEYFILE`; `%VALIDATION%` says `sha256`.
 - The mirror converts and signs a package only after its upstream OpenPGP signature (gpgv) and the
@@ -162,7 +172,7 @@ Every btrpart in the new index's table carries the SHA-256 of its uncompressed d
 2. The installed file at the same path: the index's entries say which file and offset each btrpart
    belongs to; the file must exist under the root and be long enough. If nothing is at that path,
    the old version's file it most likely moved from (see "Moved files" below).
-3. Otherwise: download `btrparts/xx/HASH` (named by its stored-bytes hash).
+3. Otherwise: download `pkg/xx/HASH` (named by its stored-bytes hash).
 
 Candidates from 1 and 2 are read back and hashed; only a match counts, so a locally changed or
 damaged file just means a download. Matches from cache files are reflinked into the new cache
@@ -256,7 +266,7 @@ back, against less to write).
   `repos.conf` every 10 minutes (systemd user timer): upstream database through pacoloco, the
   wanted packages (lists plus 404s learned from caddy's log), `repo-update`, then `btrpkg gc` per
   btrparts directory.
-- `btrpkg gc BTRPARTS`: in every repository sharing the directory, keeps each package's current
+- `btrpkg gc PARTS` (e.g. `omarchy-mirror/pkg`): in every repository sharing the directory, keeps each package's current
   version, anything newer and one older (`--keep 2`), removes the other indexes and package files,
   then the btrparts no kept index names. Nothing younger than an hour goes; mirror locks are held.
 
@@ -285,18 +295,18 @@ Trust options (`--id`, `--sig`, `--unverified`) and network options (`--http h1|
 - The pacman patches live on the `btrpkg` branch of `~/Work/pacman` and are exported to
   `libalpm/00*.patch`; the PKGBUILD applies all of them.
 
-## Format (version 1)
+## Format (version 0)
 
 The full description is at the top of `src/format.rs`; a worked example follows the tables. An
 index is header, btrpart table, entries and small-file blob, in that order.
 
 | part | contents |
 |---|---|
-| header (256 B) | `BTRPKG\0\0`, version 1, hash algorithm (1 = SHA-256), number of btrparts, image length, stored and uncompressed length of entries and blob, SHA-256 of the table, entries and blob, 64 reserved zero bytes, SHA-256 of the header (the package's ID, `btrpkg.id`; what the signature covers) |
+| header (256 B) | `BTRPKG\0\0`, version 0, hash algorithm (1 = SHA-256), number of btrparts, image length, stored and uncompressed length of entries and blob, SHA-256 of the table, entries and blob, 64 reserved zero bytes, SHA-256 of the header (the package's ID, `btrpkg.id`; what the signature covers) |
 | btrpart table | per btrpart 88 B: image offset, unencoded length (4 KiB multiple, ≤128 KiB), stored length, compression (0 raw, 2 zstd), SHA-256 of the stored bytes, SHA-256 of the unencoded bytes. In image order, no gaps |
 | entries | one zstd frame (level 19): kind, mode, uid, gid, mtime, size, data offset, small flag, path, link target, xattrs |
 | small-file blob | one zstd frame (level 19): the contents of all small files |
-| btrpart (repository `btrparts/xx/HASH`) | a zstd frame with window ≤128 KiB, no checksum, no dictionary ID; or raw data |
+| btrpart (repository `pkg/xx/HASH`) | a zstd frame with window ≤128 KiB, no checksum, no dictionary ID; or raw data |
 
 Reading checks each section before the next is read, so the btrpart table can be used (downloads
 started) before the rest arrives. Readers also check what `install` relies on: safe
@@ -317,12 +327,12 @@ Converter rules:
 
 ### Example: gliff 0.4.3-1 (x86_64)
 
-`btrpkg info` and `btrpkg dump` of the mirror's `gliff-0.4.3-1-x86_64.pkg.btr` (converted when
+`btrpkg info` and `btrpkg dump` of the mirror's `gliff-0.4.3-1-x86_64.btrpkg` (converted when
 btrparts were still level 19; at 12 its btrparts would take 6,637,445 B instead of 6,153,725):
 
 ```
 header        256 B   131 btrparts, image 16,588,800 B, entries 406 B (1,773), blob 3,458 B (6,100),
-                      hashes of table/entries/blob; header hash ef575023…48d2 = btrpkg.id, what .sig signs
+                      hashes of table/entries/blob; header hash f9e6e793…db7f = btrpkg.id, what .sig signs
 btrpart table 11,528 B  131 × 88 B, e.g.  offset 12288  unencoded 131072  stored 20014  zstd  c9550014…  3927f6b1…
 entries       406 B   25 entries: 13 files, 12 directories
 blob          3,458 B the 7 small files (6,100 B)
@@ -368,10 +378,10 @@ extents; its data is never decompressed, copied or written again.
 
 ## Tests
 
-- `cargo test`: 22 tests (format: bit flips and truncations rejected; convert/pull/install; reuse
+- `cargo test`: 23 tests (format: bit flips and truncations rejected; convert/pull/install; reuse
   from cache files, installed files and across compressor changes; repo-update; gc; HTTP Range).
   Two need btrfs and skip elsewhere.
-- libalpm: `meson test -C build pacman:btrpkg` (73 subtests on real and crafted indexes), pacman's
+- libalpm: `meson test -C build pacman:btrpkg` (74 subtests on real and crafted indexes), pacman's
   own suite.
 - On p14s: `bench/pacman-robust.sh` (sandbox roles, resume, dead and corrupt servers,
   DisableSandbox, fallbacks including the size rule, `-Sc`; 12 checks; each target is counted as
@@ -379,6 +389,8 @@ extents; its data is never decompressed, copied or written again.
   validation records; 16), `bench/plan-count.sh` (each btrpkg step runs once).
 - Clients: `bench/btrparts-client-check.sh` (throwaway dbpath download), `bench/scratch-root-compare.sh`
   (stock vs btrpkg into scratch roots, compared file by file).
+- btrdb prototype: `python3 btrdb/test_btrdb.py` (index rejection, publish + sync over HTTP,
+  tampered blob and index).
 
 ## Open decisions and known gaps
 

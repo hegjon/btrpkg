@@ -4,6 +4,50 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## Repository layout version 0, and the btrdb prototype (2026-11-24)
+
+From a planning handover (Jonny's decisions): the thin index is `NAME.btrpkg`, btrparts live in
+`pkg/`, a top-level `version` file, format version 0 while the format is unstable. Decided with
+Jonny along the way: thin indexes stay uncompressed, the cache file keeps `NAME.pkg.btr`, and the
+proposed `.btrdb` sync index is a prototype compared with zdb rather than the database clients use.
+
+- Code: `store::INDEX_EXT` `.btrpkg` beside `CACHE_EXT` `.pkg.btr`; default btrparts `pkg`
+  (`../pkg` in repo-update); `store::prepare_parts` marks the directory NOCOMPRESS and writes
+  `version`; `format::VERSION` 0. `btrpkg sign`/`verify` also take a `.btrdb` (signed whole).
+  libalpm patches 1, 7, 10, 11, 12 amended (pacman-btrpkg 13): `btrpkg.index` must be
+  `NAME.btrpkg`, the cache file is `NAME.pkg.btr`, the download directory holds `NAME.btrpkg`
+  (`btr_dl_index`). The first build missed that last point: two checks in libalpm still looked for
+  `NAME.pkg.btr` in the download directory, so every target fell back to its package file;
+  pacman-robust's fallback checks (7-9) failed and found it.
+- Migration in place, no reconversion: header version byte 1 -> 0, header hash recomputed,
+  re-signed, `NAME.pkg.btr` -> `NAME.btrpkg`, `btrparts/` -> `pkg/`; 2,036 indexes on the mirrors
+  and test repositories. Each database rewritten by repo-update with the mirror's own arguments:
+  `converted: 0` everywhere, every present package `unchanged`; on a reflinked copy first, the
+  databases differed from before only in `btrpkg.index`/`btrpkg.id`/`btrpkg.parts`, `gc --dry-run`
+  removed nothing (188 indexes, 90,192 btrparts), and a pull + install from the copy matched
+  bsdtar's tree.
+- Old clients (pacman-btrpkg 12) warn "unusable btrpkg data in the database" per package and
+  download the package files (checked on p14s before the upgrade).
+- p14s with pacman-btrpkg 13: pacman-robust 12/12, pacman-gaps-test (gliff) 16/16, plan-count
+  2/1/1/1; `btrparts-client-check.sh` of aether, gliff (`../pkg`) and zstd, less (`../../../pkg`)
+  from the live mirrors ok.
+
+zstd on thin indexes (train on half the packages by name hash, test on the other half, -19):
+963 indexes, 87.49 MB as stored; whole-file zstd 82.53 MB; with a 32 or 110 KiB dictionary
+82.44 MB. Per section: btrpart table 18.18 -> 13.30 MB (offsets, lengths and zero bytes, not just
+hashes), entries 4.14 -> 4.03 MB with a dictionary, small-file blob 64.92 MB (65.24 MB with a
+dictionary). So a dictionary gives nothing on thin indexes; the 5.7% would come from compressing
+the btrpart table alone. On btrdb blobs: desc 6.68 -> 4.41 MB with a 110 KiB dictionary (-34%),
+files lists 16.92 -> 16.65 MB.
+
+btrdb (`btrdb/`, README there): `REPO.btrdb` (header + name, version, arch, desc hash, files
+hash per package; zstd whole) and blobs in `db/xx/HASH` (zstd with a trained dictionary, named by
+the hash of the stored bytes). Arch extra: index 665,784 B, first sync 9,043,854 B (extra.db
+9,056,189 B). Between the 05:11 and 10:12 databases (19 updates): 675,839 B in 21 requests
+(index, sig, 19 blobs of 9,907 B in total) where zchunk's delta is 327,656 B (306,204 of it the
+zchunk header). The rebuilt databases match Arch's entry for entry. Published by mirror-all.sh
+beside zdb; the p14s trial syncs both at the same moments (`/var/log/btrdb-trial.tsv`).
+
 ## zchunk database prototype on t490 (2026-11-23)
 
 `zdb/` (README there): `zdb-publish.sh` republishes Arch's `core.db`/`extra.db` (from the

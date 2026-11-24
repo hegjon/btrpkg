@@ -9,11 +9,15 @@ Done since the iteration 3 plan (details in HISTORY.md):
 - Step 7, partly: `btrpkg gc` removes old versions and unreferenced btrparts on every mirror pass.
 - Fallback to the package file when no server has an index or a btrpkg download fails.
 - HTTP Range for raw btrparts (no trailing zeros sent).
-- The index is `NAME.pkg.btr` next to the package file (was `index/NAME.btridx`).
+- The index sits next to the package file (was `index/NAME.btridx`; since 2026-11-24 `NAME.btrpkg`).
 - A cleanup pass: five bugs fixed (double planning, hidden curl errors, gc on unreadable entries,
   mirror retries, the release db), duplicated code merged.
 - (2026-11-23) `pull` reuses files that moved since the installed version; libalpm patch 12 takes
   the package file when it is the smaller download (kernels), pacman-btrpkg 12.
+- (2026-11-24) Repository layout version 0: thin index `NAME.btrpkg` (cache file stays
+  `NAME.pkg.btr`), btrparts in `pkg/` (NOCOMPRESS), a `version` file, index format version 0
+  (unstable); live mirrors migrated in place; pacman-btrpkg 13. `btrdb/`: thin sync-database
+  prototype, compared with zdb in the p14s trial (until 2026-11-26 12:00).
 
 Open, waiting for a decision from Jonny:
 - Step 6, the unattended daily update on p14s.

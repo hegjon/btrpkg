@@ -57,8 +57,8 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
      `.PKGINFO` is dropped, so a package can't claim a check it didn't get.
 
 7. `libalpm: btrpkg: btrparts where the database says (btrpkg.parts)`: the helpers get `--parts`
-   from the database's `btrpkg.parts` (default `btrparts`), so several repositories can share one
-   btrparts directory (`../btrparts`, `../../../btrparts`). A value that isn't a plain relative
+   from the database's `btrpkg.parts` (default `pkg`), so several repositories can share one
+   btrparts directory (`../pkg`, `../../../pkg`). A value that isn't a plain relative
    path makes the package's btrpkg data unusable. Downloads are grouped per repository and
    btrparts path.
 
@@ -72,10 +72,11 @@ files. Apply with `git am` on that commit of https://gitlab.archlinux.org/pacman
    `_alpm_sync_prepare` (a second `fetch-ids --index-only` and `pull-ids --plan` per repository,
    hashing all reusable local data again).
 
-10. `libalpm: btrpkg: the index is NAME.pkg.btr next to the package file`: `btrpkg.index` must be
-    `NAME.pkg.btr` (no `/`), the repository's thin `.pkg.btr` beside `NAME.pkg.tar.zst`; the
-    cache file takes the same name and the same signature. The older `index/NAME.btridx` form is
-    unusable data, so such a database gets package files.
+10. `libalpm: btrpkg: the index is NAME.btrpkg next to the package file`: `btrpkg.index` must be
+    `NAME.btrpkg` (no `/`), the repository's thin index beside `NAME.pkg.tar.zst`; the cache file
+    made from it is `NAME.pkg.btr` with the same signature, and the download directory between
+    fetch-ids and pull-ids holds `NAME.btrpkg`. Any other form (`NAME.pkg.btr` of layouts before
+    version 0, `index/NAME.btridx`) is unusable data, so such a database gets package files.
 11. `makepkg: also convert the packages to btrpkg (installed as makebtrpkg)`: not libalpm; see
     `packaging/README.md` (makebtrpkg).
 12. `libalpm: btrpkg: the package file when it is the smaller download`: after `pull-ids --plan`,
@@ -103,7 +104,7 @@ Known gaps: libalpm changes the sync package's file name in place, which a long-
 client would see after the transaction; `-U` takes cache files (what `-Sw` and `btrpkg pull`
 leave); `-Sp` URLs are the repository's `.pkg.tar.*` ones, which a
 btrpkg-only server (the ISO's offline mirror) doesn't have; "already in the cache" checks only
-that `NAME.pkg.btr` exists, so a thin index in a CacheDir is caught later, by the length check
+that `NAME.pkg.btr` exists, so a damaged or short cache file is caught later, by the length check
 ("cache file shorter than its index says"), instead of being downloaded again.
 
 On p14s, after each release: `bench/pacman-gaps-test.sh NAME` (patch 6, 16 checks),

@@ -45,15 +45,15 @@ and `/etc/makepkg.conf`. It builds exactly like makepkg, the `.pkg.tar.zst` incl
 fallback, `%SHA256SUM%` and the OpenPGP `.sig` need it), then puts each package (split and debug
 packages too) into a btrpkg repository directory:
 
-    makebtrpkg                                  # PKGDEST gets NAME.pkg.btr and btrparts/ (btrpkg convert)
+    makebtrpkg                                  # PKGDEST gets NAME.btrpkg and pkg/ (btrpkg convert)
     BTRDEST=~/repo BTRREPO=local makebtrpkg -s  # ~/repo: repo-add, then btrpkg repo-update converts
-    BTRPKG_KEY=~/keys/me.sec makebtrpkg         # NAME.pkg.btr.sig (signify; btrpkg keygen)
+    BTRPKG_KEY=~/keys/me.sec makebtrpkg         # NAME.btrpkg.sig (signify; btrpkg keygen)
     makebtrpkg --nobtrpkg                       # plain makepkg
 
 | variable | default | |
 |---|---|---|
 | `BTRDEST` | `PKGDEST` | repository directory; package files and `.sig` are reflinked there when it differs |
-| `BTRPARTS` | `btrparts` | btrparts directory, relative to `BTRDEST` |
+| `BTRPARTS` | `pkg` | btrparts directory, relative to `BTRDEST` |
 | `BTRPKG_KEY` | unset | signify secret key for `NAME.pkg.btr.sig` |
 | `BTRREPO` | unset | `repo-add` to `BTRDEST/BTRREPO.db.tar.zst`, then `btrpkg repo-update --no-gpg` converts the packages and writes their btrpkg fields |
 

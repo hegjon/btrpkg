@@ -31,18 +31,23 @@ packages, resolved with `pacman -Sp` against an empty database); the aarch64 lis
 
 ```
 omarchy-mirror/
+├── version                                   repository format version, "0\n"
 ├── x86_64/
 │   ├── omarchy.db -> omarchy.db.tar.zst      upstream's database with btrpkg fields
 │   ├── NAME.pkg.tar.zst (+ .sig)             upstream's package file (stock pacman, fallback)
-│   ├── NAME.pkg.btr (+ .sig)                 the index, signed with the mirror's key
+│   ├── NAME.btrpkg (+ .sig)                  the thin index, signed with the mirror's key
 │   ├── NAME.pkg.tar.zst.sha256sum            "HASH  FILE": the package file the index was made from
 │   ├── .upstream.db, .done, .lock, .wanted-learned
 ├── aarch64/
-└── btrparts/xx/HASH                          shared by both architectures
+└── pkg/xx/HASH                               btrparts, shared by both architectures (NOCOMPRESS)
 ```
 
-Arch's repositories use `$repo/os/$arch` and share `arch-mirror/btrparts`
-(`btrpkg.parts=../../../btrparts`).
+Arch's repositories use `$repo/os/$arch` and share `arch-mirror/pkg`
+(`btrpkg.parts=../../../pkg`).
+
+After the repositories, `mirror-all.sh` publishes Arch's core and extra databases twice for the
+sync-database trial on p14s: as zchunk files (`zdb/`) and as thin `.btrdb` indexes with
+content-addressed desc blobs (`btrdb/`, into `~/Work/btrpkg-repo/btrdb/`; `NO_BTRDB=1` skips it).
 
 ## Each run
 
