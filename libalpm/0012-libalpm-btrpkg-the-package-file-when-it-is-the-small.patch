@@ -1,4 +1,4 @@
-From c4e48afa621987d80b960ebe9757f20ed824755b Mon Sep 17 00:00:00 2001
+From 0a465d40615a9e797bc244f4ab0c77d40b2dd91a Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Mon, 23 Nov 2026 13:32:54 +0200
 Subject: [PATCH 12/12] libalpm: btrpkg: the package file when it is the
@@ -31,7 +31,7 @@ index f2593512..993059d5 100644
  
  alpm_file_t *_alpm_file_copy(alpm_file_t *dest, const alpm_file_t *src);
 diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
-index 9d4fa046..a97727c8 100644
+index 77b108f7..bb480013 100644
 --- a/lib/libalpm/sync.c
 +++ b/lib/libalpm/sync.c
 @@ -136,7 +136,7 @@ static void btr_select(alpm_handle_t *handle, const char *cachedir)
@@ -43,7 +43,7 @@ index 9d4fa046..a97727c8 100644
  			continue;
  		}
  		index = btr_xdata(spkg, "btrpkg.index");
-@@ -637,8 +637,28 @@ static void btr_plan(alpm_handle_t *handle, const char *cachedir, alpm_list_t *t
+@@ -646,8 +646,28 @@ static void btr_plan(alpm_handle_t *handle, const char *cachedir, alpm_list_t *t
  			}
  			btr_argv_free(argv);
  		}
@@ -58,7 +58,7 @@ index 9d4fa046..a97727c8 100644
 +			_alpm_log(handle, ALPM_LOG_DEBUG, "btrpkg: %s would download %jd bytes as btrpkg, %jd as %s: using the package file\n",
 +					p->name, (intmax_t)p->btr_need, (intmax_t)p->size, p->btr_plain);
 +			/* its index isn't needed any more: no leftover in the download directory */
-+			if(snprintf(path, sizeof(path), "%s/%s", dir, p->filename) < (int)sizeof(path) - 4) {
++			if(btr_dl_index(path, sizeof(path), dir, p) == 0) {
 +				unlink(path);
 +				strcat(path, ".sig");
 +				unlink(path);

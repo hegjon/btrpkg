@@ -1,4 +1,4 @@
-From edba2faf18c64f8a7cffdf143c37495ad42023ab Mon Sep 17 00:00:00 2001
+From 0771782961ac0f5f12cbe3d15250333cb3b73f16 Mon Sep 17 00:00:00 2001
 From: Jonny Heggheim <hegjon@gmail.com>
 Date: Sun, 22 Nov 2026 13:14:17 +0200
 Subject: [PATCH 10/12] libalpm: btrpkg: the index is NAME.btrpkg next to the
@@ -12,11 +12,11 @@ NAME.pkg.btr; the different suffix keeps a repository's thin index from
 passing for a cache file. An entry in another form is unusable data: the
 package file is downloaded instead.
 ---
- lib/libalpm/sync.c | 24 ++++++++++++------------
- 1 file changed, 12 insertions(+), 12 deletions(-)
+ lib/libalpm/sync.c | 33 +++++++++++++++++++++------------
+ 1 file changed, 21 insertions(+), 12 deletions(-)
 
 diff --git a/lib/libalpm/sync.c b/lib/libalpm/sync.c
-index f09c1105..9d4fa046 100644
+index f09c1105..77b108f7 100644
 --- a/lib/libalpm/sync.c
 +++ b/lib/libalpm/sync.c
 @@ -94,9 +94,6 @@ static int btr_unhex32(const char *s, unsigned char out[32])
@@ -73,13 +73,27 @@ index f09c1105..9d4fa046 100644
  		strcpy(fn + len - 7, ".pkg.btr");
  		FREE(spkg->btr_plain);
  		spkg->btr_plain = spkg->filename;
-@@ -195,8 +196,7 @@ static int btr_have_index(const char *dir, alpm_pkg_t *p)
+@@ -190,13 +191,21 @@ static void btr_unselect(alpm_pkg_t *p)
+ 	compute_download_size(p);
+ }
+ 
++/* The path of `p`'s index in a download directory: DIR/NAME.btrpkg, where p->filename is the
++ * cache file NAME.pkg.btr. 0 if it fits in `size` bytes (with room for ".sig"). */
++static int btr_dl_index(char *path, size_t size, const char *dir, alpm_pkg_t *p)
++{
++	size_t fl = strlen(p->filename) - 8; /* without .pkg.btr */
++	int n = snprintf(path, size, "%s/%.*s.btrpkg", dir, (int)fl, p->filename);
++	return n < 0 || (size_t)n >= size - 4 ? -1 : 0;
++}
++
+ /* Whether fetch-ids put the (checked) index of `p` into DIR. */
+ static int btr_have_index(const char *dir, alpm_pkg_t *p)
  {
  	char path[PATH_MAX];
  	struct stat st;
 -	size_t fl = strlen(p->filename) - 8; /* without .pkg.btr */
 -	if(snprintf(path, sizeof(path), "%s/index/%.*s.btridx", dir, (int)fl, p->filename) >= (int)sizeof(path)) {
-+	if(snprintf(path, sizeof(path), "%s/%s", dir, p->filename) >= (int)sizeof(path)) {
++	if(btr_dl_index(path, sizeof(path), dir, p) != 0) {
  		return 0;
  	}
  	return lstat(path, &st) == 0 && S_ISREG(st.st_mode);
