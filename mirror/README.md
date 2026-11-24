@@ -45,9 +45,10 @@ omarchy-mirror/
 Arch's repositories use `$repo/os/$arch` and share `arch-mirror/pkg`
 (`btrpkg.parts=../../../pkg`).
 
-After the repositories, `mirror-all.sh` publishes Arch's core and extra databases twice for the
-sync-database trial on p14s: as zchunk files (`zdb/`) and as thin `.btrdb` indexes with
-content-addressed desc blobs (`btrdb/`, into `~/Work/btrpkg-repo/btrdb/`; `NO_BTRDB=1` skips it).
+After the repositories, `mirror-all.sh` publishes Arch's core and extra databases as thin
+`.btrdb` indexes with content-addressed desc blobs for the sync-database trial on p14s (`btrdb/`,
+into `~/Work/btrpkg-repo/btrdb/`, upstream's dbs fetched into its hidden `.upstream/`;
+`NO_BTRDB=1` skips it).
 
 ## Each run
 

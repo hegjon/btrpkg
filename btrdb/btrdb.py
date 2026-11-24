@@ -3,8 +3,8 @@
 
 A repository database is published as one small index, REPO.btrdb, that names each package's
 `desc` (and `files`) entry by the SHA-256 of a separately stored blob, db/xx/HASH. A client
-downloads the index whole on every sync and only the blobs it doesn't have yet, then rebuilds
-the REPO.db tar pacman reads.
+downloads a patch of its last index (or the whole index) on every change and only the blobs it
+doesn't have yet, then rebuilds the REPO.db tar pacman reads.
 
 Layout (beside the btrpkg layout: architecture directories, shared content-addressed stores):
   ROOT/version                  "0\\n"
@@ -280,7 +280,7 @@ def publish(root, arch, repo, dbpath, filespath=None, key=None, btrpkg="btrpkg",
         subprocess.run([btrpkg, "sign", "--key", key, tmp], check=True, stdout=subprocess.DEVNULL)
         os.utime(tmp + ".sig", (ts, ts))
         os.replace(tmp + ".sig", idxp + ".sig")
-    os.utime(tmp, (ts, ts))  # Last-Modified = the source database's, as zdb does
+    os.utime(tmp, (ts, ts))  # Last-Modified = the source database's
     os.replace(tmp, idxp)
     pold = os.path.join(ad, f".{repo}.btrdb.patch.old")
     shutil.rmtree(pold, ignore_errors=True)

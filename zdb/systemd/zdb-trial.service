@@ -1,9 +1,0 @@
-[Unit]
-Description=zchunk sync-database trial (btrpkg zdb/; scratch copies only)
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/opt/zdb/zdb-trial.sh
-Nice=10
-IOSchedulingClass=idle

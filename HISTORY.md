@@ -4,6 +4,21 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## zchunk dropped from the database trial (2026-11-24)
+
+With index patches an hourly btrdb sync of extra took 3 to 44 KB on p14s (the patch plus the
+changed packages' desc blobs) where zchunk took about 315 KB (its 306 KB header on every sync), so zchunk is no longer pursued: `zdb/` is removed from
+the tree (git history has it), the mirror no longer publishes `.zck` files, and the p14s trial
+runs btrdb alone (`btrdb/trial/`, `btrdb-trial.timer`, same `/var/log/btrdb-trial.tsv`, until
+2026-11-26 12:00). The mirror now fetches Arch's dbs for btrdb itself (into
+`~/Work/btrpkg-repo/btrdb/.upstream/`).
+
+zchunk's own trial log (2026-11-23 15:25 to 2026-11-24 15:30, p14s) is in
+`bench/results/zdb-trial-20261124.tsv`: 19 hourly syncs of a changed extra took 307,098 to
+367,545 bytes (median 314,168; 6.1 MB in total where `pacman -Sy` took 154 MB), every rebuilt db
+matched Arch's, and a day-old copy took 594,736 bytes. The comparison btrdb measured against it
+(whole index, patches, clients days behind) is in the "btrdb index patches" entry below.
+
 ## btrdb index patches (2026-11-24)
 
 Every btrdb sync downloaded the whole index (666 KB for extra), twice what zchunk's delta took

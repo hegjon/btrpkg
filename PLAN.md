@@ -17,7 +17,7 @@ Done since the iteration 3 plan (details in HISTORY.md):
 - (2026-11-24) Repository layout version 0: thin index `NAME.btrpkg` (cache file stays
   `NAME.pkg.btr`), btrparts in `pkg/` (NOCOMPRESS), a `version` file, index format version 0
   (unstable); live mirrors migrated in place; pacman-btrpkg 13. `btrdb/`: thin sync-database
-  prototype, compared with zdb in the p14s trial (until 2026-11-26 12:00).
+  prototype with index patches, in a p14s trial until 2026-11-26 12:00 (zchunk dropped).
 
 Open, waiting for a decision from Jonny:
 - Step 6, the unattended daily update on p14s.
