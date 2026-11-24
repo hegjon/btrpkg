@@ -13,7 +13,7 @@ Repositories keep the plain `.pkg.tar.zst` beside the btrpkg data: stock pacman 
 database and ignores the btrpkg fields, and pacman-btrpkg falls back to the package file whenever
 the btrpkg path can't be used or would download more.
 
-**Status (2026-11-22): lab trial.** A mirror on the desktop serves Omarchy's edge repository and
+**Status (2026-11-24): lab trial.** A mirror on the desktop serves Omarchy's edge repository and
 Arch's core/extra for x86_64, and Omarchy, ALARM and asahi-alarm for aarch64, at
 `http://192.168.2.2:1764/`. Five lab machines (p14s, x200, t460s, t490, macmini-m1) run
 pacman-btrpkg from the `[btrpkg]` CI repository. Signing uses a test key, and the CI packages are
@@ -22,13 +22,12 @@ unsigned. How it got here, with all measurements: `HISTORY.md` (the lab notebook
 Contents: [Repository layout](#repository-layout) · [File forms](#file-forms) ·
 [Trust](#trust) · [Client: pacman-btrpkg](#client-pacman-btrpkg) ·
 [Upgrades: what gets downloaded](#upgrades-what-gets-downloaded) ·
-[Repository side](#repository-side) · [Commands](#commands) · [Packages and CI](#packages-and-ci) ·
+[Sync database: btrdb](#sync-database-btrdb) · [Repository side](#repository-side) · [Commands](#commands) · [Packages and CI](#packages-and-ci) ·
 [Format](#format-version-0) · [Tests](#tests) · [Open decisions and known gaps](#open-decisions-and-known-gaps)
 
 Other documents: `HISTORY.md` (lab notebook and measurements), `libalpm/README.md` (the pacman patches), `mirror/README.md` (the mirror),
-`packaging/README.md` (the packages), `zdb/README.md` (prototype: sync databases as zchunk
-files), `btrdb/README.md` (prototype: thin sync databases), `PLAN.md` (plans and status),
-`src/format.rs` (the format, in full).
+`packaging/README.md` (the packages), `btrdb/README.md` (the sync database prototype),
+`PLAN.md` (plans and status), `src/format.rs` (the format, in full).
 
 ## Repository layout
 
@@ -252,6 +251,66 @@ per-build key, so most of a kernel package changes anyway, and linux-omarchy its
 download as its package file (see the size rule under "Client"). The whole pull from a local directory
 took between 0.1 s less and 0.3 s more (stat of the old version's files and reading the moved data
 back, against less to write).
+
+## Sync database: btrdb
+
+`pacman -Sy` downloads a changed database whole: Arch's `extra.db` is 9 MB and changes about once
+an hour. btrdb (prototype, `btrdb/`) publishes the same database as a thin index that names each
+package's `desc` entry by the hash of a blob stored once, and a client that synced before
+downloads only a patch of the index and the blobs of the packages that changed. The client
+rebuilds the plain `REPO.db` pacman reads, identical to upstream's.
+
+```
+btrdb/                                      (beside the btrpkg repositories; Arch core + extra)
+├── version                                 "0\n"
+├── x86_64/
+│   ├── extra.btrdb                         the index, zstd (666 KB for 15,303 packages)
+│   ├── extra.btrdb.sig                     signify signature over the decompressed index
+│   ├── extra.btrdb.patch/<sha256 of old>   the current index as a zstd patch against each older one
+│   └── extra.btrdb.history/<timestamp>     those older indexes, 7 days of them
+└── db/xx/HASH                              desc blobs: zstd 19 with a trained dictionary, named by
+                                            the SHA-256 of the stored bytes (NOCOMPRESS)
+```
+
+The index (version 0, little endian, zstd-compressed whole):
+
+| part | contents |
+|---|---|
+| header (24 B) | `BTRDB\0\0\0`, version u16 = 0, flags u16 = 0, package count u32, timestamp u64 (the source database's) |
+| entry | name, version, arch (each a u8 length and the bytes), SHA-256 of the desc blob, SHA-256 of the files blob (zeros: none) |
+
+- Entries are sorted by name; readers reject anything unsorted, truncated or trailing, unsafe
+  names and a missing desc.
+- The dictionaries (`btrdb/dicts/desc-dict-v0.zst`, `files-dict-v0.zst`) belong to the format
+  version and ship with the client: a new dictionary changes every blob. The desc dictionary
+  makes the blobs 34% smaller; the files one gains 1.6%.
+- A sync: the signature with `If-Modified-Since` (unchanged: one 304, 0 bytes); the patch for the
+  client's index, applied and checked against the signature; without one (no index yet, older
+  than 7 days, or a publish in between) the whole index; then the missing blobs, each checked
+  against its hash.
+- Publishing: blobs, then a patch from every index of the last 7 days (zstd 12, about 9 ms each),
+  signature, index. The mirror timer publishes Arch's core and extra this way.
+
+What a sync of Arch's extra downloads (bytes):
+
+| | btrdb | `pacman -Sy` |
+|---|---:|---:|
+| unchanged | 0 | 0 |
+| one hour of changes (p14s, 14:30) | 3,017 (8 requests) | 9,056,280 |
+| one hour of changes (p14s, 15:42) | 44,050 (76 requests) | 9,038,241 |
+| 6 updates, 10:12 -> 13:07 (p14s) | 4,886 (signature 148, patch 370, 6 blobs) | 9,056,189 |
+| 1 day behind (283 packages changed) | 150,422 | 9,056,280 |
+| 7 days behind (1,674) | 1,000,013 | 9,056,280 |
+| 31 days behind, whole index (5,738) | 3,914,025 | 9,056,280 |
+| first sync | 9,043,854 | 9,056,189 |
+
+Without the patch every sync would take the whole index too (another 666 KB). The days-behind
+rows are Arch's archived snapshots against the index of 2026-11-24 13:07. On p14s a trial syncs
+two copies hourly and daily (`/var/log/btrdb-trial.tsv`, until 2026-11-26) and checks each
+rebuilt `extra.db` against Arch's.
+
+Not built: pacman reading the index directly (the client writes the tar pacman reads), the
+`.files` databases in the trial, btrdb for the btrpkg repositories' own databases.
 
 ## Repository side
 
