@@ -15,9 +15,10 @@ btrdb/                          (~/Work/btrpkg-repo/btrdb, served at :1764/btrdb
 │   ├── core.btrdb, extra.btrdb the index, zstd-compressed whole; Last-Modified = upstream's db
 │   ├── *.btrdb.sig             signify signature over the decompressed index (btrpkg sign / verify);
 │   │                           Last-Modified = upstream's db: the client's change marker
-│   ├── extra.btrdb.patch/H     the current index as a patch against an older one, H = SHA-256 of
-│   │                           that older decompressed index; one per index of the last 7 days
-│   └── extra.btrdb.<ts>        those older indexes (at least 3), for making the patches
+│   └── extra.btrdb.patch/H     the current index as a patch against an older one, H = SHA-256 of
+│                               that older decompressed index; one per index of the last 7 days
+├── .history/x86_64/extra.btrdb.<ts>   those older indexes (at least 3), the publisher's only
+│                               (caddy hides dot paths)
 └── db/                         desc/files blobs, NOCOMPRESS
     └── 12/1234abcd…            zstd with the format's dictionary; named by the SHA-256 of
                                 the stored (compressed) bytes

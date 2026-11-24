@@ -149,6 +149,9 @@ class PublishSync(unittest.TestCase):
         self.cache, cur = old_cache, self.cache
         self.assertEqual(self.out()[4], "patch")
         self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db4))
+        # old indexes are the publisher's, outside the served architecture directory
+        self.assertEqual(sorted(os.listdir(os.path.join(self.srv, "x86_64"))), ["r.btrdb", "r.btrdb.patch", "r.btrdb.sig"])
+        self.assertEqual(len(os.listdir(os.path.join(self.srv, ".history", "x86_64"))), 3)
         # a damaged patch: falls back to the whole index
         self.cache = cur
         h = btrdb.sha(btrdb.index_raw(open(os.path.join(cur, ".r.btrdb"), "rb").read())).hex()

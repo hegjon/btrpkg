@@ -13,6 +13,7 @@ Layout (beside the btrpkg layout: architecture directories, shared content-addre
   ROOT/ARCH/REPO.btrdb.patch/H  the current index as a zstd patch (--patch-from) against an
                                 older one, H = SHA-256 of that older decompressed index; for
                                 every index of the last 7 days (at least 3), zstd level 12
+  ROOT/.history/ARCH/REPO.btrdb.TS  those older indexes, for the publisher only (not served)
   ROOT/db/xx/HASH               a desc or files blob: zstd with the version's dictionary;
                                 HASH = SHA-256 of the stored (compressed) bytes. NOCOMPRESS.
 
@@ -251,21 +252,23 @@ def publish(root, arch, repo, dbpath, filespath=None, key=None, btrpkg="btrpkg",
     raw = encode(entries, ts)
     stored = zstd.compress(raw, level=19)
     read_index(stored)  # what clients will check
-    # blobs first; then patches, signature and index; the previous index stays as REPO.btrdb.<ts>
+    # blobs first; then patches, signature and index; the previous index goes to .history/ARCH
+    ad = os.path.join(root, arch)
+    hd = os.path.join(root, ".history", arch)
+    os.makedirs(ad, exist_ok=True)
+    os.makedirs(hd, exist_ok=True)
     if os.path.exists(idxp):
         with open(idxp, "rb") as f:
             old = f.read()
-        os.replace(idxp, f"{idxp}.{read_index(old)[0]}")
-    ad = os.path.join(root, arch)
-    os.makedirs(ad, exist_ok=True)
-    prune(ad, repo, keep, keep_hours, ts)
+        os.replace(idxp, os.path.join(hd, f"{repo}.btrdb.{read_index(old)[0]}"))
+    prune(hd, repo, keep, keep_hours, ts)
     pdir, pnew = f"{idxp}.patch", os.path.join(ad, f".{repo}.btrdb.patch.new")
     shutil.rmtree(pnew, ignore_errors=True)
     os.makedirs(pnew)
     psizes = []
-    for f in os.listdir(ad):
+    for f in os.listdir(hd):
         if f.startswith(f"{repo}.btrdb.") and f.rsplit(".", 1)[1].isdigit():
-            with open(os.path.join(ad, f), "rb") as fh:
+            with open(os.path.join(hd, f), "rb") as fh:
                 o = index_raw(fh.read())
             pb = make_patch(o, raw)
             with open(os.path.join(pnew, sha(o).hex()), "wb") as fh:
@@ -300,12 +303,15 @@ def prune(d, repo, keep, keep_hours, now_ts):
 
 
 def gc_blobs(root):
-    """Remove blobs no index (current or kept) of any repository under root names; only those
-    older than an hour (a publish writes its blobs before its index)."""
+    """Remove blobs no index (current, or old in .history) of any repository under root names;
+    only those older than an hour (a publish writes its blobs before its index)."""
     live = set()
-    for a in os.listdir(root):
-        ad = os.path.join(root, a)
-        if a in ("db",) or not os.path.isdir(ad):
+    dirs = [os.path.join(root, a) for a in os.listdir(root) if a not in ("db", ".history")]
+    hroot = os.path.join(root, ".history")
+    if os.path.isdir(hroot):
+        dirs += [os.path.join(hroot, a) for a in os.listdir(hroot)]
+    for ad in dirs:
+        if not os.path.isdir(ad):
             continue
         for f in os.listdir(ad):
             if ".btrdb" in f and not f.endswith(".sig") and not f.startswith(".") and os.path.isfile(os.path.join(ad, f)):
