@@ -7,14 +7,14 @@ directory. Served by caddy at `http://192.168.2.2:1764/` from `~/Work/btrpkg-rep
 
 | repo | arch | path | wanted | btrparts |
 |---|---|---|---|---|
-| omarchy | x86_64 | `omarchy-mirror/x86_64` | `wanted.txt` (58) | `omarchy-mirror/btrparts` |
-| omarchy | aarch64 | `omarchy-mirror/aarch64` | `omarchy-aarch64.wanted` (96) | `omarchy-mirror/btrparts` |
-| core | x86_64 | `arch-mirror/core/os/x86_64` | `core.wanted` (201) | `arch-mirror/btrparts` |
-| extra | x86_64 | `arch-mirror/extra/os/x86_64` | `extra.wanted` (627) | `arch-mirror/btrparts` |
-| core | aarch64 (ALARM) | `arch-mirror/core/os/aarch64` | `core-aarch64.wanted` (204) | `arch-mirror/btrparts` |
-| extra | aarch64 (ALARM) | `arch-mirror/extra/os/aarch64` | `extra-aarch64.wanted` (715) | `arch-mirror/btrparts` |
-| alarm | aarch64 | `arch-mirror/alarm/os/aarch64` | `alarm.wanted` (1) | `arch-mirror/btrparts` |
-| asahi-alarm | aarch64 | `arch-mirror/asahi-alarm/os/aarch64` | `asahi-alarm.wanted` (9) | `arch-mirror/btrparts` |
+| omarchy | x86_64 | `omarchy-mirror/x86_64` | `wanted.txt` (58) | `omarchy-mirror/pkg` |
+| omarchy | aarch64 | `omarchy-mirror/aarch64` | `omarchy-aarch64.wanted` (96) | `omarchy-mirror/pkg` |
+| core | x86_64 | `arch-mirror/core/os/x86_64` | `core.wanted` (201) | `arch-mirror/pkg` |
+| extra | x86_64 | `arch-mirror/extra/os/x86_64` | `extra.wanted` (627) | `arch-mirror/pkg` |
+| core | aarch64 (ALARM) | `arch-mirror/core/os/aarch64` | `core-aarch64.wanted` (204) | `arch-mirror/pkg` |
+| extra | aarch64 (ALARM) | `arch-mirror/extra/os/aarch64` | `extra-aarch64.wanted` (715) | `arch-mirror/pkg` |
+| alarm | aarch64 | `arch-mirror/alarm/os/aarch64` | `alarm.wanted` (1) | `arch-mirror/pkg` |
+| asahi-alarm | aarch64 | `arch-mirror/asahi-alarm/os/aarch64` | `asahi-alarm.wanted` (9) | `arch-mirror/pkg` |
 
 Client URLs: `http://192.168.2.2:1764/omarchy-mirror/$arch` and
 `http://192.168.2.2:1764/arch-mirror/$repo/os/$arch`. asahi-alarm comes straight from its GitHub
@@ -81,6 +81,55 @@ first and upstream after it:
 The mirror also learns from misses: each package whose `.pkg.tar.*` a client asked the mirror for
 and got a 404 goes into `.wanted-learned` (read from caddy's access log), and the next run converts
 it. A file the mirror stores but didn't convert is served plain and not learned.
+
+## Copying a mirror elsewhere (rsync, rclone)
+
+A client only fetches what the database names, so a copy (another host, R2/S3) stays usable at
+every moment if the database arrives last and nothing it names is deleted before it is replaced.
+Copy in four passes, each only if the one before succeeded:
+
+1. `pkg/`, adding only. A btrpart's name is the hash of its content, so a file that is already
+   there is right: no checksums, never overwrite. When several repositories share one `pkg/`
+   (`arch-mirror`), this pass runs once, before any of their databases.
+2. The architecture directories without databases: package files and `.sig`, `NAME.btrpkg` and
+   `.sig`, `.sha256sum`. Their names carry the version, so they are added, never changed. The
+   package files must be there before the database too: stock pacman and the fallback fetch them.
+3. The databases (`REPO.db.tar.zst` and the `REPO.db` symlink) and `version`.
+4. Deletions, in the architecture directories first, then in `pkg/`. Nothing the new database
+   names is gone at the source (`gc` keeps the current version), and `gc --keep 2` with its hour of
+   minimum age keeps the previous version for a client that fetched the old database just before
+   pass 3. A copy updated much less often than the source can still drop files such a client asks
+   for; it then gets a 404 and falls back to the next `Server`.
+
+Dotfiles (`.lock`, `.done`, `.upstream.db`, `.keyring.gpg`, `.wanted-learned`) stay behind.
+
+```sh
+S=~/Work/btrpkg-repo/omarchy-mirror  D=host:/srv/omarchy-mirror    # no trailing /
+db=(--exclude='*.db' --exclude='*.db.tar.*' --exclude='*.files' --exclude='*.files.tar.*')
+set -e
+rsync -a --mkpath --ignore-existing "$S/pkg/" "$D/pkg/"
+rsync -a --ignore-existing --exclude='.*' --exclude=/pkg/ --exclude=/version "${db[@]}" "$S/" "$D/"
+rsync -a --delay-updates --exclude='.*' --exclude=/pkg/ "$S/" "$D/"
+rsync -a --delete --exclude='.*' --exclude=/pkg/ "$S/" "$D/"
+rsync -a --delete "$S/pkg/" "$D/pkg/"
+```
+
+With rclone (`D=r2:bucket/omarchy-mirror`): `copy --ignore-existing` of `pkg/` (pass 1) and of the
+tree with `--exclude '.*' --exclude '/pkg/**' --exclude /version` and the database patterns (pass
+2), `copy
+--copy-links` for pass 3 and `sync --copy-links` for pass 4 (both `--exclude '.*' --exclude
+'/pkg/**'`), then `sync` of `pkg/` on its own. Object storage has no symlinks:
+`--copy-links` uploads `REPO.db` as a copy of its target, and pass 4 needs it too, or `sync`
+deletes `REPO.db` as missing at the source. Both sets of commands were checked on a small tree
+with this layout (rsync 3.5.2, rclone in its docker image): each pass copied exactly its files,
+pass 4 deleted only the removed ones, and no dotfile was copied.
+
+Everything from passes 1 and 2 can be served with `Cache-Control: immutable` and a long lifetime;
+only the databases and `version` change, so a CDN must keep those short, or it serves an old
+database next to new btrparts (or the other way round).
+
+Object counts for R2/S3, 2026-11-24: `arch-mirror/pkg` 167,300 files (5.9 GB),
+`omarchy-mirror/pkg` 88,966 (3.2 GB).
 
 ## Services and maintenance
 

@@ -328,6 +328,8 @@ Not built: pacman reading the index directly (the client writes the tar pacman r
 - `btrpkg gc PARTS` (e.g. `omarchy-mirror/pkg`): in every repository sharing the directory, keeps each package's current
   version, anything newer and one older (`--keep 2`), removes the other indexes and package files,
   then the btrparts no kept index names. Nothing younger than an hour goes; mirror locks are held.
+- Copying a repository (rsync, rclone, R2/S3): `pkg/` first, then indexes and package files, the
+  database last, deletions after it; commands in `mirror/README.md`.
 
 ## Commands
 
