@@ -46,9 +46,6 @@ omarchy-mirror/
     └── 98/989335ddfc1e…                           a btrpart, named by the SHA-256 of its stored bytes
 ```
 
-Format version 0 (index header and `version`) is unstable: it changes without a version bump
-while btrpkg is in development, and readers accept only their own version.
-
 The database entry keeps every stock field and adds:
 
 ```
