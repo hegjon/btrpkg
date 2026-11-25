@@ -56,6 +56,7 @@ The database entry keeps every stock field and adds:
 btrpkg.index=gliff-0.4.3-1-x86_64.btrpkg
 btrpkg.id=f9e6e793…db7f        SHA-256 of the index header (the package's ID)
 btrpkg.size=6169373            index + all btrparts: a full download (the .pkg.tar.zst is 6,591,746)
+btrpkg.parts=../pkg            where the btrparts are, relative to the repository URL
 ```
 
 - Btrpart names stay stable when the compressed bytes change (another zstd version, or the old
