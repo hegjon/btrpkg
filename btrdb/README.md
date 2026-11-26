@@ -4,9 +4,9 @@
 btrdb publishes the same database as one small index, `REPO.btrdb`, that names each package's
 `desc` (and `files`) entry by the SHA-256 of a blob stored once in a content-addressed `db/`
 directory. A client downloads the index on every change and only the blobs it doesn't have, then
-rebuilds the `REPO.db` tar pacman reads. A client that has an older index downloads only an
-index patch: the new index as a zstd frame that uses its old index as the prefix
-(`zstd --patch-from`), a few hundred bytes.
+rebuilds the `REPO.db` tar pacman reads. A client that has an older index downloads one file
+instead: an index patch (the new index as a zstd frame that uses its old index as the prefix,
+`zstd --patch-from`, a few hundred bytes) followed by the desc blobs its old index lacks.
 
 ```
 btrdb/                          (~/Work/btrpkg-repo/btrdb, served at :1764/btrdb/)
@@ -15,8 +15,10 @@ btrdb/                          (~/Work/btrpkg-repo/btrdb, served at :1764/btrdb
 │   ├── core.btrdb, extra.btrdb the index, zstd-compressed whole; Last-Modified = upstream's db
 │   ├── *.btrdb.sig             signify signature over the decompressed index (btrpkg sign / verify);
 │   │                           Last-Modified = upstream's db: the client's change marker
-│   ├── extra.btrdb.patch/H     the current index as a patch against an older one, H = SHA-256 of
-│   │                           that older decompressed index; one per index of the last 7 days
+│   ├── extra.btrdb.patch/H     for an older index, H = SHA-256 of it decompressed: the current
+│   │                           index as a patch against it, then the desc blobs the current index
+│   │                           names and it doesn't (their stored zstd frames, in index order);
+│   │                           one per index of the last 7 days
 │   └── extra.btrdb.history/TS  those older indexes (at least 3), TS = their timestamp
 └── db/                         desc/files blobs, NOCOMPRESS
     └── 12/1234abcd…            zstd with the format's dictionary; named by the SHA-256 of
@@ -36,20 +38,22 @@ trained on Arch's core + extra of 2026-11-24) belong to the format version and s
 client: a new dictionary changes every blob, so it needs a new version.
 
 - `btrdb.py publish ROOT ARCH REPO REPO.db [--files REPO.files] [--key SEC] [--keep-hours H]`:
-  blobs first, then a patch from every kept older index (7 days by default; zstd 12, about 9 ms
-  each for extra),
-  signature, index, and the new patch directory in place of the old; blobs no kept index names go
-  after an hour. `mirror/mirror-all.sh` runs it every 10 minutes for Arch's core and extra,
-  after a conditional GET of each `REPO.db` from the desktop's pacoloco into `.upstream/`
-  (hidden by caddy).
-- `btrdb.py sync URL SYNCDIR REPO [--files] [--measure-full]`: conditional GET of `REPO.btrdb.sig`
-  (304: nothing to do); with an older index, `REPO.btrdb.patch/HASH` applied to it; otherwise (no
-  index, no patch for it, or a result that fails the signature, e.g. a publish in between) the
-  whole index. `btrpkg verify` on the result, then the missing blobs (8 parallel HTTP/1.1
-  connections, each checked against its hash), kept in `SYNCDIR/btrdb.sqlite`; writes `REPO.db`
-  (and `REPO.files`: desc + files) as a plain tar stamped with the index's timestamp, and keeps
-  the decompressed index as `.REPO.btrdb`. Prints `REPO BYTES REQUESTS SECONDS patch|full|unchanged
-  FULL_BYTES` (`--measure-full`: what the sync would have taken with the whole index).
+  blobs first, then for every kept older index (7 days by default) a patch (zstd 12, about 9 ms
+  each for extra) followed by the desc blobs that index lacks, signature, index, and the new patch
+  directory in place of the old; blobs no kept index names go after an hour. About 5 s for extra.
+  `mirror/btrdb-publish.sh` (`btrpkg-btrdb.timer`, every minute) runs it for Arch's core and
+  extra after a conditional GET of each `REPO.db` from the desktop's pacoloco into `.upstream/`
+  (hidden by caddy). Files blobs don't go into the patches: `--files` clients fetch them one by one.
+- `btrdb.py sync URL SYNCDIR REPO [--files]`: conditional GET of `REPO.btrdb.sig` (304: nothing to
+  do); with an older index, `REPO.btrdb.patch/HASH`, its first zstd frame applied to that index;
+  otherwise (no index, no patch for it, or a result that fails the signature, e.g. a publish in
+  between) the whole index. `btrpkg verify` on the result; an index older than the client's
+  (timestamp) is refused and the client keeps its database. Then the blobs: those the patch
+  brought, and the rest one request each (8 parallel HTTP/1.1 connections); every blob is checked
+  against its hash, and one in the patch that fails is fetched from `db/` instead. Blobs are kept
+  in `SYNCDIR/btrdb.sqlite`; it writes `REPO.db` (and `REPO.files`: desc + files) as a plain tar
+  stamped with the index's timestamp, and keeps the decompressed index as `.REPO.btrdb`. Prints
+  `REPO BYTES REQUESTS SECONDS patch|full|unchanged`.
 - `btrdb.py compare A B`, `btrdb.py dump REPO.btrdb`, `btrdb.py train DICTDIR DB... --files FILES...`.
 - Tests: `python3 btrdb/test_btrdb.py` (needs Python 3.14's `compression.zstd` and a btrpkg build).
 
@@ -81,10 +85,27 @@ Clients further behind (Arch's archived extra.db snapshots against the 13:07 ind
 The desc blobs of the changed packages dominate after a day or two; past a week a patch saves
 13-20% more, so publish keeps 7 days (about 170 indexes at one change an hour).
 
-Trial: `trial/btrdb-trial.sh` + `trial/btrdb-trial.{service,timer}` on p14s (until 2026-11-26
-12:00) keeps two copies of core and extra, one synced hourly and one daily, logs each sync's bytes
-against what `pacman -Sy` would have downloaded at the same moment to `/var/log/btrdb-trial.tsv`,
-and checks every rebuilt db against Arch's.
+Requests: with the blobs inside the patch a sync is the signature and one file, however far
+behind the client is. Clients set to older indexes of the live mirror (2026-11-26,
+`bench/results/btrdb-bundle-20261126.tsv`; same bytes both ways, identical databases):
+
+| behind | bytes | requests, blobs fetched one by one | requests, blobs in the patch |
+|---|---:|---:|---:|
+| 1.1 hours | 708 | 3 | 2 |
+| 3.3 hours | 12,654 | 38 | 2 |
+| 9 hours | 16,796 | 46 | 2 |
+| 24 hours | 204,924 | 350 | 2 |
+| 52 hours | 435,445 | 791 | 2 |
+
+On the LAN both take about 0.6 s; over the internet the one-by-one form costs a round trip per 8
+blobs (350 blobs: about 44 round trips, 2.2 s at 50 ms). The patches of the 46 extra indexes
+then kept (52 hours) take 10.1 MB on the mirror, 0.4 MB for the oldest.
+
+Trial (2026-11-24 14:30 to 2026-11-26 11:23, p14s, before blobs went into the patches): two
+copies of core and extra, one synced hourly and one daily, each sync logged against what
+`pacman -Sy` would have downloaded at the same moment (`bench/results/btrdb-trial-20261126.tsv`;
+the scripts are in git history). 94 syncs received 742,238 bytes where `pacman -Sy` took
+381,232,275; every rebuilt database matched Arch's. Details in HISTORY.md.
 
 Not built: pacman support (the client writes the tar pacman reads), a local SQLite query store
-for anything beyond the blob cache, `.files` in the trial.
+for anything beyond the blob cache, `.files` databases on the mirror.

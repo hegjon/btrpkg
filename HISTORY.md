@@ -4,6 +4,41 @@ The current state is in `README.md`. The sections below were written as the work
 `.btridx`, `chunks/`) and options that have changed since. The first prototype's own description
 is at the end ("The spike").
 
+## btrdb: the trial's result, blobs inside the patch, a refused older index (2026-11-26)
+
+The p14s trial ran from 2026-11-24 14:30 to 2026-11-26 11:23 (`bench/results/btrdb-trial-20261126.tsv`,
+94 syncs of two copies, hourly and daily, of Arch's core and extra). It received 742,238 bytes
+where `pacman -Sy` took 381,232,275, and every rebuilt database matched Arch's:
+
+| copy | syncs (with changes) | btrdb bytes | `pacman -Sy` bytes | requests per changed sync (median, max) |
+|---|---:|---:|---:|---|
+| hourly extra | 45 (38) | 472,104 | 362,209,970 | 12, 119 |
+| hourly core | 45 (5) | 4,755 | 651,359 | 3, 5 |
+| daily extra | 2 (2) | 262,482 | 18,110,509 | 244, 480 |
+| daily core | 2 (1) | 2,897 | 260,437 | 9, 9 |
+
+An hourly extra sync with changes took 645 to 56,331 bytes (median 6,530).
+
+Two things it showed, both fixed the same day:
+- **btrdb lagged upstream.** 3 syncs (2026-11-24 15:30 daily core, 2026-11-25 06:18 and 13:35
+  hourly extra) found btrdb unchanged while pacman would have got a new database, and one more
+  (11-25 04:15) rebuilt a database one step older than pacoloco's (`skew`). The publish ran at the
+  end of `mirror-all.sh`, every 10 minutes (06:10 unchanged, 06:21 published; the client synced at
+  06:18). btrdb now has its own timer, `btrpkg-btrdb.timer`, a conditional GET every minute and a
+  publish (about 5 s for extra) when the database changed.
+- **A daily sync was request-bound:** 131 KB in 244 requests, one per desc blob. A patch file now
+  carries the blobs too: the patch frame, then the stored frames of the desc blobs the new index
+  names and the old one doesn't. Clients set to older indexes of the live mirror took the same
+  bytes in 2 requests instead of 3 to 791 (`bench/results/btrdb-bundle-20261126.tsv`: 1 day
+  behind 204,924 bytes, 350 -> 2 requests; 52 hours 435,445 bytes, 791 -> 2). The 46 patch files
+  of extra (52 hours of indexes) take 10.1 MB on the mirror instead of 0.7 MB.
+
+Also: `sync` refuses an index whose timestamp is older than the one the client has, and keeps
+its database. The signature alone let a mirror serve an older, validly signed index again (a
+stale mirror or a replay); a test serves the old index and signature after a newer sync. Not
+covered: a mirror that keeps serving the client's current index (a freeze), which would need
+an expiry in the index.
+
 ## zchunk dropped from the database trial (2026-11-24)
 
 With index patches an hourly btrdb sync of extra took 3 to 44 KB on p14s (the patch plus the

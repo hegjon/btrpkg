@@ -254,8 +254,8 @@ back, against less to write).
 `pacman -Sy` downloads a changed database whole: Arch's `extra.db` is 9 MB and changes about once
 an hour. btrdb (prototype, `btrdb/`) publishes the same database as a thin index that names each
 package's `desc` entry by the hash of a blob stored once, and a client that synced before
-downloads only a patch of the index and the blobs of the packages that changed. The client
-rebuilds the plain `REPO.db` pacman reads, identical to upstream's.
+downloads, in one request, a patch of its index together with the blobs of the packages that
+changed. The client rebuilds the plain `REPO.db` pacman reads, identical to upstream's.
 
 ```
 btrdb/                                      (beside the btrpkg repositories; Arch core + extra)
@@ -263,7 +263,8 @@ btrdb/                                      (beside the btrpkg repositories; Arc
 ├── x86_64/
 │   ├── extra.btrdb                         the index, zstd (666 KB for 15,303 packages)
 │   ├── extra.btrdb.sig                     signify signature over the decompressed index
-│   ├── extra.btrdb.patch/<sha256 of old>   the current index as a zstd patch against each older one
+│   ├── extra.btrdb.patch/<sha256 of old>   for each older index: the current index as a zstd patch
+│   │                                       against it, then the desc blobs it lacks
 │   └── extra.btrdb.history/<timestamp>     those older indexes, 7 days of them
 └── db/xx/HASH                              desc blobs: zstd 19 with a trained dictionary, named by
                                             the SHA-256 of the stored bytes (NOCOMPRESS)
@@ -282,11 +283,15 @@ The index (version 0, little endian, zstd-compressed whole):
   version and ship with the client: a new dictionary changes every blob. The desc dictionary
   makes the blobs 34% smaller; the files one gains 1.6%.
 - A sync: the signature with `If-Modified-Since` (unchanged: one 304, 0 bytes); the patch for the
-  client's index, applied and checked against the signature; without one (no index yet, older
-  than 7 days, or a publish in between) the whole index; then the missing blobs, each checked
-  against its hash.
-- Publishing: blobs, then a patch from every index of the last 7 days (zstd 12, about 9 ms each),
-  signature, index. The mirror timer publishes Arch's core and extra this way.
+  client's index, applied and checked against the signature, with the new desc blobs behind it;
+  without one (no index yet, older than 7 days, or a publish in between) the whole index and the
+  missing blobs one request each. Every blob is checked against its hash; an index older than
+  the client's is refused (a stale mirror, or a replayed one that still carries a valid
+  signature), and the client keeps its database.
+- Publishing: blobs, then for every index of the last 7 days a patch (zstd 12) followed by the
+  blobs that index lacks, signature, index; about 5 s for extra. The desktop polls Arch's core and
+  extra every minute (conditional GET through pacoloco, `btrpkg-btrdb.timer`) and publishes a
+  changed one. Storage: the patches of 46 extra indexes (52 hours) took 10.1 MB.
 
 What a sync of Arch's extra downloads (bytes):
 
@@ -296,15 +301,17 @@ What a sync of Arch's extra downloads (bytes):
 | one hour of changes (p14s, 14:30) | 3,017 (8 requests) | 9,056,280 |
 | one hour of changes (p14s, 15:42) | 44,050 (76 requests) | 9,038,241 |
 | 6 updates, 10:12 -> 13:07 (p14s) | 4,886 (signature 148, patch 370, 6 blobs) | 9,056,189 |
+| 1 day behind (live mirror, 2026-11-26) | 204,924 (2 requests; one per blob before: 350) | 9,060,598 |
 | 1 day behind (283 packages changed) | 150,422 | 9,056,280 |
 | 7 days behind (1,674) | 1,000,013 | 9,056,280 |
 | 31 days behind, whole index (5,738) | 3,914,025 | 9,056,280 |
 | first sync | 9,043,854 | 9,056,189 |
 
-Without the patch every sync would take the whole index too (another 666 KB). The days-behind
-rows are Arch's archived snapshots against the index of 2026-11-24 13:07. On p14s a trial syncs
-two copies hourly and daily (`/var/log/btrdb-trial.tsv`, until 2026-11-26) and checks each
-rebuilt `extra.db` against Arch's.
+Without the patch every sync would take the whole index too (another 666 KB). The 1, 7 and 31
+days behind rows are Arch's archived snapshots against the index of 2026-11-24 13:07. A two-day
+trial on p14s (2026-11-24 to 26, two copies of core and extra synced hourly and daily, 94 syncs)
+received 742 KB where `pacman -Sy` took 381 MB, and every rebuilt database matched Arch's
+(`bench/results/btrdb-trial-20261126.tsv`, HISTORY.md).
 
 Not built: pacman reading the index directly (the client writes the tar pacman reads), the
 `.files` databases in the trial, btrdb for the btrpkg repositories' own databases.

@@ -45,10 +45,10 @@ omarchy-mirror/
 Arch's repositories use `$repo/os/$arch` and share `arch-mirror/pkg`
 (`btrpkg.parts=../../../pkg`).
 
-After the repositories, `mirror-all.sh` publishes Arch's core and extra databases as thin
-`.btrdb` indexes with content-addressed desc blobs for the sync-database trial on p14s (`btrdb/`,
-into `~/Work/btrpkg-repo/btrdb/`, upstream's dbs fetched into its hidden `.upstream/`;
-`NO_BTRDB=1` skips it).
+Arch's core and extra databases are also published as thin `.btrdb` indexes with
+content-addressed desc blobs (`btrdb/`, into `~/Work/btrpkg-repo/btrdb/`) by `btrdb-publish.sh`,
+on a timer of its own: a conditional GET of upstream's db every minute into the hidden
+`.upstream/`, and a publish when it changed.
 
 ## Each run
 
@@ -138,7 +138,9 @@ Systemd user units in `systemd/`, installed in `~/.config/systemd/user/`, linger
   `:1763` TLS). Dotfiles, `keys/`, logs and the Caddyfile are hidden.
 - `btrpkg-mirror.timer`: runs `mirror-all.sh` 2 minutes after boot, then 10 minutes after each run
   ends.
+- `btrpkg-btrdb.timer`: runs `btrdb-publish.sh` every minute (a minute after each run ends; a
+  lock in `.upstream/` keeps a manual run from overlapping). It logs only changes.
 
-Check: `systemctl --user list-timers btrpkg-mirror.timer`, `journalctl --user -u btrpkg-mirror`.
+Check: `systemctl --user list-timers 'btrpkg-*'`, `journalctl --user -u btrpkg-mirror -u btrpkg-btrdb`.
 Stop the timer and wait for the service to go idle before changing a repository by hand.
 

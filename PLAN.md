@@ -1,4 +1,4 @@
-# btrpkg: status (2026-11-22)
+# btrpkg: status (2026-11-26)
 
 Done since the iteration 3 plan (details in HISTORY.md):
 - Packages from CI for x86_64 and aarch64, published as the `[btrpkg]` repository; all five lab
@@ -18,6 +18,9 @@ Done since the iteration 3 plan (details in HISTORY.md):
   `NAME.pkg.btr`), btrparts in `pkg/` (NOCOMPRESS), a `version` file, index format version 0
   (unstable); live mirrors migrated in place; pacman-btrpkg 13. `btrdb/`: thin sync-database
   prototype with index patches, in a p14s trial until 2026-11-26 12:00 (zchunk dropped).
+- (2026-11-26) btrdb trial done (94 syncs: 742 KB where `pacman -Sy` took 381 MB). Since then a
+  patch file carries the new desc blobs (a sync is 2 requests), a client refuses an older index,
+  and the mirror publishes btrdb every minute on its own timer.
 
 Open, waiting for a decision from Jonny:
 - Step 6, the unattended daily update on p14s.
