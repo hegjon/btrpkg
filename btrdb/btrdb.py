@@ -10,9 +10,12 @@ Layout (beside the btrpkg layout: architecture directories, shared content-addre
   ROOT/version                  "0\\n"
   ROOT/ARCH/REPO.btrdb          the index, zstd-compressed whole (no dictionary)
   ROOT/ARCH/REPO.btrdb.sig      signify signature over the decompressed index (btrpkg sign)
-  ROOT/ARCH/REPO.btrdb.patch/H  the current index as a zstd patch (--patch-from) against an
-                                older one, H = SHA-256 of that older decompressed index; for
-                                every index of the last 7 days (at least 3), zstd level 12
+  ROOT/ARCH/REPO.btrdb.patch/H  for a client whose index is an older one, H = SHA-256 of that
+                                older decompressed index: the current index as a zstd patch
+                                (--patch-from, level 12) against it, followed by the desc blobs
+                                the current index names and the older one doesn't (their stored
+                                zstd frames, in index order), so a sync is one request; for
+                                every index of the last 7 days (at least 3)
   ROOT/ARCH/REPO.btrdb.history/TS  those older indexes, TS = their timestamp
   ROOT/db/xx/HASH               a desc or files blob: zstd with the version's dictionary;
                                 HASH = SHA-256 of the stored (compressed) bytes. NOCOMPRESS.
@@ -31,15 +34,15 @@ it changes every blob and so every hash.
 usage:
   btrdb.py train DICTDIR DB [DB...] [--files FILES...]
   btrdb.py publish [--key SEC] [--btrpkg BIN] [--files REPO.files] [--keep N] [--keep-hours H] ROOT ARCH REPO REPO.db
-  btrdb.py sync [--keys DIR] [--btrpkg BIN] [--files] [--measure-full] URL SYNCDIR REPO
+  btrdb.py sync [--keys DIR] [--btrpkg BIN] [--files] URL SYNCDIR REPO
       URL is the architecture directory (ROOT/ARCH); blobs come from URL/../db. A client with
-      an older index asks for REPO.btrdb.patch/HASH first and falls back to the whole index;
-      the signature is checked on the result either way. Rebuilds
-      SYNCDIR/REPO.db (and REPO.files, desc + files, with --files) as plain tar stamped with the index's
-      timestamp; blobs are kept in SYNCDIR/btrdb.sqlite. Prints: REPO BYTES REQUESTS SECONDS
-      STATE (patch|full|unchanged) FULL_BYTES; BYTES = response bodies received, FULL_BYTES =
-      what the sync takes with the whole index instead of a patch (--measure-full: a HEAD
-      request for its length, not counted in BYTES/REQUESTS; else blank).
+      an older index asks for REPO.btrdb.patch/HASH first (the patch and the new desc blobs)
+      and falls back to the whole index; the signature is checked on the result either way,
+      and an index older than the one the client has is refused (a stale mirror or a replay).
+      Blobs the patch didn't bring are fetched one by one; each is checked against its hash.
+      Rebuilds SYNCDIR/REPO.db (and REPO.files, desc + files, with --files) as plain tar
+      stamped with the index's timestamp; blobs are kept in SYNCDIR/btrdb.sqlite. Prints:
+      REPO BYTES REQUESTS SECONDS STATE (patch|full|unchanged); BYTES = response bodies received.
   btrdb.py compare A.db B.db          exit 0 if both have the same members and contents
   btrdb.py dump REPO.btrdb
 """
@@ -56,6 +59,7 @@ DICTS = os.environ.get("BTRDB_DICTS", os.path.join(HERE, "dicts"))
 MAX_INDEX = 64 << 20      # decompressed .btrdb (extra: 1.4 MB)
 MAX_BLOB = 64 << 20       # a decompressed desc/files entry
 MAX_COUNT = 1 << 20
+MAX_PATCH = 256 << 20     # REPO.btrdb.patch/H with its blobs (extra, 2 days behind: 0.4 MB)
 ZERO = bytes(32)
 
 
@@ -161,6 +165,19 @@ def make_patch(old_raw, new_raw, level=PATCH_LEVEL):
                                      zstd.CompressionParameter.window_log: wl},
                             zstd_dict=zstd.ZstdDict(old_raw, is_raw=True).as_prefix)
     return z.compress(new_raw, mode=zstd.ZstdCompressor.FLUSH_FRAME)
+
+
+def split_frames(b):
+    """The zstd frames b is made of; stops at the first bytes that aren't a whole frame."""
+    out, o, m = [], 0, memoryview(b)
+    while o < len(b):
+        try:
+            n = zstd.get_frame_size(m[o:])
+        except zstd.ZstdError:
+            break
+        out.append(b[o:o + n])
+        o += n
+    return out
 
 
 def apply_patch(old_raw, patch):
@@ -270,10 +287,13 @@ def publish(root, arch, repo, dbpath, filespath=None, key=None, btrpkg="btrpkg",
         if f.isdigit():
             with open(os.path.join(hd, f), "rb") as fh:
                 o = index_raw(fh.read())
-            pb = make_patch(o, raw)
+            had = {e[3] for e in decode(o)[1]}
             with open(os.path.join(pnew, sha(o).hex()), "wb") as fh:
-                fh.write(pb)
-            psizes.append(len(pb))
+                fh.write(make_patch(o, raw))
+                for h in dict.fromkeys(e[3] for e in entries if e[3] not in had):
+                    with open(os.path.join(dbdir, h.hex()[:2], h.hex()), "rb") as b:
+                        fh.write(b.read())
+                psizes.append(fh.tell())
     tmp = os.path.join(ad, f".{repo}.btrdb.new.btrdb")
     write_atomic(tmp, stored)
     if key:
@@ -367,17 +387,6 @@ class Fetcher:
                     raise
 
 
-def head_length(f, rel):
-    """Content-Length of rel by HEAD (not counted in f's bytes and requests)."""
-    c = (http.client.HTTPSConnection if f.scheme == "https" else http.client.HTTPConnection)(f.host, timeout=30)
-    try:
-        c.request("HEAD", urllib.parse.urljoin(f.path + "/", rel))
-        r = c.getresponse(); r.read()
-        return int(r.getheader("Content-Length") or 0) if r.status == 200 else None
-    finally:
-        c.close()
-
-
 def write_db(path, members, ts):
     """A pacman database tar: NAME-VERSION/ directories and their entries, owned by root."""
     buf = io.BytesIO()
@@ -394,14 +403,14 @@ def write_db(path, members, ts):
     os.utime(path, (ts, ts))
 
 
-def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_rel="../db", measure_full=False):
+def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_rel="../db"):
     t0 = time.monotonic()
     os.makedirs(syncdir, exist_ok=True)
     f = Fetcher(url)
     sq = sqlite3.connect(os.path.join(syncdir, "btrdb.sqlite"))
     sq.execute("create table if not exists blobs (hash blob primary key, data blob not null)")
     sq.execute("create table if not exists repos (repo text primary key, lastmod text, ts integer)")
-    row = sq.execute("select lastmod from repos where repo = ?", (repo,)).fetchone()
+    row = sq.execute("select lastmod, ts from repos where repo = ?", (repo,)).fetchone()
     cur = os.path.join(syncdir, f".{repo}.btrdb")   # the last verified index, decompressed
     have = None
     if os.path.exists(cur) and os.path.exists(os.path.join(syncdir, f"{repo}.db")):
@@ -411,7 +420,7 @@ def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_re
     hdrs = {"If-Modified-Since": row[0]} if row and row[0] and have else {}
     status, lastmod, sig = f.get(f"{repo}.btrdb.sig", hdrs, limit=4096)
     if status == 304:
-        print(f"{repo}\t{f.bytes}\t{f.requests}\t{time.monotonic() - t0:.2f}\tunchanged\t")
+        print(f"{repo}\t{f.bytes}\t{f.requests}\t{time.monotonic() - t0:.2f}\tunchanged")
         return
     if status != 200:
         raise SystemExit(f"{repo}.btrdb.sig: HTTP {status}")
@@ -419,18 +428,23 @@ def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_re
     write_atomic(tmpi + ".sig", sig)
     verify = lambda: subprocess.run([btrpkg, "verify"] + (["--keys", keys] if keys else []) + [tmpi],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    raw, how = None, "full"
+    raw, how, bundled = None, "full", []
     if have:
-        s2, _, pb = f.get(f"{repo}.btrdb.patch/{sha(have).hex()}")
+        s2, _, pb = f.get(f"{repo}.btrdb.patch/{sha(have).hex()}", limit=MAX_PATCH)
         if s2 == 200:
+            frames = split_frames(pb)
             try:
-                raw = apply_patch(have, pb)
+                if not frames:
+                    raise ValueError("patch: no zstd frame")
+                raw = apply_patch(have, frames[0])
                 write_atomic(tmpi, raw)
                 how = "patch" if verify() else None
             except (ValueError, zstd.ZstdError):
                 how = None
             if how is None:  # the index moved on between the signature and the patch: whole index
                 raw, how = None, "full"
+            else:
+                bundled = frames[1:]
     if raw is None:
         s3, _, stored = f.get(f"{repo}.btrdb")
         if s3 != 200:
@@ -443,11 +457,17 @@ def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_re
             write_atomic(tmpi + ".sig", sig)
             if not verify():
                 raise SystemExit(f"{repo}.btrdb: bad signature")
-    full_len = head_length(f, f"{repo}.btrdb") if measure_full and how == "patch" else None
     ts, entries = decode(raw)
+    if row and row[1] is not None and ts < row[1]:
+        for p in (tmpi, tmpi + ".sig"):
+            os.remove(p)
+        raise SystemExit(f"{repo}.btrdb: older ({ts}) than the index this client has ({row[1]}): "
+                         "refused (a stale mirror or a replayed index)")
     want = {e[3] for e in entries} | ({e[4] for e in entries if e[4] != ZERO} if with_files else set())
     have = {h for (h,) in sq.execute("select hash from blobs")}
-    missing = sorted(want - have)
+    # blobs that came with the patch count when their hash is one the index wants
+    got = {h: b for h, b in ((sha(b), b) for b in bundled) if h in want and h not in have}
+    missing = sorted(want - have - got.keys())
     dbrel = db_rel.rstrip("/") + "/"
 
     def fetch(h):
@@ -457,9 +477,9 @@ def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_re
         return h, b
 
     with ThreadPoolExecutor(8) as ex:
-        got = list(ex.map(fetch, missing))
+        got.update(ex.map(fetch, missing))
     with sq:
-        sq.executemany("insert or replace into blobs values (?, ?)", got)
+        sq.executemany("insert or replace into blobs values (?, ?)", got.items())
     dd = load_dict("desc")
     fd = load_dict("files") if with_files else None
     blob = lambda h: sq.execute("select data from blobs where hash = ?", (h,)).fetchone()[0]
@@ -484,10 +504,7 @@ def sync(url, syncdir, repo, keys=None, btrpkg="btrpkg", with_files=False, db_re
     sq.execute("vacuum")
     os.replace(tmpi + ".sig", cur + ".sig")
     os.replace(tmpi, cur)
-    full = ""
-    if measure_full:
-        full = f.bytes if how == "full" else f.bytes - len(pb) + full_len if full_len is not None else ""
-    print(f"{repo}\t{f.bytes}\t{f.requests}\t{time.monotonic() - t0:.2f}\t{how}\t{full}")
+    print(f"{repo}\t{f.bytes}\t{f.requests}\t{time.monotonic() - t0:.2f}\t{how}")
 
 
 def compare(a, b):
@@ -519,7 +536,7 @@ def main(argv):
             if argv[0] == "train":
                 opts["--files"] = argv[i + 1:]; break
             opts[a] = argv[i + 1]; i += 2
-        elif a in ("--files", "--measure-full"):
+        elif a == "--files":
             opts[a] = True; i += 1
         elif a.startswith("--"):
             raise SystemExit(f"unknown option {a}\n{__doc__}")
@@ -533,8 +550,7 @@ def main(argv):
             publish(root, arch, repo, db, opts.get("--files"), opts.get("--key"), bt, int(opts.get("--keep", 3)),
                     float(opts.get("--keep-hours", KEEP_HOURS)))
         case ["sync", url, sd, repo]:
-            sync(url, sd, repo, opts.get("--keys"), bt, bool(opts.get("--files")), opts.get("--db", "../db"),
-                 bool(opts.get("--measure-full")))
+            sync(url, sd, repo, opts.get("--keys"), bt, bool(opts.get("--files")), opts.get("--db", "../db"))
         case ["compare", a, b]:
             return compare(a, b)
         case ["dump", p]:

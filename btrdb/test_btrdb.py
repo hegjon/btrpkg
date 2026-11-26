@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for btrdb.py: index round trip and rejection, blob checks, and a publish + sync round
-through a local HTTP server, including a tampered blob and a tampered index (signature).
+through a local HTTP server, including a tampered blob and a tampered index (signature), patches
+with their blobs, and an older (replayed) index.
   python3 btrdb/test_btrdb.py      (BTRPKG=path/to/btrpkg; default target/release/btrpkg)
 """
 import contextlib, functools, http.server, io, os, shutil, subprocess, sys, tarfile, tempfile, threading, unittest
@@ -136,18 +137,18 @@ class PublishSync(unittest.TestCase):
 
     def test_patch(self):
         self.publish([("a", "1-1", ""), ("b", "1-1", "")], 1000)
-        self.assertEqual(self.out()[4], "full")
+        self.assertEqual(self.out()[4].strip(), "full")
         db2 = self.publish([("a", "1-1", ""), ("b", "2-1", ""), ("c", "1-1", "")], 2000)
-        self.assertEqual(self.out()[4], "patch")
+        self.assertEqual(self.out()[4].strip(), "patch")
         self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db2))
-        self.assertEqual(self.out()[4], "unchanged")
+        self.assertEqual(self.out()[4].strip(), "unchanged")
         # a client two versions behind gets a direct patch too
         old_cache = self.cache + "-old"
         shutil.copytree(self.cache, old_cache)
         db3 = self.publish([("a", "1-1", ""), ("b", "3-1", ""), ("c", "1-1", "")], 3000)
         db4 = self.publish([("a", "1-1", ""), ("b", "3-1", ""), ("c", "2-1", "")], 4000)
         self.cache, cur = old_cache, self.cache
-        self.assertEqual(self.out()[4], "patch")
+        self.assertEqual(self.out()[4].strip(), "patch")
         self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db4))
         # the old indexes, beside the patches
         self.assertEqual(sorted(os.listdir(os.path.join(self.srv, "x86_64"))), ["r.btrdb", "r.btrdb.history", "r.btrdb.patch", "r.btrdb.sig"])
@@ -157,10 +158,49 @@ class PublishSync(unittest.TestCase):
         h = btrdb.sha(btrdb.index_raw(open(os.path.join(cur, ".r.btrdb"), "rb").read())).hex()
         db5 = self.publish([("a", "2-1", ""), ("b", "3-1", ""), ("c", "2-1", "")], 5000)
         pp = os.path.join(self.srv, "x86_64", "r.btrdb.patch", h)
+        pb = bytearray(open(pp, "rb").read()); pb[zstd.get_frame_size(bytes(pb)) - 2] ^= 1
+        open(pp, "wb").write(pb)
+        self.assertEqual(self.out()[4].strip(), "full")
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db5))
+
+    def test_patch_brings_the_blobs(self):
+        self.publish([(f"p{i}", "1-1", "") for i in range(20)], 1000)
+        self.out()
+        keep = self.cache + "-keep"
+        shutil.copytree(self.cache, keep)
+        pkgs = [(f"p{i}", "2-1" if i % 7 == 0 else "1-1", "") for i in range(20)] + [("q", "1-1", "")]
+        db2 = self.publish(pkgs, 2000)
+        # one request besides the signature: the patch carries the 4 new desc blobs
+        o = self.out()
+        self.assertEqual((o[2], o[4].strip()), ("2", "patch"))
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db2))
+        # a damaged blob in the patch is ignored and fetched from db/ instead
+        self.cache = keep
+        h = btrdb.sha(btrdb.index_raw(open(os.path.join(keep, ".r.btrdb"), "rb").read())).hex()
+        pp = os.path.join(self.srv, "x86_64", "r.btrdb.patch", h)
         pb = bytearray(open(pp, "rb").read()); pb[-2] ^= 1
         open(pp, "wb").write(pb)
-        self.assertEqual(self.out()[4], "full")
-        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db5))
+        o = self.out()
+        self.assertEqual((o[2], o[4].strip()), ("3", "patch"))
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db2))
+
+    def test_older_index_refused(self):
+        self.publish([("a", "1-1", "")], 1000)
+        x = os.path.join(self.srv, "x86_64")
+        old = {f: open(os.path.join(x, f), "rb").read() for f in ("r.btrdb", "r.btrdb.sig")}
+        self.out()
+        db2 = self.publish([("a", "2-1", "")], 2000)
+        self.out()
+        # a mirror serving the older, validly signed index again (a replay or a stale mirror)
+        shutil.rmtree(os.path.join(x, "r.btrdb.patch"))
+        for f, b in old.items():
+            open(os.path.join(x, f), "wb").write(b)
+            os.utime(os.path.join(x, f), (3000, 3000))
+        with self.assertRaises(SystemExit) as e:
+            self.sync()
+        self.assertIn("older", str(e.exception))
+        self.assertEqual(btrdb.db_members(os.path.join(self.cache, "r.db")), btrdb.db_members(db2))
+        self.assertEqual(btrdb.read_index(open(os.path.join(self.cache, ".r.btrdb"), "rb").read())[0], 2000)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+# Arch extra, clients seeded at an older index of the live btrdb mirror; old = patch then one request per blob (btrdb.py before bundles, live :8790), new = patch with its blobs (scratch copy republished)
+hours_behind	bytes_old	requests_old	bytes_new	requests_new	same_db
+1.1	708	3	708	2	True
+3.3	12654	38	12654	2	True
+9.0	16796	46	16796	2	True
+23.9	204924	350	204924	2	True
+52.2	435445	791	435445	2	True
