@@ -1,0 +1,8 @@
+[Unit]
+Description=Publish Arch's core and extra databases as btrdb (btrdb/, prototype)
+
+[Service]
+Type=oneshot
+ExecStart=%h/Work/btrpkg/mirror/btrdb-publish.sh
+Nice=10
+IOSchedulingClass=idle

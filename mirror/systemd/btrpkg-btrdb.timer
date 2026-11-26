@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish Arch's core and extra databases as btrdb every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
