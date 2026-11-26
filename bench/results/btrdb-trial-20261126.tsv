@@ -1,0 +1,95 @@
+time	copy	repo	btrdb_bytes	requests	pacman_bytes	seconds	check	how	full_bytes
+2026-11-24 14:30:30	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 14:30:33	hourly	extra	3017	8	9056280	1.21	ok	patch	668387
+2026-11-24 15:30:33	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 15:30:33	hourly	extra	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 15:30:33	daily	core	0	1	130211	0.00	unchanged	unchanged	
+2026-11-24 15:30:37	daily	extra	3017	8	9056280	1.21	ok	patch	668387
+2026-11-24 15:42:02	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-24 15:42:05	hourly	extra	44050	76	9038241	1.27	ok	patch	706849
+2026-11-24 16:45:27	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-24 16:45:30	hourly	extra	3483	7	9038228	1.20	ok	patch	668850
+2026-11-24 17:49:50	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 17:49:50	hourly	extra	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 18:52:40	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 18:52:43	hourly	extra	3013	6	9038225	1.21	ok	patch	668452
+2026-11-24 19:56:04	hourly	core	936	3	130228	0.21	ok	patch	14403
+2026-11-24 19:56:07	hourly	extra	7906	12	9038991	1.21	ok	patch	673097
+2026-11-24 20:57:46	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-24 20:57:49	hourly	extra	5043	8	9039227	1.21	ok	patch	670372
+2026-11-24 21:59:24	hourly	core	1189	5	130194	0.22	ok	patch	14575
+2026-11-24 21:59:27	hourly	extra	3613	9	9038096	1.23	ok	patch	669029
+2026-11-24 23:00:37	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-24 23:00:40	hourly	extra	4771	13	9038262	1.21	ok	patch	669871
+2026-11-25 00:03:33	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 00:03:36	hourly	extra	39013	52	9055714	1.25	ok	patch	702571
+2026-11-25 01:07:20	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 01:07:23	hourly	extra	6347	12	9055806	1.20	ok	patch	671635
+2026-11-25 02:10:40	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 02:10:43	hourly	extra	7065	11	9055147	1.21	ok	patch	672429
+2026-11-25 03:13:05	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 03:13:08	hourly	extra	2624	5	9055440	1.19	ok	patch	668047
+2026-11-25 04:15:50	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 04:15:52	hourly	extra	7864	24	9054820	1.26	skew	patch	672602
+2026-11-25 05:18:00	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 05:18:03	hourly	extra	6157	9	9055026	1.21	ok	patch	671455
+2026-11-25 06:18:40	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 06:18:40	hourly	extra	0	1	9054968	0.01	unchanged	unchanged	
+2026-11-25 07:23:31	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 07:23:34	hourly	extra	9762	14	9055425	1.21	ok	patch	674866
+2026-11-25 08:24:30	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 08:24:30	hourly	extra	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 09:27:12	hourly	core	1124	5	130226	0.22	ok	patch	14517
+2026-11-25 09:27:15	hourly	extra	3973	13	9055394	1.21	ok	patch	669100
+2026-11-25 10:28:10	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 10:28:13	hourly	extra	29027	112	9055301	1.24	ok	patch	690487
+2026-11-25 11:32:30	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 11:32:34	hourly	extra	49682	90	9051838	1.24	ok	patch	712022
+2026-11-25 12:33:25	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 12:33:28	hourly	extra	21210	28	9057045	1.27	ok	patch	685801
+2026-11-25 13:35:50	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 13:35:50	hourly	extra	0	1	9054016	0.01	unchanged	unchanged	
+2026-11-25 14:39:03	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 14:39:06	hourly	extra	13459	19	9055332	1.22	ok	patch	677932
+2026-11-25 15:39:30	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 15:39:33	hourly	extra	28718	39	9054229	1.23	ok	patch	692591
+2026-11-25 15:39:34	daily	core	2897	9	130226	0.23	ok	patch	16138
+2026-11-25 15:39:37	daily	extra	259465	480	9054229	1.38	ok	patch	906593
+2026-11-25 16:40:40	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 16:40:43	hourly	extra	7034	12	9054889	1.22	ok	patch	671799
+2026-11-25 17:41:50	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 17:41:53	hourly	extra	18124	24	9054788	1.20	ok	patch	682479
+2026-11-25 18:43:50	hourly	core	572	3	130212	0.22	ok	patch	14043
+2026-11-25 18:43:53	hourly	extra	18172	32	9060854	1.21	ok	patch	682221
+2026-11-25 19:46:40	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 19:46:43	hourly	extra	17984	26	9061031	1.22	ok	patch	682389
+2026-11-25 20:47:20	hourly	core	934	3	130499	0.21	ok	patch	14404
+2026-11-25 20:47:23	hourly	extra	56331	119	9061881	1.27	ok	patch	717472
+2026-11-25 21:50:50	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-25 21:50:53	hourly	extra	1070	3	9062265	1.19	ok	patch	666374
+2026-11-25 22:51:38	hourly	core	0	1	0	4.17	unchanged	unchanged	
+2026-11-25 22:51:41	hourly	extra	15511	24	9061684	1.22	ok	patch	680028
+2026-11-25 23:55:50	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-25 23:55:53	hourly	extra	2803	5	9061678	1.20	ok	patch	668065
+2026-11-26 00:59:50	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-26 00:59:53	hourly	extra	1062	3	9061689	1.17	ok	patch	666409
+2026-11-26 02:03:20	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 02:03:23	hourly	extra	3450	6	9063011	1.20	ok	patch	668677
+2026-11-26 03:04:40	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-26 03:04:43	hourly	extra	1103	3	9063627	1.20	ok	patch	666447
+2026-11-26 04:06:00	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 04:06:03	hourly	extra	15108	21	9064885	1.21	ok	patch	679702
+2026-11-26 05:09:05	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-26 05:09:08	hourly	extra	2780	5	9065194	1.21	ok	patch	668024
+2026-11-26 06:13:08	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-26 06:13:10	hourly	extra	6713	16	9064672	1.21	ok	patch	671570
+2026-11-26 07:15:30	hourly	core	0	1	0	0.00	unchanged	unchanged	
+2026-11-26 07:15:33	hourly	extra	3604	8	9065412	1.21	ok	patch	668785
+2026-11-26 08:18:43	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 08:18:43	hourly	extra	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 09:21:50	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 09:21:50	hourly	extra	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 10:22:10	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 10:22:13	hourly	extra	813	3	9065787	1.20	ok	patch	666189
+2026-11-26 11:23:00	hourly	core	0	1	0	0.01	unchanged	unchanged	
+2026-11-26 11:23:03	hourly	extra	645	3	9065572	1.21	ok	patch	666009

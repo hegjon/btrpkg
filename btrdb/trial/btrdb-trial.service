@@ -1,9 +1,0 @@
-[Unit]
-Description=btrdb sync-database trial (btrpkg btrdb/; scratch copies only)
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/opt/btrdb/btrdb-trial.sh
-Nice=10
-IOSchedulingClass=idle
